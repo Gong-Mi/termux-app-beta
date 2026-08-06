@@ -517,7 +517,9 @@ public final class WcWidth {
 
     /** Return the terminal display width of a code point: 0, 1 || 2. */
     public static int width(int ucs) {
-        if (ucs < 256) {
+        // Lower bound matters: negative code points must fall through to
+        // calculateWidth (which returns 0 for them), not index the cache.
+        if (ucs >= 0 && ucs < 256) {
             int cached = WIDTH_CACHE[ucs];
             if (cached != -1) return cached;
             int w = calculateWidth(ucs);
