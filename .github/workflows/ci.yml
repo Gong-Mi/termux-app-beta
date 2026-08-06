@@ -57,6 +57,14 @@ jobs:
             ./gradlew test
           fi
 
+      - name: Verify tests actually ran (no vacuous green)
+        run: |
+          if [ "$RUNNER_ARCH" = "ARM64" ]; then
+            python3 .github/workflows/verify_tests.py --require-module=terminal-emulator
+          else
+            python3 .github/workflows/verify_tests.py --require-module=app --require-module=terminal-emulator
+          fi
+
   build-apk:
     # Full APK build. x86 only: Google ships no linux-aarch64 NDK host
     # package (verified in repository2-3.xml), so the ndkBuild step cannot
