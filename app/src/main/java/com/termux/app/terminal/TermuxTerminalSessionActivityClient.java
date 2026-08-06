@@ -184,7 +184,12 @@ public class TermuxTerminalSessionActivityClient extends TermuxTerminalSessionCl
     public void onCopyTextToClipboard(@NonNull TerminalSession session, String text) {
         if (!mActivity.isVisible()) return;
 
-        ShareUtils.copyTextToClipboard(mActivity, text);
+        // ClipboardManager.setPrimaryClip is a thread-safe binder call and
+        // Logger.showToast posts to the main looper internally (Logger.java),
+        // so the copy can run off the main thread - large OSC 52 payloads
+        // would otherwise stall UI work inside this callback chain.
+        new Thread(() -> ShareUtils.copyTextToClipboard(mActivity, text),
+                   "TermuxClipboardWriter").start();
     }
 
     @Override
