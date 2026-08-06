@@ -45,7 +45,17 @@ jobs:
           echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
 
       - name: Run unit tests
-        run: ./gradlew test
+        run: |
+          if [ "$RUNNER_ARCH" = "ARM64" ]; then
+            # ARM64 leg: AGP 8.4.2's aapt2 has no linux-aarch64 binary (the
+            # maven -linux.jar is x86-64 only, no -linux-aarch64 artifact,
+            # and no build-tools aarch64 package exists), so resource
+            # processing cannot run on aarch64. terminal-emulator is a pure
+            # Java module (no res/) -- its unit tests run aapt2-free.
+            ./gradlew :terminal-emulator:testDebugUnitTest
+          else
+            ./gradlew test
+          fi
 
   build-apk:
     # Full APK build. x86 only: Google ships no linux-aarch64 NDK host
