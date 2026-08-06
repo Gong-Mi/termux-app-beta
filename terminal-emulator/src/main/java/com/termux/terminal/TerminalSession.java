@@ -139,7 +139,12 @@ public final class TerminalSession extends TerminalOutput {
                         int read = termIn.read(buffer);
                         if (read == -1) return;
                         if (!mProcessToTerminalIOQueue.write(buffer, 0, read)) return;
-                        mMainThreadHandler.sendEmptyMessage(MSG_NEW_INPUT);
+                        // Coalesce: if a MSG_NEW_INPUT is already pending, the
+                        // pending handler run will drain everything queued so
+                        // far; no need to enqueue another message per read.
+                        if (!mMainThreadHandler.hasMessages(MSG_NEW_INPUT)) {
+                            mMainThreadHandler.sendEmptyMessage(MSG_NEW_INPUT);
+                        }
                     }
                 } catch (Exception e) {
                     // Ignore, just shutting down.
@@ -340,9 +345,17 @@ public final class TerminalSession extends TerminalOutput {
 
         @Override
         public void handleMessage(Message msg) {
-            int bytesRead = mProcessToTerminalIOQueue.read(mReceiveBuffer, false);
-            if (bytesRead > 0) {
+            // Drain the queue in one run (up to 32KB) so a burst of PTY
+            // output is parsed as a single batch instead of one read per
+            // MSG_NEW_INPUT message, then yield the main thread again.
+            int totalBytesRead = 0;
+            int bytesRead;
+            while (totalBytesRead < 32 * 1024 &&
+                   (bytesRead = mProcessToTerminalIOQueue.read(mReceiveBuffer, false)) > 0) {
                 mEmulator.append(mReceiveBuffer, bytesRead);
+                totalBytesRead += bytesRead;
+            }
+            if (totalBytesRead > 0) {
                 notifyScreenUpdate();
             }
 
