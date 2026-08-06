@@ -50,9 +50,12 @@ jobs:
       # (TerminalTest), UTF-8/Unicode input (UnicodeInputTest), CSI
       # sequences (ControlSequenceIntroducerTest), the ByteQueue the
       # async parsing HandlerThread drains, plus key/screen/scroll/resize.
+      # TERMUX_TEST_PERF_MODE=1 makes TerminalTestCase skip its O(screen)
+      # assertInvariants checks so timings reflect engine cost, not test
+      # scaffolding (TerminalTestCase.java sPerfMode).
       - name: Run terminal-emulator parse/input unit tests
         run: |
-          ./gradlew :terminal-emulator:testDebugUnitTest \
+          TERMUX_TEST_PERF_MODE=1 ./gradlew :terminal-emulator:testDebugUnitTest \
             --tests "com.termux.terminal.TerminalTest" \
             --tests "com.termux.terminal.UnicodeInputTest" \
             --tests "com.termux.terminal.ControlSequenceIntroducerTest" \

@@ -39,6 +39,10 @@ def main() -> int:
 
     total_suite = sum(suite_times.values())
     total_tests = len(test_times)
+    if total_tests == 0:
+        print("ERROR: zero tests recorded in JUnit XML (vacuous pass)",
+              file=sys.stderr)
+        return 1
     lines = [
         f"arch: {ARCH}",
         f"test classes: {len(suite_times)}, tests: {total_tests}, "

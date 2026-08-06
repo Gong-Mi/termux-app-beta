@@ -90,3 +90,27 @@
 | L5 真机 | 副用户安装 + UI smoke（旋转/IME/抽屉） | 设备 | scripts/ui_smoke.sh（待建） |
 
 验收标准：施工（提交内容、diff 证据）与验收（CI 各腿绿、数据产物）严格分开汇报；绿 = 真实 run 的结论 + URL，不凭推断。
+
+## 5. 假绿审计（2026-08-06）
+
+审计目标：CI 绿是否真实等于"被测对象真的跑了"。
+
+### 覆盖清单（当前 master）
+| 模块 | 测试文件数 | CI 覆盖 | 备注 |
+|------|-----------|---------|------|
+| terminal-emulator | 19（78 用例） | x86 全量 + ARM 腿 + perf | 真实覆盖核心 |
+| app | 2 | x86 全量 | 部分覆盖 UI 类 |
+| terminal-view | 0 | 无（仅编译） | 空洞 |
+| termux-shared | 0 | 无（仅编译） | 空洞；多用户/ShareUtils 改动无测试保护 |
+
+### 已知空洞（诚实清单，非假绿但需记录）
+1. **drain+coalesce/64KB（已合并）**：双架构编译通过、全量单测绿，但 TerminalSession 运行时路径（Handler 循环、ByteQueue 排空）依赖 Android 运行时，**CI 无运行时执行**。验证 = 真机（副用户方案）。
+2. **PR #1 崩溃修复**：UI 线程包裹，JVM 单测不可断言；真机验证待 ui_smoke。
+3. **terminal-view/termux-shared 零测试**：这些模块的改动（如剪贴板迁移）CI 只保编译。
+
+### 已做的防假绿加固（本仓库 ci.yml/perf.yml）
+- ci.yml 新增 verify_tests.py 步骤：**要求 app 与 terminal-emulator 模块测试数 > 0**，零测试即红（防"测试静默消失仍绿"）。
+- perf_extract_timing.py 新增零测试守卫：JUnit XML 0 用例即失败。
+- perf.yml 计时跑加入 TERMUX_TEST_PERF_MODE=1：跳过 assertInvariants 脚手架（TerminalTestCase sPerfMode），让耗时反映引擎成本而非测试自检。
+- 完整 CI 日志流 + artifact 已归档至 ~/termux-app-beta-archive/（含 runs-manifest、每 run 完整日志、perf timing、分析报告、子代理记录，archive.sh 可重跑）。
+
