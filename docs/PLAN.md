@@ -13,9 +13,16 @@
 ### 1.2 PR 线
 | PR | 线 | 内容 | 状态 |
 |----|----|------|------|
-| #1 | 验证 | fix-crash 分支两个线程修复（CalledFromWrongThreadException，UI 操作包 runOnUiThread）cherry-pick | CI 全绿 |
+| #1 | 验证 | fix-crash 分支两个线程修复（CalledFromWrongThreadException，UI 操作包 runOnUiThread）cherry-pick | CI 全绿；上游未吸收（master 仅 3 个触及文件的 commit：工具链/样式/AutoFill），保持挂起为补丁载体 |
 | #5 | 测试 | 多用户 UID 数据路径修复 + 抽取 TermuxDataPathUtils + 4 个单测 | 搁置（依赖上游 termux-packages bootstrap 改路径） |
 | #6 | 性能 | async-terminal-parsing（HandlerThread 异步解析）+ perf.yml 双架构性能测试 | CI 全绿，perf 出数据 |
+| #7 | 性能 | Java 优化线（读循环 drain+coalesce + 32KB cap + 64KB 队列/缓冲） | 已合并进 master（吸收 ef4775b6） |
+| #8 | 性能 | native 化线（C/Rust/C++，暂不做，立验证基建） | CI 全绿（策略跟踪） |
+| #9 | 性能 | 主线程拆分线（OSC 52 剪贴板写移出 UI 线程起步） | CI 全绿（Validation 瞬时网络失败已重跑） |
+| #10 | 渲染 | 渲染框架线（GLES/Vulkan，短期延期，MVP 边界） | CI 全绿（Validation 瞬时网络失败已重跑） |
+| #12 | 性能 | 测量基建 + 防假绿加固（assertInvariants 跳过 + 测试计数守卫） | CI 全绿 |
+| #13 | 性能 | WcWidth 静态缓存（U+0000-U+00FF 查表，ba9c5c35 子集） | 待 CI/perf |
+| #14 | 性能 | TerminalEmulator.append 分块 1024B（JIT OSR storm，ba9c5c35 子集） | 待 CI/perf |
 
 ### 1.3 平台硬约束（已验证，非配置问题）
 - **aapt2 无 linux-aarch64**：AGP 8.4.2/8.13.2 的 maven `-linux.jar` 均为 x86-64 ELF（实测 `file`），无 `-linux-aarch64` 变体（404），build-tools 亦无 aarch64 包 → ARM 上任何资源管线（R 类生成、AAR transform）跑不了。
