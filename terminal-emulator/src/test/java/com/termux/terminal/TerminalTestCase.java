@@ -12,6 +12,12 @@ import java.util.Objects;
 import java.util.Set;
 
 public abstract class TerminalTestCase extends TestCase {
+    // Perf mode (TERMUX_TEST_PERF_MODE=1, used by perf.yml): skip the
+    // O(screen) invariant checks that run after every enterString()/resize().
+    // Those dominate wall-clock in perf runs (full-screen per-character
+    // WcWidth + per-line HashSet allocation) and drown out engine cost.
+    // Regular CI runs without the env var and keeps full invariants.
+    private static final boolean sPerfMode = "1".equals(System.getenv("TERMUX_TEST_PERF_MODE"));
 
     public static final int INITIAL_CELL_WIDTH_PIXELS = 13;
     public static final int INITIAL_CELL_HEIGHT_PIXELS = 15;
@@ -142,6 +148,7 @@ public abstract class TerminalTestCase extends TestCase {
 	}
 
 	protected TerminalTestCase assertInvariants() {
+		if (sPerfMode) return this;
 		TerminalBuffer screen = mTerminal.getScreen();
 		TerminalRow[] lines = screen.mLines;
 
