@@ -54,7 +54,11 @@ android {
         if (appVersionName) versionName = appVersionName
         validateVersionName(versionName)
 
-        buildConfigField "Integer", "TERMUX_APP__BOOTSTRAP_MIN_SDK", project.ext.bootstrapMinSdk.toString()
+    buildFeatures {
+        buildConfig true
+    }
+
+    buildConfigField "Integer", "TERMUX_APP__BOOTSTRAP_MIN_SDK", project.ext.bootstrapMinSdk.toString()
         buildConfigField "String", "TERMUX_APP__BOOTSTRAP_MIN_RELEASE",
                 project.ext.bootstrapMinRelease ? "\"" + project.ext.bootstrapMinRelease + "\"" : "null"
         buildConfigField "Integer", "TERMUX_APP__BOOTSTRAP_MAX_SDK", project.ext.bootstrapMaxSdk.toString()
