@@ -21,6 +21,9 @@ ext {
 
 android {
     namespace "com.termux"
+    buildFeatures {
+        buildConfig true
+    }
     compileSdkVersion project.properties.compileSdkVersion.toInteger()
     ndkVersion = System.getenv("JITPACK_NDK_VERSION") ?: project.properties.ndkVersion
     def appVersionName = System.getenv("TERMUX_APP_VERSION_NAME") ?: ""
@@ -55,11 +58,7 @@ android {
         if (appVersionName) versionName = appVersionName
         validateVersionName(versionName)
 
-    buildFeatures {
-        buildConfig true
-    }
-
-    buildConfigField "Integer", "TERMUX_APP__BOOTSTRAP_MIN_SDK", project.ext.bootstrapMinSdk.toString()
+        buildConfigField "Integer", "TERMUX_APP__BOOTSTRAP_MIN_SDK", project.ext.bootstrapMinSdk.toString()
         buildConfigField "String", "TERMUX_APP__BOOTSTRAP_MIN_RELEASE",
                 project.ext.bootstrapMinRelease ? "\"" + project.ext.bootstrapMinRelease + "\"" : "null"
         buildConfigField "Integer", "TERMUX_APP__BOOTSTRAP_MAX_SDK", project.ext.bootstrapMaxSdk.toString()
