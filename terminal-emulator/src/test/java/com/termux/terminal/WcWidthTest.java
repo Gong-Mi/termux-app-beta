@@ -15,6 +15,14 @@ public class WcWidthTest extends TestCase {
 		}
 	}
 
+	public void testNegativeCodePoint() {
+		// Regression: the U+0000-U+00FF cache must not be indexed with a
+		// negative code point (ArrayIndexOutOfBoundsException). Pre-cache
+		// behaviour was 0 via the C0 control-character branch.
+		assertWidthIs(0, -1);
+		assertWidthIs(0, Integer.MIN_VALUE);
+	}
+
 	public void testSomeWidthOne() {
 		assertWidthIs(1, 'å');
 		assertWidthIs(1, 'ä');
