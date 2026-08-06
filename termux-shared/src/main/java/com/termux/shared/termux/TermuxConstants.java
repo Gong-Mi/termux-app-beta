@@ -582,12 +582,7 @@ public final class TermuxConstants {
     public static final String TERMUX_INTERNAL_PRIVATE_APP_DATA_DIR_PATH = getInternalPrivateAppDataDirPath();
 
     private static String getInternalPrivateAppDataDirPath() {
-        int uid = Process.myUid();
-        int userId = uid / 100000;
-        if (userId == 0)
-            return "/data/data/" + TERMUX_PACKAGE_NAME; // Default: "/data/data/com.termux"
-        else
-            return "/data/user/" + userId + "/" + TERMUX_PACKAGE_NAME;
+        return TermuxDataPathUtils.getInternalPrivateAppDataDirPath(TERMUX_PACKAGE_NAME, Process.myUid());
     }
 
     /** Termux app internal private app data directory */
