@@ -30,6 +30,20 @@ jobs:
           distribution: temurin
           cache: gradle
 
+      # ubuntu-24.04-arm images do not ship a preinstalled Android SDK
+      # (x86 images do). cmdline-tools are JVM jars and run fine on aarch64.
+      - name: Set up Android SDK (ARM64 runner)
+        if: runner.arch == 'ARM64'
+        run: |
+          SDK="$HOME/android-sdk"
+          mkdir -p "$SDK/cmdline-tools"
+          curl -sSL -o /tmp/clt.zip https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+          unzip -q /tmp/clt.zip -d "$SDK/cmdline-tools"
+          mv "$SDK/cmdline-tools/cmdline-tools" "$SDK/cmdline-tools/latest"
+          yes | "$SDK/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null
+          "$SDK/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36" "build-tools;34.0.0" >/dev/null
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+
       - name: Run unit tests
         run: ./gradlew test
 
