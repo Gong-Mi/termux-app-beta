@@ -1,0 +1,145 @@
+name: Perf (terminal emulator, x86_64 + aarch64)
+
+on:
+  pull_request:
+    branches: [ master ]
+  workflow_dispatch:
+
+env:
+  JAVA_VERSION: 21
+
+jobs:
+  perf:
+    name: Perf (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            arch: x86_64
+          - os: ubuntu-24.04-arm
+            arch: aarch64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: temurin
+          cache: gradle
+
+      # ubuntu-24.04-arm images do not ship a preinstalled Android SDK
+      # (x86 images do). cmdline-tools are JVM jars and run fine on aarch64.
+      - name: Set up Android SDK (ARM64 runner)
+        if: runner.arch == 'ARM64'
+        run: |
+          SDK="$HOME/android-sdk"
+          mkdir -p "$SDK/cmdline-tools"
+          curl -sSL -o /tmp/clt.zip https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+          unzip -q /tmp/clt.zip -d "$SDK/cmdline-tools"
+          mv "$SDK/cmdline-tools/cmdline-tools" "$SDK/cmdline-tools/latest"
+          yes | "$SDK/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null
+          "$SDK/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36" "build-tools;34.0.0" >/dev/null
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+
+      # Terminal-emulator parse/input test classes: ANSI parser
+      # (TerminalTest), UTF-8/Unicode input (UnicodeInputTest), CSI
+      # sequences (ControlSequenceIntroducerTest), the ByteQueue the
+      # async parsing HandlerThread drains, plus key/screen/scroll/resize.
+      - name: Run terminal-emulator parse/input unit tests
+        run: |
+          ./gradlew :terminal-emulator:testDebugUnitTest \
+            --tests "com.termux.terminal.TerminalTest" \
+            --tests "com.termux.terminal.UnicodeInputTest" \
+            --tests "com.termux.terminal.ControlSequenceIntroducerTest" \
+            --tests "com.termux.terminal.ByteQueueTest" \
+            --tests "com.termux.terminal.KeyHandlerTest" \
+            --tests "com.termux.terminal.ScreenBufferTest" \
+            --tests "com.termux.terminal.ScrollRegionTest" \
+            --tests "com.termux.terminal.ResizeTest" \
+            --info
+
+      - name: Extract timing from JUnit XML reports
+        run: python3 .github/workflows/perf_extract_timing.py ${{ matrix.arch }} perf-timing-${{ matrix.arch }}.txt
+
+      - name: Upload timing artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: perf-timing-${{ matrix.arch }}
+          path: perf-timing-${{ matrix.arch }}.txt
+          if-no-files-found: error
+
+  compare:
+    name: Compare x86_64 vs aarch64
+    needs: perf
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Download x86_64 timing
+        uses: actions/download-artifact@v6
+        with:
+          name: perf-timing-x86_64
+          path: timings/x86_64
+
+      - name: Download aarch64 timing
+        uses: actions/download-artifact@v6
+        with:
+          name: perf-timing-aarch64
+          path: timings/aarch64
+
+      - name: Print x86_64 vs aarch64 comparison table
+        run: |
+          python3 - <<'EOF'
+          import glob
+
+          def parse(path):
+              d = {}
+              section = False
+              with open(path) as f:
+                  for line in f:
+                      if "per test class" in line:
+                          section = True
+                          continue
+                      # stop at the "slowest N individual tests" section
+                      if "individual tests" in line:
+                          section = False
+                      if not section or not line.startswith("  "):
+                          continue
+                      parts = line.strip().split()
+                      if len(parts) == 2 and parts[1].endswith("s") and \
+                              parts[1][:-1].replace(".", "").isdigit():
+                          d[parts[0]] = float(parts[1][:-1])
+              return d
+
+          x86_file = glob.glob("timings/x86_64/perf-timing-*.txt")
+          arm_file = glob.glob("timings/aarch64/perf-timing-*.txt")
+          if not x86_file or not arm_file:
+              raise SystemExit("timing artifact(s) missing: x86=%s arm=%s" % (x86_file, arm_file))
+          x86 = parse(x86_file[0])
+          arm = parse(arm_file[0])
+
+          print("per test class wall time: x86_64 vs aarch64 (lower is better)")
+          print(f"{'test class':60s} {'x86_64':>10s} {'aarch64':>10s} {'x86/arm':>8s}")
+          for cls in sorted(set(x86) | set(arm), key=lambda c: -max(x86.get(c, 0), arm.get(c, 0))):
+              x, a = x86.get(cls, 0.0), arm.get(cls, 0.0)
+              ratio = f"{x / a:.2f}x" if a > 0 else "n/a"
+              print(f"{cls:60s} {x:8.3f}s {a:8.3f}s {ratio:>8s}")
+
+          total_x = sum(x86.values())
+          total_a = sum(arm.values())
+          print(f"\nsuite wall total: x86_64={total_x:.3f}s aarch64={total_a:.3f}s "
+                f"ratio={total_x/total_a:.2f}x" if total_a > 0 else "")
+          EOF
+
+      - name: Upload combined timing artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: perf-timing-combined
+          path: |
+            timings/x86_64/*.txt
+            timings/aarch64/*.txt
+          if-no-files-found: error
