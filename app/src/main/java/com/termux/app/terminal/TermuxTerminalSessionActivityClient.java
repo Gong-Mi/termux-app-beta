@@ -145,7 +145,7 @@ public class TermuxTerminalSessionActivityClient extends TermuxTerminalSessionCl
 
         if (service == null || service.wantsToStop()) {
             // The service wants to stop as soon as possible.
-            mActivity.finishActivityIfNotFinishing();
+            mActivity.runOnUiThread(() -> mActivity.finishActivityIfNotFinishing());
             return;
         }
 
@@ -173,13 +173,13 @@ public class TermuxTerminalSessionActivityClient extends TermuxTerminalSessionCl
             // On Android TV devices we need to use older behaviour because we may
             // not be able to have multiple launcher icons.
             if (service.getTermuxSessionsSize() > 1 || isPluginExecutionCommandWithPendingResult) {
-                removeFinishedSession(finishedSession);
+                mActivity.runOnUiThread(() -> removeFinishedSession(finishedSession));
             }
         } else {
             // Once we have a separate launcher icon for the failsafe session, it
             // should be safe to auto-close session on exit code '0' or '130'.
             if (finishedSession.getExitStatus() == 0 || finishedSession.getExitStatus() == 130 || isPluginExecutionCommandWithPendingResult) {
-                removeFinishedSession(finishedSession);
+                mActivity.runOnUiThread(() -> removeFinishedSession(finishedSession));
             }
         }
     }
