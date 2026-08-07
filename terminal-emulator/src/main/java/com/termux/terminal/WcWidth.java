@@ -517,19 +517,23 @@ public final class WcWidth {
 
     /** Return the terminal display width of a code point: 0, 1 || 2. */
     public static int width(int ucs) {
-        // Lower bound matters: negative code points must fall through to
-        // calculateWidth (which returns 0 for them), not index the cache.
+        // Single-method layout: the U+0000-U+00FF cache is a prologue and
+        // epilogue around the ORIGINAL body, kept inline in this method —
+        // no extracted helper. The wrapper+helper shape (#13 first cut)
+        // measured +14% on a 4MB CJK burst on aarch64 CI (ubuntu-24.04-arm,
+        // reproduced twice) while x86_64 was unaffected; paths that never
+        // hit the cache paid for the extra layer per code point. Whether
+        // the mechanism is JIT inlining is only confirmed by the aarch64
+        // number recovering (perf.yml PerfBenchmarkTest); if it does not,
+        // the next suspect is the cache prologue itself.
+        // Lower bound matters: negative code points must reach the C0
+        // branch below (returns 0), not index the cache.
         if (ucs >= 0 && ucs < 256) {
             int cached = WIDTH_CACHE[ucs];
             if (cached != -1) return cached;
-            int w = calculateWidth(ucs);
-            WIDTH_CACHE[ucs] = w;
-            return w;
         }
-        return calculateWidth(ucs);
-    }
 
-    private static int calculateWidth(int ucs) {
+        int w;
         if (ucs == 0 ||
             ucs == 0x034F ||
             (0x200B <= ucs && ucs <= 0x200F) ||
@@ -537,17 +541,20 @@ public final class WcWidth {
             ucs == 0x2029 ||
             (0x202A <= ucs && ucs <= 0x202E) ||
             (0x2060 <= ucs && ucs <= 0x2063)) {
-            return 0;
+            w = 0;
+        } else if (ucs < 32 || (0x07F <= ucs && ucs < 0x0A0)) {
+            // C0/C1 control characters
+            // Termux change: Return 0 instead of -1.
+            w = 0;
+        } else if (intable(ZERO_WIDTH, ucs)) {
+            // combining characters with zero width
+            w = 0;
+        } else {
+            w = intable(WIDE_EASTASIAN, ucs) ? 2 : 1;
         }
 
-        // C0/C1 control characters
-        // Termux change: Return 0 instead of -1.
-        if (ucs < 32 || (0x07F <= ucs && ucs < 0x0A0)) return 0;
-
-        // combining characters with zero width
-        if (intable(ZERO_WIDTH, ucs)) return 0;
-
-        return intable(WIDE_EASTASIAN, ucs) ? 2 : 1;
+        if (ucs >= 0 && ucs < 256) WIDTH_CACHE[ucs] = w;
+        return w;
     }
 
     /** The width at an index position in a java char array. */
