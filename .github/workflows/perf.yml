@@ -64,6 +64,7 @@ jobs:
             --tests "com.termux.terminal.ScreenBufferTest" \
             --tests "com.termux.terminal.ScrollRegionTest" \
             --tests "com.termux.terminal.ResizeTest" \
+            --tests "com.termux.terminal.PerfBenchmarkTest" \
             --info
 
       - name: Extract timing from JUnit XML reports
