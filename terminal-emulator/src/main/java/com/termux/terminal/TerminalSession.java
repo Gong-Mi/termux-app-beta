@@ -354,7 +354,7 @@ public final class TerminalSession extends TerminalOutput {
         @Override
         public void handleMessage(Message msg) {
             TerminalInputQueueDrain.Result drainResult;
-            Trace.beginSection("Termux:PTY drain+parse");
+            Trace.beginSection("Termux:TerminalSession.drain+parse");
             try {
                 drainResult = TerminalInputQueueDrain.drain(
                     mProcessToTerminalIOQueue, mReceiveBuffer,
@@ -363,7 +363,7 @@ public final class TerminalSession extends TerminalOutput {
                 Trace.endSection();
             }
             if (drainResult.getBytesRead() > 0) {
-                Trace.beginSection("Termux:screen update");
+                Trace.beginSection("Termux:notifyScreenUpdate");
                 try {
                     notifyScreenUpdate();
                 } finally {

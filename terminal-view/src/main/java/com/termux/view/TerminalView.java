@@ -1010,7 +1010,7 @@ public final class TerminalView extends View {
 
     @Override
     protected void onDraw(Canvas canvas) {
-        Trace.beginSection("Termux:Canvas record");
+        Trace.beginSection("Termux:TerminalView.onDraw");
         try {
             boolean canvasHardwareAccelerated = canvas.isHardwareAccelerated();
             int layerType = getLayerType();
@@ -1032,7 +1032,7 @@ public final class TerminalView extends View {
                     mTextSelectionCursorController.getSelectors(sel);
                 }
 
-                Trace.beginSection("Termux:glyph render");
+                Trace.beginSection("Termux:TerminalRenderer.render");
                 try {
                     mRenderer.render(mEmulator, canvas, mTopRow, sel[0], sel[1], sel[2], sel[3]);
                 } finally {
