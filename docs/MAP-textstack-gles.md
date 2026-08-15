@@ -50,6 +50,23 @@
 - 位图字形进 ARGB atlas（PNG 直接上传，不经灰度栅格化）
 - 淘汰用 plot/genID 模型（GrDrawOpAtlas 同款），不用 LRU
 
+## 规范上游（每层的正式标准，URL 已验证 200）
+
+把系统工作迁到 APP 内 = 按 open spec 重新实现，不是逆向私有逻辑：
+
+| 层 | 正式规范 | 数据文件 | 实现参考 |
+|----|---------|---------|---------|
+| CJK 列宽 | UAX #11 East Asian Width | unicode.org/Public/UCD/latest/ucd/EastAsianWidth.txt | WcWidth.java（表已对齐） |
+| 代理对/U+FFFD | Unicode Standard ch.3 | - | FontCollection.cpp:740-755 |
+| emoji 属性 | UTS #51 | /Public/emoji/16.0/emoji-zwj-sequences.txt（1489 条 RGI 序列） | Emoji.cpp u_hasBinaryProperty |
+| emoji run 聚合 | UTS #51 §ZWJ | 同上 | FontCollection.cpp:766-799 |
+| 位图字形 | OpenType CBDT/CBLC | - | GrAtlasManager ARGB atlas |
+| atlas/EGL/纹理 | Khronos EGL 1.5 / GLES 3.0 | - | GrDrawOpAtlas plot/genID |
+
+注意 emoji-zwj-sequences.txt 的正确路径是 /Public/emoji/<ver>/ 而非
+/ucd/emoji/（后者 404）。ICU u_hasBinaryProperty 是 Emoji Property 的
+权威实现（UTS #51 定义，UCD emoji-data.txt 数据）。
+
 ## 接口边界（renderer 只需实现这些）
 
 ```
