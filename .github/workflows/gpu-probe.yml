@@ -1,0 +1,115 @@
+# Spike probe: can GitHub-hosted CI give us a "GPU" (SwiftShader software GLES)
+# for rendering-equivalence validation? Measures: emulator boot feasibility on
+# ubuntu-latest, GPU identity via getprop/dumpsys, install+render smoke of the
+# debug APK, and wall-clock cost of each phase.
+#
+# Throwaway feasibility probe; do not wire into required checks.
+name: GPU emulation probe (spike)
+
+on:
+  workflow_dispatch:
+
+env:
+  JAVA_VERSION: 21
+
+jobs:
+  swiftshader-probe:
+    name: Emulator + SwiftShader probe
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Record runner spec
+        run: |
+          nproc
+          free -h | head -2
+          df -h / | tail -1
+          ls -la /dev/kvm && echo KVM_PRESENT
+
+      - name: Enable KVM group perms
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Set up JDK
+        uses: actions/setup-java@v5
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: temurin
+
+      - name: Install SDK pieces (timed)
+        run: |
+          set -x
+          SDK="$ANDROID_HOME"
+          t0=$(date +%s)
+          yes | "$SDK/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null
+          "$SDK/cmdline-tools/latest/bin/sdkmanager" \
+            "platforms;android-36" "build-tools;34.0.0" \
+            "platform-tools" "emulator" \
+            "system-images;android-36;google_apis;x86_64" >/dev/null
+          t1=$(date +%s)
+          echo "SDK_INSTALL_SECONDS=$((t1-t0))" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Build debug APK (timed)
+        run: |
+          t0=$(date +%s)
+          ./gradlew assembleDebug
+          t1=$(date +%s)
+          echo "APK_BUILD_SECONDS=$((t1-t0))" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Boot emulator with SwiftShader (timed)
+        run: |
+          set -x
+          echo "no" | "$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager" create avd \
+            -n probe --package "system-images;android-36;google_apis;x86_64" --device pixel_5
+          t0=$(date +%s)
+          nohup "$ANDROID_HOME/emulator/emulator" -avd probe \
+            -gpu swiftshader_indirect -no-window -no-audio -no-boot-anim \
+            -no-snapshot -wipe-data -memory 3072 -cores 3 \
+            > /tmp/emu.log 2>&1 &
+          adb wait-for-device shell 'while [[ -z $(getprop sys.boot_completed) ]]; do sleep 2; done'
+          t1=$(date +%s)
+          echo "EMU_BOOT_SECONDS=$((t1-t0))" | tee -a "$GITHUB_STEP_SUMMARY"
+          adb devices
+
+      - name: GPU identity under SwiftShader
+        run: |
+          echo "== gpu-related props =="
+          adb shell getprop | grep -iE 'gles|gpu|swiftshader' || true
+          echo "== ro.hardware.egl =="
+          adb shell getprop ro.hardware.egl
+          echo "== SurfaceFlinger GLES =="
+          adb shell dumpsys SurfaceFlinger | grep -iE 'GLES|GPU' | head -10 || true
+
+      - name: Install APK + render smoke (timed)
+        run: |
+          set -x
+          APK=$(ls app/build/outputs/apk/debug/*.apk | head -1)
+          t0=$(date +%s)
+          adb install -r "$APK"
+          t1=$(date +%s)
+          echo "APK_INSTALL_SECONDS=$((t1-t0))" | tee -a "$GITHUB_STEP_SUMMARY"
+          adb shell am start -n com.termux/.app.TermuxActivity
+          sleep 12
+          adb shell ps -A | grep com.termux || true
+          adb logcat -d | grep -iE 'TermuxActivity|TerminalView|libEGL|SwiftShader' | tail -40 || true
+          adb exec-out screencap -p > termux_swiftshader.png
+          ls -la termux_swiftshader.png
+          file termux_swiftshader.png
+
+      - name: Upload render evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: gpu-probe-evidence
+          path: |
+            termux_swiftshader.png
+            /tmp/emu.log
+          if-no-files-found: warn
+
+      - name: Kill emulator
+        if: always()
+        run: adb emu kill || pkill -f qemu-system || true
