@@ -23,6 +23,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Validate device smoke scripts
+        run: bash -n scripts/android_compat_log_smoke.sh
+
       - name: Set up JDK
         uses: actions/setup-java@v5
         with:
