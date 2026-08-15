@@ -70,6 +70,9 @@ public final class TerminalSession extends TerminalOutput {
      */
     private int mTerminalFileDescriptor;
 
+    /** Set on the main thread when the post-exit reader grace period expires. */
+    private volatile boolean mProcessReaderStopRequested;
+
     /** Set by the application for user identification of session, not by terminal. */
     public String mSessionName;
 
@@ -141,8 +144,10 @@ public final class TerminalSession extends TerminalOutput {
                 try (InputStream termIn = new FileInputStream(terminalFileDescriptorWrapped)) {
                     final byte[] buffer = new byte[4096];
                     while (true) {
+                        if (mProcessReaderStopRequested) return;
                         int read = termIn.read(buffer);
                         if (read == -1) return;
+                        if (mProcessReaderStopRequested) return;
                         if (!mProcessToTerminalIOQueue.write(buffer, 0, read)) return;
                         // Coalesce: if a MSG_NEW_INPUT is already pending, the
                         // pending handler run will drain everything queued so
@@ -371,6 +376,7 @@ public final class TerminalSession extends TerminalOutput {
                 removeMessages(MSG_PROCESS_READER_TIMEOUT);
                 Logger.logInfo(mClient, LOG_TAG, "event=PTY_READER_FINISHED session=" + mHandle);
             } else if (msg.what == MSG_PROCESS_READER_TIMEOUT) {
+                mProcessReaderStopRequested = true;
                 mExitCoordinator.markReaderTimeout();
                 Logger.logWarn(mClient, LOG_TAG, "event=PTY_READER_TIMEOUT session=" + mHandle);
             }
