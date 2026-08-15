@@ -32,6 +32,7 @@ public final class TerminalSession extends TerminalOutput {
 
     private static final int MSG_NEW_INPUT = 1;
     private static final int MSG_PROCESS_EXITED = 4;
+    private static final int MAX_PROCESS_TO_TERMINAL_BYTES_PER_BATCH = 32 * 1024;
 
     public final String mHandle = UUID.randomUUID().toString();
 
@@ -342,21 +343,33 @@ public final class TerminalSession extends TerminalOutput {
     class MainThreadHandler extends Handler {
 
         final byte[] mReceiveBuffer = new byte[64 * 1024];
+        final TerminalInputQueueDrain.Consumer mReceiveConsumer = new TerminalInputQueueDrain.Consumer() {
+            @Override
+            public void accept(byte[] buffer, int length) {
+                mEmulator.append(buffer, length);
+            }
+        };
 
         @Override
         public void handleMessage(Message msg) {
-            // Drain the queue in one run (up to 32KB) so a burst of PTY
-            // output is parsed as a single batch instead of one read per
-            // MSG_NEW_INPUT message, then yield the main thread again.
-            int totalBytesRead = 0;
-            int bytesRead;
-            while (totalBytesRead < 32 * 1024 &&
-                   (bytesRead = mProcessToTerminalIOQueue.read(mReceiveBuffer, false)) > 0) {
-                mEmulator.append(mReceiveBuffer, bytesRead);
-                totalBytesRead += bytesRead;
-            }
-            if (totalBytesRead > 0) {
+            TerminalInputQueueDrain.Result drainResult = TerminalInputQueueDrain.drain(
+                mProcessToTerminalIOQueue, mReceiveBuffer,
+                MAX_PROCESS_TO_TERMINAL_BYTES_PER_BATCH, mReceiveConsumer);
+            if (drainResult.getBytesRead() > 0) {
                 notifyScreenUpdate();
+            }
+
+            // A full 64KB receive buffer used to make the nominal 32KB cap
+            // ineffective. Yield after the real budget and explicitly retain
+            // the wakeup for the queued tail. A process-exit message is deferred
+            // with its exit code until all already-queued output is consumed.
+            if (drainResult.hasMore()) {
+                if (msg.what == MSG_PROCESS_EXITED) {
+                    sendMessage(obtainMessage(MSG_PROCESS_EXITED, msg.obj));
+                } else if (!hasMessages(MSG_NEW_INPUT)) {
+                    sendEmptyMessage(MSG_NEW_INPUT);
+                }
+                return;
             }
 
             if (msg.what == MSG_PROCESS_EXITED) {

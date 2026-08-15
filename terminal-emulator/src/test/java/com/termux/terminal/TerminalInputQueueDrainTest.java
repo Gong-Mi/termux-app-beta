@@ -27,6 +27,31 @@ public class TerminalInputQueueDrainTest extends TestCase {
         }
     }
 
+    public void testRepeatedDrainsPreserveAllInputInOrder() {
+        byte[] input = patternedBytes(64 * KB);
+        ByteQueue queue = new ByteQueue(input.length);
+        assertTrue(queue.write(input, 0, input.length));
+
+        ByteArrayOutputStream consumed = new ByteArrayOutputStream();
+        TerminalInputQueueDrain.Consumer consumer =
+            (buffer, length) -> consumed.write(buffer, 0, length);
+
+        TerminalInputQueueDrain.Result first = TerminalInputQueueDrain.drain(
+            queue, new byte[64 * KB], 32 * KB, consumer);
+        TerminalInputQueueDrain.Result second = TerminalInputQueueDrain.drain(
+            queue, new byte[64 * KB], 32 * KB, consumer);
+
+        assertEquals(32 * KB, first.getBytesRead());
+        assertTrue(first.hasMore());
+        assertEquals(32 * KB, second.getBytesRead());
+        assertFalse(second.hasMore());
+        byte[] actual = consumed.toByteArray();
+        assertEquals(input.length, actual.length);
+        for (int i = 0; i < input.length; i++) {
+            assertEquals(input[i], actual[i]);
+        }
+    }
+
     private static byte[] patternedBytes(int length) {
         byte[] result = new byte[length];
         for (int i = 0; i < length; i++) {
