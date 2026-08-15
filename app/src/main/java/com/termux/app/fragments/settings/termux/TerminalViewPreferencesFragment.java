@@ -2,14 +2,17 @@ package com.termux.app.fragments.settings.termux;
 
 import android.content.Context;
 import android.os.Bundle;
+import android.view.View;
 
 import androidx.annotation.Keep;
+import androidx.preference.Preference;
 import androidx.preference.PreferenceDataStore;
 import androidx.preference.PreferenceFragmentCompat;
 import androidx.preference.PreferenceManager;
 
 import com.termux.R;
 import com.termux.shared.termux.settings.preferences.TermuxAppSharedPreferences;
+import com.termux.shared.termux.settings.preferences.TermuxPreferenceConstants;
 
 @Keep
 public class TerminalViewPreferencesFragment extends PreferenceFragmentCompat {
@@ -23,6 +26,44 @@ public class TerminalViewPreferencesFragment extends PreferenceFragmentCompat {
         preferenceManager.setPreferenceDataStore(TerminalViewPreferencesDataStore.getInstance(context));
 
         setPreferencesFromResource(R.xml.termux_terminal_view_preferences, rootKey);
+    }
+
+    @Override
+    public void onResume() {
+        super.onResume();
+
+        Context context = getContext();
+        Preference statusPreference = findPreference("terminal_rendering_status");
+        if (context == null || statusPreference == null) return;
+
+        TermuxAppSharedPreferences preferences = TermuxAppSharedPreferences.build(context, true);
+        if (preferences == null) return;
+
+        int layerType = preferences.getLastTerminalRenderingLayerType();
+        if (layerType == TermuxPreferenceConstants.TERMUX_APP.DEFAULT_TERMINAL_RENDERING_LAST_LAYER_TYPE) {
+            statusPreference.setSummary(R.string.termux_terminal_rendering_status_not_observed);
+            return;
+        }
+
+        int canvasState = preferences.wasLastTerminalCanvasHardwareAccelerated() ?
+            R.string.termux_terminal_rendering_canvas_hardware : R.string.termux_terminal_rendering_canvas_software;
+        int layerState;
+        switch (layerType) {
+            case View.LAYER_TYPE_NONE:
+                layerState = R.string.termux_terminal_rendering_layer_none;
+                break;
+            case View.LAYER_TYPE_HARDWARE:
+                layerState = R.string.termux_terminal_rendering_layer_hardware;
+                break;
+            case View.LAYER_TYPE_SOFTWARE:
+                layerState = R.string.termux_terminal_rendering_layer_software;
+                break;
+            default:
+                layerState = R.string.termux_terminal_rendering_layer_unknown;
+                break;
+        }
+        statusPreference.setSummary(getString(R.string.termux_terminal_rendering_status_format,
+            getString(canvasState), getString(layerState)));
     }
 
 }
@@ -72,6 +113,24 @@ class TerminalViewPreferencesDataStore extends PreferenceDataStore {
             default:
                 return false;
         }
+    }
+
+    @Override
+    public void putString(String key, String value) {
+        if (mPreferences == null || key == null || value == null) return;
+
+        if (TermuxPreferenceConstants.TERMUX_APP.KEY_TERMINAL_RENDERING_MODE.equals(key))
+            mPreferences.setTerminalRenderingMode(value);
+    }
+
+    @Override
+    public String getString(String key, String defValue) {
+        if (mPreferences == null) return defValue;
+
+        if (TermuxPreferenceConstants.TERMUX_APP.KEY_TERMINAL_RENDERING_MODE.equals(key))
+            return mPreferences.getTerminalRenderingMode();
+
+        return defValue;
     }
 
 }

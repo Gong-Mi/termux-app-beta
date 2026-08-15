@@ -1,6 +1,33 @@
 <PreferenceScreen xmlns:app="http://schemas.android.com/apk/res-auto">
 
     <PreferenceCategory
+        app:key="rendering"
+        app:title="@string/termux_terminal_view_rendering_header">
+
+        <ListPreference
+            app:defaultValue="system"
+            app:entries="@array/terminal_rendering_mode_entries"
+            app:entryValues="@array/terminal_rendering_mode_values"
+            app:key="terminal_rendering_mode"
+            app:title="@string/termux_terminal_rendering_mode_title"
+            app:useSimpleSummaryProvider="true" />
+
+        <Preference
+            app:key="terminal_rendering_status"
+            app:persistent="false"
+            app:selectable="false"
+            app:title="@string/termux_terminal_rendering_status_title" />
+
+        <Preference
+            app:key="terminal_rendering_scope"
+            app:persistent="false"
+            app:selectable="false"
+            app:summary="@string/termux_terminal_rendering_scope_summary"
+            app:title="@string/termux_terminal_rendering_scope_title" />
+
+    </PreferenceCategory>
+
+    <PreferenceCategory
         app:key="view"
         app:title="@string/termux_terminal_view_view_header">
 

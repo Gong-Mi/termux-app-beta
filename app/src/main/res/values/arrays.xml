@@ -1,0 +1,13 @@
+<resources>
+    <string-array name="terminal_rendering_mode_entries">
+        <item>System automatic</item>
+        <item>HWUI GPU hardware layer</item>
+        <item>Software Canvas (CPU raster)</item>
+    </string-array>
+
+    <string-array name="terminal_rendering_mode_values">
+        <item>system</item>
+        <item>hwui_gpu</item>
+        <item>software</item>
+    </string-array>
+</resources>

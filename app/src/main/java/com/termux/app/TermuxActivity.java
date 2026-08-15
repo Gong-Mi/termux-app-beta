@@ -43,6 +43,7 @@ import com.termux.app.activities.HelpActivity;
 import com.termux.app.activities.SettingsActivity;
 import com.termux.shared.termux.crash.TermuxCrashUtils;
 import com.termux.shared.termux.settings.preferences.TermuxAppSharedPreferences;
+import com.termux.shared.termux.settings.preferences.TermuxPreferenceConstants;
 import com.termux.app.terminal.TermuxSessionsListViewController;
 import com.termux.app.terminal.io.TerminalToolbarViewPager;
 import com.termux.app.terminal.TermuxTerminalViewClient;
@@ -292,6 +293,8 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
         if (mTermuxTerminalSessionActivityClient != null)
             mTermuxTerminalSessionActivityClient.onStart();
 
+        applyTerminalRenderingMode();
+
         if (mTermuxTerminalViewClient != null)
             mTermuxTerminalViewClient.onStart();
 
@@ -489,12 +492,39 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
         // Set termux terminal view
         mTerminalView = findViewById(R.id.terminal_view);
         mTerminalView.setTerminalViewClient(mTermuxTerminalViewClient);
+        applyTerminalRenderingMode();
 
         if (mTermuxTerminalViewClient != null)
             mTermuxTerminalViewClient.onCreate();
 
         if (mTermuxTerminalSessionActivityClient != null)
             mTermuxTerminalSessionActivityClient.onCreate();
+    }
+
+    /**
+     * Apply the explicit Android Canvas/HWUI rendering policy. This does not select a custom
+     * OpenGL ES or Vulkan terminal renderer; the Android HWUI backend remains system-controlled.
+     */
+    private void applyTerminalRenderingMode() {
+        if (mTerminalView == null || mPreferences == null) return;
+
+        String mode = mPreferences.getTerminalRenderingMode();
+        int layerType;
+        if (TermuxPreferenceConstants.TERMUX_APP.TERMINAL_RENDERING_MODE_HWUI_GPU.equals(mode)) {
+            getWindow().addFlags(WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED);
+            layerType = View.LAYER_TYPE_HARDWARE;
+        } else if (TermuxPreferenceConstants.TERMUX_APP.TERMINAL_RENDERING_MODE_SOFTWARE.equals(mode)) {
+            layerType = View.LAYER_TYPE_SOFTWARE;
+        } else {
+            layerType = View.LAYER_TYPE_NONE;
+        }
+
+        if (mTerminalView.getLayerType() != layerType) {
+            mTerminalView.setLayerType(layerType, null);
+            mTerminalView.invalidate();
+        }
+
+        Logger.logInfo(LOG_TAG, "Terminal rendering mode=" + mode + ", requestedLayerType=" + layerType);
     }
 
     private void setTermuxSessionsListView() {

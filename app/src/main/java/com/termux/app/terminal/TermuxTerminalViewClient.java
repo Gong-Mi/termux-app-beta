@@ -82,6 +82,13 @@ public class TermuxTerminalViewClient extends TermuxTerminalViewClientBase {
         return mActivity;
     }
 
+    @Override
+    public void onTerminalRenderingStateChanged(boolean canvasHardwareAccelerated, int layerType) {
+        mActivity.getPreferences().setLastTerminalRenderingState(canvasHardwareAccelerated, layerType);
+        Logger.logInfo(LOG_TAG, "Terminal Canvas hardwareAccelerated=" + canvasHardwareAccelerated +
+            ", layerType=" + layerType);
+    }
+
     /**
      * Should be called when mActivity.onCreate() is called
      */

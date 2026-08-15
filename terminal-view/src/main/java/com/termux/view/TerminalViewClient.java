@@ -65,6 +65,9 @@ public interface TerminalViewClient {
 
     void onEmulatorSet();
 
+    /** Called when the actual Canvas acceleration state or requested View layer changes. */
+    void onTerminalRenderingStateChanged(boolean canvasHardwareAccelerated, int layerType);
+
 
     void logError(String tag, String message);
 
