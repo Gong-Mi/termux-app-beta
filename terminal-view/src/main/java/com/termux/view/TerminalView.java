@@ -12,6 +12,7 @@ import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
+import android.os.Trace;
 import android.text.Editable;
 import android.text.InputType;
 import android.text.TextUtils;
@@ -1009,30 +1010,40 @@ public final class TerminalView extends View {
 
     @Override
     protected void onDraw(Canvas canvas) {
-        boolean canvasHardwareAccelerated = canvas.isHardwareAccelerated();
-        int layerType = getLayerType();
-        if (mClient != null && (!mRenderingStateReported ||
-            canvasHardwareAccelerated != mLastCanvasHardwareAccelerated ||
-            layerType != mLastRenderingLayerType)) {
-            mRenderingStateReported = true;
-            mLastCanvasHardwareAccelerated = canvasHardwareAccelerated;
-            mLastRenderingLayerType = layerType;
-            mClient.onTerminalRenderingStateChanged(canvasHardwareAccelerated, layerType);
-        }
-
-        if (mEmulator == null) {
-            canvas.drawColor(0XFF000000);
-        } else {
-            // render the terminal view and highlight any selected text
-            int[] sel = mDefaultSelectors;
-            if (mTextSelectionCursorController != null) {
-                mTextSelectionCursorController.getSelectors(sel);
+        Trace.beginSection("Termux:TerminalView.onDraw");
+        try {
+            boolean canvasHardwareAccelerated = canvas.isHardwareAccelerated();
+            int layerType = getLayerType();
+            if (mClient != null && (!mRenderingStateReported ||
+                canvasHardwareAccelerated != mLastCanvasHardwareAccelerated ||
+                layerType != mLastRenderingLayerType)) {
+                mRenderingStateReported = true;
+                mLastCanvasHardwareAccelerated = canvasHardwareAccelerated;
+                mLastRenderingLayerType = layerType;
+                mClient.onTerminalRenderingStateChanged(canvasHardwareAccelerated, layerType);
             }
 
-            mRenderer.render(mEmulator, canvas, mTopRow, sel[0], sel[1], sel[2], sel[3]);
+            if (mEmulator == null) {
+                canvas.drawColor(0XFF000000);
+            } else {
+                // render the terminal view and highlight any selected text
+                int[] sel = mDefaultSelectors;
+                if (mTextSelectionCursorController != null) {
+                    mTextSelectionCursorController.getSelectors(sel);
+                }
 
-            // render the text selection handles
-            renderTextSelection();
+                Trace.beginSection("Termux:TerminalRenderer.render");
+                try {
+                    mRenderer.render(mEmulator, canvas, mTopRow, sel[0], sel[1], sel[2], sel[3]);
+                } finally {
+                    Trace.endSection();
+                }
+
+                // render the text selection handles
+                renderTextSelection();
+            }
+        } finally {
+            Trace.endSection();
         }
     }
 
