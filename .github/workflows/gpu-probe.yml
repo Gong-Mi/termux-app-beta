@@ -7,7 +7,8 @@
 name: GPU emulation probe (spike)
 
 on:
-  workflow_dispatch:
+  push:
+    branches: [ spike/gpu-emulation-probe ]
 
 env:
   JAVA_VERSION: 21
