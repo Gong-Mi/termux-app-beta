@@ -63,6 +63,8 @@ public class TerminalSessionExitCoordinatorTest extends TestCase {
         assertTrue(coordinator.shouldFinish(false));
 
         coordinator.markFinished();
+        coordinator.markReaderFinished();
+        coordinator.markReaderTimeout();
 
         assertFalse(coordinator.shouldFinish(false));
     }
