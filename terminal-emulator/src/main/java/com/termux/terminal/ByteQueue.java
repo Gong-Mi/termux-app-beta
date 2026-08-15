@@ -17,7 +17,20 @@ final class ByteQueue {
         notify();
     }
 
-    public synchronized int read(byte[] buffer, boolean block) {
+    public synchronized boolean hasData() {
+        return mStoredBytes > 0;
+    }
+
+    public int read(byte[] buffer, boolean block) {
+        return read(buffer, 0, buffer.length, block);
+    }
+
+    public synchronized int read(byte[] buffer, int offset, int length, boolean block) {
+        if (offset < 0 || length < 0 || offset + length > buffer.length) {
+            throw new IllegalArgumentException("offset/length outside buffer");
+        }
+        if (length == 0) return 0;
+
         while (mStoredBytes == 0 && mOpen) {
             if (block) {
                 try {
@@ -34,8 +47,6 @@ final class ByteQueue {
         int totalRead = 0;
         int bufferLength = mBuffer.length;
         boolean wasFull = bufferLength == mStoredBytes;
-        int length = buffer.length;
-        int offset = 0;
         while (length > 0 && mStoredBytes > 0) {
             int oneRun = Math.min(bufferLength - mHead, mStoredBytes);
             int bytesToCopy = Math.min(length, oneRun);
