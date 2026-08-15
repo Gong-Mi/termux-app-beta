@@ -1,0 +1,148 @@
+# Render smoke test on GitHub-hosted CI with a software GPU (SwiftShader).
+# Graduated from spike/gpu-emulation-probe (docs/SPIKE-gpu-ci-emulation.md):
+# validated costs - SDK install 63s, emulator boot 60s (KVM + SwiftShader),
+# APK install 14s, end-to-end ~5 min.
+#
+# Validates (per spike verdict): render regressions - crash-free cold start,
+# real text rasterization, pixel assertions. Does NOT validate Mali/Adreno
+# driver quirks or on-device performance.
+name: Render smoke (SwiftShader)
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+  workflow_dispatch:
+
+env:
+  JAVA_VERSION: 21
+
+jobs:
+  render-smoke:
+    name: Emulator render smoke (x86_64 + SwiftShader)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Record runner spec
+        run: |
+          nproc
+          free -h | head -2
+          ls -la /dev/kvm && echo KVM_PRESENT
+
+      - name: Enable KVM group perms
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Set up JDK
+        uses: actions/setup-java@v5
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: temurin
+
+      - name: Install SDK pieces (timed)
+        run: |
+          set -x
+          SDK="$ANDROID_HOME"
+          t0=$(date +%s)
+          yes | "$SDK/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null
+          "$SDK/cmdline-tools/latest/bin/sdkmanager" \
+            "platforms;android-36" "build-tools;34.0.0" \
+            "platform-tools" "emulator" \
+            "system-images;android-36;google_apis;x86_64" >/dev/null
+          echo "$SDK/platform-tools" >> "$GITHUB_PATH"
+          echo "$SDK/emulator" >> "$GITHUB_PATH"
+          t1=$(date +%s)
+          echo "SDK_INSTALL_SECONDS=$((t1-t0))" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Build debug APK
+        run: ./gradlew assembleDebug
+
+      - name: Boot emulator with SwiftShader (timed)
+        env:
+          ANDROID_AVD_HOME: /home/runner/.android/avd
+        run: |
+          set -x
+          mkdir -p "$ANDROID_AVD_HOME"
+          echo "no" | "$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager" create avd \
+            -n smoke --package "system-images;android-36;google_apis;x86_64" --device pixel_5
+          if [ ! -f "$ANDROID_AVD_HOME/smoke.ini" ]; then
+            echo "SMOKE_AVD_MISSING: avdmanager returned 0 but smoke.ini absent - failing fast"
+            exit 42
+          fi
+          t0=$(date +%s)
+          nohup "$ANDROID_HOME/emulator/emulator" -avd smoke \
+            -gpu swiftshader_indirect -no-window -no-audio -no-boot-anim \
+            -no-snapshot -wipe-data -memory 3072 -cores 3 \
+            > /tmp/emu.log 2>&1 &
+          # Boot wait with hard cap and per-minute progress evidence
+          # (never adb wait-for-device bare: a dead emulator hangs it until
+          #  the job timeout - burned 27min in the spike before this fix)
+          for i in $(seq 1 15); do
+            sleep 60
+            BOOT=$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')
+            echo "[boot-wait minute $i] sys.boot_completed='$BOOT'"
+            if [ "$BOOT" = "1" ]; then break; fi
+            if ! pgrep -f "emulator.*-avd smoke" >/dev/null; then
+              echo "EMULATOR_PROCESS_DIED"; tail -30 /tmp/emu.log; exit 43
+            fi
+          done
+          BOOT=$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')
+          if [ "$BOOT" != "1" ]; then
+            echo "BOOT_TIMEOUT_15MIN"; tail -40 /tmp/emu.log; adb devices; exit 44
+          fi
+          t1=$(date +%s)
+          echo "EMU_BOOT_SECONDS=$((t1-t0))" | tee -a "$GITHUB_STEP_SUMMARY"
+          adb devices
+
+      - name: GPU identity evidence
+        run: |
+          echo "== ro.hardware.egl =="
+          adb shell getprop ro.hardware.egl
+          echo "== SurfaceFlinger GLES =="
+          adb shell dumpsys SurfaceFlinger | grep -iE '^GLES|GLES:' | head -5 || true
+
+      - name: Cold start + capture screenshots
+        run: |
+          set -x
+          APK=$(ls app/build/outputs/apk/debug/*x86_64*.apk | head -1)
+          adb install -r "$APK"
+          # Grant storage permission so the bootstrap can write, then cold start
+          adb shell pm grant com.termux android.permission.WRITE_EXTERNAL_STORAGE || true
+          adb shell am start -W -n com.termux/.app.TermuxActivity
+          sleep 20
+          adb shell ps -A | grep com.termux
+          # First screenshot right after boot-to-idle
+          adb exec-out screencap -p > render_initial.png
+          # Inject a keyboard glyph to prove live input -> render pipeline
+          adb shell input keyevent KEYCODE_MOVE_END
+          adb shell input text "smoke"
+          sleep 3
+          adb exec-out screencap -p > render_after_input.png
+          adb logcat -d | grep -iE 'FATAL|AndroidRuntime.*com.termux' | tail -20 || true
+
+      - name: Pixel assertions
+        run: |
+          python3 -m pip install --quiet Pillow
+          python3 .github/workflows/assert_render.py render_initial.png
+          python3 .github/workflows/assert_render.py render_after_input.png
+
+      - name: Upload render evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: render-smoke-evidence
+          path: |
+            render_initial.png
+            render_after_input.png
+            /tmp/emu.log
+          if-no-files-found: warn
+
+      - name: Kill emulator
+        if: always()
+        run: adb emu kill || pkill -f qemu-system || true
