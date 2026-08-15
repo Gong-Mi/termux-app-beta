@@ -695,12 +695,6 @@ public final class TermuxConstants {
     public static final File TERMUX_APPS_DIR = new File(TERMUX_APPS_DIR_PATH);
 
 
-    /** Termux app $PREFIX directory path ignored sub file paths to consider it empty */
-    public static final List<String> TERMUX_PREFIX_DIR_IGNORED_SUB_FILES_PATHS_TO_CONSIDER_AS_EMPTY = Arrays.asList(
-        TermuxConstants.TERMUX_TMP_PREFIX_DIR_PATH, TermuxConstants.TERMUX_ENV_TEMP_FILE_PATH, TermuxConstants.TERMUX_ENV_FILE_PATH);
-
-
-
     /*
      * Termux app and plugin preferences and properties file paths.
      */
@@ -791,6 +785,11 @@ public final class TermuxConstants {
 
     /** Termux app environment temp file path */
     public static final String TERMUX_ENV_TEMP_FILE_PATH = TERMUX_CONFIG_PREFIX_DIR_PATH + "/termux.env.tmp"; // Default: "/data/data/com.termux/files/usr/etc/termux/termux.env.tmp"
+
+
+    /** Termux app $PREFIX directory path ignored sub file paths to consider it empty */
+    public static final List<String> TERMUX_PREFIX_DIR_IGNORED_SUB_FILES_PATHS_TO_CONSIDER_AS_EMPTY = Arrays.asList(
+        TERMUX_TMP_PREFIX_DIR_PATH, TERMUX_ENV_TEMP_FILE_PATH, TERMUX_ENV_FILE_PATH);
 
 
 
