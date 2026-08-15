@@ -3,6 +3,7 @@ package com.termux.terminal;
 import android.annotation.SuppressLint;
 import android.os.Handler;
 import android.os.Message;
+import android.os.Trace;
 import android.system.ErrnoException;
 import android.system.Os;
 import android.system.OsConstants;
@@ -352,11 +353,22 @@ public final class TerminalSession extends TerminalOutput {
 
         @Override
         public void handleMessage(Message msg) {
-            TerminalInputQueueDrain.Result drainResult = TerminalInputQueueDrain.drain(
-                mProcessToTerminalIOQueue, mReceiveBuffer,
-                MAX_PROCESS_TO_TERMINAL_BYTES_PER_BATCH, mReceiveConsumer);
+            TerminalInputQueueDrain.Result drainResult;
+            Trace.beginSection("Termux:PTY drain+parse");
+            try {
+                drainResult = TerminalInputQueueDrain.drain(
+                    mProcessToTerminalIOQueue, mReceiveBuffer,
+                    MAX_PROCESS_TO_TERMINAL_BYTES_PER_BATCH, mReceiveConsumer);
+            } finally {
+                Trace.endSection();
+            }
             if (drainResult.getBytesRead() > 0) {
-                notifyScreenUpdate();
+                Trace.beginSection("Termux:screen update");
+                try {
+                    notifyScreenUpdate();
+                } finally {
+                    Trace.endSection();
+                }
             }
 
             // A full 64KB receive buffer used to make the nominal 32KB cap
