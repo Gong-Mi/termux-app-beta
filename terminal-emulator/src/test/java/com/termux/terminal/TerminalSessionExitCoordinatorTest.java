@@ -54,4 +54,16 @@ public class TerminalSessionExitCoordinatorTest extends TestCase {
 
         assertFalse(coordinator.shouldFinish(false));
     }
+
+    public void testFinishedStateCannotCompleteTwice() {
+        TerminalSessionExitCoordinator coordinator = new TerminalSessionExitCoordinator();
+
+        coordinator.markProcessExited(0);
+        coordinator.markReaderFinished();
+        assertTrue(coordinator.shouldFinish(false));
+
+        coordinator.markFinished();
+
+        assertFalse(coordinator.shouldFinish(false));
+    }
 }
