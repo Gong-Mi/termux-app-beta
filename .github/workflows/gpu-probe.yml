@@ -48,6 +48,8 @@ jobs:
             "platforms;android-36" "build-tools;34.0.0" \
             "platform-tools" "emulator" \
             "system-images;android-36;google_apis;x86_64" >/dev/null
+          echo "$SDK/platform-tools" >> "$GITHUB_PATH"
+          echo "$SDK/emulator" >> "$GITHUB_PATH"
           t1=$(date +%s)
           echo "SDK_INSTALL_SECONDS=$((t1-t0))" | tee -a "$GITHUB_STEP_SUMMARY"
 
