@@ -33,7 +33,10 @@ public final class TerminalSession extends TerminalOutput {
 
     private static final int MSG_NEW_INPUT = 1;
     private static final int MSG_PROCESS_EXITED = 4;
+    private static final int MSG_PROCESS_READER_FINISHED = 5;
+    private static final int MSG_PROCESS_READER_TIMEOUT = 6;
     private static final int MAX_PROCESS_TO_TERMINAL_BYTES_PER_BATCH = 32 * 1024;
+    private static final long PROCESS_READER_FINISH_GRACE_MILLIS = 2000;
 
     public final String mHandle = UUID.randomUUID().toString();
 
@@ -66,6 +69,9 @@ public final class TerminalSession extends TerminalOutput {
      * {@link JNI#createSubprocess(String, String, String[], String[], int[], int, int, int, int)}.
      */
     private int mTerminalFileDescriptor;
+
+    /** Set on the main thread when the post-exit reader grace period expires. */
+    private volatile boolean mProcessReaderStopRequested;
 
     /** Set by the application for user identification of session, not by terminal. */
     public String mSessionName;
@@ -138,8 +144,10 @@ public final class TerminalSession extends TerminalOutput {
                 try (InputStream termIn = new FileInputStream(terminalFileDescriptorWrapped)) {
                     final byte[] buffer = new byte[4096];
                     while (true) {
+                        if (mProcessReaderStopRequested) return;
                         int read = termIn.read(buffer);
                         if (read == -1) return;
+                        if (mProcessReaderStopRequested) return;
                         if (!mProcessToTerminalIOQueue.write(buffer, 0, read)) return;
                         // Coalesce: if a MSG_NEW_INPUT is already pending, the
                         // pending handler run will drain everything queued so
@@ -150,6 +158,8 @@ public final class TerminalSession extends TerminalOutput {
                     }
                 } catch (Exception e) {
                     // Ignore, just shutting down.
+                } finally {
+                    mMainThreadHandler.sendEmptyMessage(MSG_PROCESS_READER_FINISHED);
                 }
             }
         }.start();
@@ -344,6 +354,7 @@ public final class TerminalSession extends TerminalOutput {
     class MainThreadHandler extends Handler {
 
         final byte[] mReceiveBuffer = new byte[64 * 1024];
+        final TerminalSessionExitCoordinator mExitCoordinator = new TerminalSessionExitCoordinator();
         final TerminalInputQueueDrain.Consumer mReceiveConsumer = new TerminalInputQueueDrain.Consumer() {
             @Override
             public void accept(byte[] buffer, int length) {
@@ -353,6 +364,23 @@ public final class TerminalSession extends TerminalOutput {
 
         @Override
         public void handleMessage(Message msg) {
+            if (msg.what == MSG_PROCESS_EXITED) {
+                int exitCode = (Integer) msg.obj;
+                boolean scheduleReaderTimeout = mExitCoordinator.markProcessExited(exitCode);
+                Logger.logInfo(mClient, LOG_TAG, "event=PROCESS_EXITED session=" + mHandle + " exitStatus=" + exitCode);
+                if (scheduleReaderTimeout) {
+                    sendEmptyMessageDelayed(MSG_PROCESS_READER_TIMEOUT, PROCESS_READER_FINISH_GRACE_MILLIS);
+                }
+            } else if (msg.what == MSG_PROCESS_READER_FINISHED) {
+                mExitCoordinator.markReaderFinished();
+                removeMessages(MSG_PROCESS_READER_TIMEOUT);
+                Logger.logInfo(mClient, LOG_TAG, "event=PTY_READER_FINISHED session=" + mHandle);
+            } else if (msg.what == MSG_PROCESS_READER_TIMEOUT) {
+                mProcessReaderStopRequested = true;
+                mExitCoordinator.markReaderTimeout();
+                Logger.logWarn(mClient, LOG_TAG, "event=PTY_READER_TIMEOUT session=" + mHandle);
+            }
+
             TerminalInputQueueDrain.Result drainResult;
             Trace.beginSection("Termux:TerminalSession.drain+parse");
             try {
@@ -373,19 +401,19 @@ public final class TerminalSession extends TerminalOutput {
 
             // A full 64KB receive buffer used to make the nominal 32KB cap
             // ineffective. Yield after the real budget and explicitly retain
-            // the wakeup for the queued tail. A process-exit message is deferred
-            // with its exit code until all already-queued output is consumed.
+            // the wakeup for the queued tail.
             if (drainResult.hasMore()) {
-                if (msg.what == MSG_PROCESS_EXITED) {
-                    sendMessage(obtainMessage(MSG_PROCESS_EXITED, msg.obj));
-                } else if (!hasMessages(MSG_NEW_INPUT)) {
+                if (!hasMessages(MSG_NEW_INPUT)) {
                     sendEmptyMessage(MSG_NEW_INPUT);
                 }
                 return;
             }
 
-            if (msg.what == MSG_PROCESS_EXITED) {
-                int exitCode = (Integer) msg.obj;
+            if (mExitCoordinator.shouldFinish(false)) {
+                mExitCoordinator.markFinished();
+                removeMessages(MSG_PROCESS_READER_TIMEOUT);
+                int exitCode = mExitCoordinator.getExitStatus();
+                Logger.logInfo(mClient, LOG_TAG, "event=FINAL_CLEANUP session=" + mHandle + " exitStatus=" + exitCode);
                 cleanupResources(exitCode);
 
                 String exitDescription = "\r\n[Process completed";
