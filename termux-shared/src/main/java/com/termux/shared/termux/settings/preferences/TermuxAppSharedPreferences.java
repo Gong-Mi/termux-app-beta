@@ -93,6 +93,35 @@ public class TermuxAppSharedPreferences extends AppSharedPreferences {
     }
 
 
+    public String getTerminalRenderingMode() {
+        return SharedPreferenceUtils.getString(mSharedPreferences, TERMUX_APP.KEY_TERMINAL_RENDERING_MODE,
+            TERMUX_APP.DEFAULT_TERMINAL_RENDERING_MODE, true);
+    }
+
+    public void setTerminalRenderingMode(String value) {
+        SharedPreferenceUtils.setString(mSharedPreferences, TERMUX_APP.KEY_TERMINAL_RENDERING_MODE, value, false);
+    }
+
+    public boolean wasLastTerminalCanvasHardwareAccelerated() {
+        return SharedPreferenceUtils.getBoolean(mSharedPreferences,
+            TERMUX_APP.KEY_TERMINAL_RENDERING_LAST_CANVAS_HARDWARE_ACCELERATED, false);
+    }
+
+    public int getLastTerminalRenderingLayerType() {
+        return SharedPreferenceUtils.getInt(mSharedPreferences,
+            TERMUX_APP.KEY_TERMINAL_RENDERING_LAST_LAYER_TYPE,
+            TERMUX_APP.DEFAULT_TERMINAL_RENDERING_LAST_LAYER_TYPE);
+    }
+
+    public void setLastTerminalRenderingState(boolean canvasHardwareAccelerated, int layerType) {
+        SharedPreferenceUtils.setBoolean(mSharedPreferences,
+            TERMUX_APP.KEY_TERMINAL_RENDERING_LAST_CANVAS_HARDWARE_ACCELERATED,
+            canvasHardwareAccelerated, false);
+        SharedPreferenceUtils.setInt(mSharedPreferences,
+            TERMUX_APP.KEY_TERMINAL_RENDERING_LAST_LAYER_TYPE, layerType, false);
+    }
+
+
 
     public boolean isSoftKeyboardEnabled() {
         return SharedPreferenceUtils.getBoolean(mSharedPreferences, TERMUX_APP.KEY_SOFT_KEYBOARD_ENABLED, TERMUX_APP.DEFAULT_VALUE_KEY_SOFT_KEYBOARD_ENABLED);

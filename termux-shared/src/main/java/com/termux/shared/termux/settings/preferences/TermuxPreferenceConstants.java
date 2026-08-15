@@ -1,7 +1,7 @@
 package com.termux.shared.termux.settings.preferences;
 
 /*
- * Version: v0.16.0
+ * Version: v0.17.0
  *
  * Changelog
  *
@@ -69,6 +69,9 @@ package com.termux.shared.termux.settings.preferences;
  * - 0.16.0 (2022-06-11)
  *      - Added following to `TERMUX_APP`:
  *          `KEY_APP_SHELL_NUMBER_SINCE_BOOT` and `KEY_TERMINAL_SESSION_NUMBER_SINCE_BOOT`.
+ *
+ * - 0.17.0 (2026-08-15)
+ *      - Added terminal rendering mode and last observed Canvas rendering state to `TERMUX_APP`.
  */
 
 import com.termux.shared.shell.command.ExecutionCommand;
@@ -94,6 +97,20 @@ public final class TermuxPreferenceConstants {
          */
         public static final String KEY_TERMINAL_MARGIN_ADJUSTMENT =  "terminal_margin_adjustment";
         public static final boolean DEFAULT_TERMINAL_MARGIN_ADJUSTMENT = true;
+
+
+        /** TerminalView rendering policy. This controls Android Canvas/HWUI, not a custom GLES/Vulkan renderer. */
+        public static final String KEY_TERMINAL_RENDERING_MODE = "terminal_rendering_mode";
+        public static final String TERMINAL_RENDERING_MODE_SYSTEM = "system";
+        public static final String TERMINAL_RENDERING_MODE_HWUI_GPU = "hwui_gpu";
+        public static final String TERMINAL_RENDERING_MODE_SOFTWARE = "software";
+        public static final String DEFAULT_TERMINAL_RENDERING_MODE = TERMINAL_RENDERING_MODE_SYSTEM;
+
+        /** Last rendering state reported by the Canvas passed to TerminalView.onDraw(). */
+        public static final String KEY_TERMINAL_RENDERING_LAST_CANVAS_HARDWARE_ACCELERATED =
+            "terminal_rendering_last_canvas_hardware_accelerated";
+        public static final String KEY_TERMINAL_RENDERING_LAST_LAYER_TYPE = "terminal_rendering_last_layer_type";
+        public static final int DEFAULT_TERMINAL_RENDERING_LAST_LAYER_TYPE = -1;
 
 
         /**

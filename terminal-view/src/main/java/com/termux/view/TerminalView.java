@@ -57,6 +57,10 @@ public final class TerminalView extends View {
 
     public TerminalViewClient mClient;
 
+    private boolean mRenderingStateReported;
+    private boolean mLastCanvasHardwareAccelerated;
+    private int mLastRenderingLayerType = -1;
+
     private TextSelectionCursorController mTextSelectionCursorController;
 
     private Handler mTerminalCursorBlinkerHandler;
@@ -1005,6 +1009,17 @@ public final class TerminalView extends View {
 
     @Override
     protected void onDraw(Canvas canvas) {
+        boolean canvasHardwareAccelerated = canvas.isHardwareAccelerated();
+        int layerType = getLayerType();
+        if (mClient != null && (!mRenderingStateReported ||
+            canvasHardwareAccelerated != mLastCanvasHardwareAccelerated ||
+            layerType != mLastRenderingLayerType)) {
+            mRenderingStateReported = true;
+            mLastCanvasHardwareAccelerated = canvasHardwareAccelerated;
+            mLastRenderingLayerType = layerType;
+            mClient.onTerminalRenderingStateChanged(canvasHardwareAccelerated, layerType);
+        }
+
         if (mEmulator == null) {
             canvas.drawColor(0XFF000000);
         } else {

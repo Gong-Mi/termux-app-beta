@@ -203,6 +203,19 @@
 
             <!-- View Category -->
             <string name="termux_terminal_view_view_header">View</string>
+            <string name="termux_terminal_view_rendering_header">Rendering</string>
+            <string name="termux_terminal_rendering_mode_title">Terminal rendering mode</string>
+            <string name="termux_terminal_rendering_status_title">Observed runtime state</string>
+            <string name="termux_terminal_rendering_status_not_observed">No TerminalView frame has been observed in this app process yet.</string>
+            <string name="termux_terminal_rendering_status_format">Last TerminalView draw: %1$s Canvas; View layer: %2$s.</string>
+            <string name="termux_terminal_rendering_canvas_hardware">hardware-accelerated</string>
+            <string name="termux_terminal_rendering_canvas_software">software</string>
+            <string name="termux_terminal_rendering_layer_none">none (system-managed)</string>
+            <string name="termux_terminal_rendering_layer_hardware">hardware</string>
+            <string name="termux_terminal_rendering_layer_software">software</string>
+            <string name="termux_terminal_rendering_layer_unknown">unknown</string>
+            <string name="termux_terminal_rendering_scope_title">Management scope</string>
+            <string name="termux_terminal_rendering_scope_summary">Controls Android Canvas/HWUI for TerminalView. The GPU hardware-layer mode explicitly allocates a hardware layer; software mode rasterizes the terminal on the CPU. Android still selects the HWUI backend (Skia OpenGL/Vulkan). This is not the separate GLES/Vulkan terminal renderer.</string>
 
                 <!-- Terminal View Margin Adjustment -->
                 <string name="termux_terminal_view_terminal_margin_adjustment_title">Terminal Margin Adjustment</string>

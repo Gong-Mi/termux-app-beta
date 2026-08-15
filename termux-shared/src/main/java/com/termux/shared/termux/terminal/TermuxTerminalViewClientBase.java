@@ -90,6 +90,10 @@ public class TermuxTerminalViewClientBase implements TerminalViewClient {
     }
 
     @Override
+    public void onTerminalRenderingStateChanged(boolean canvasHardwareAccelerated, int layerType) {
+    }
+
+    @Override
     public void logError(String tag, String message) {
         Logger.logError(tag, message);
     }
