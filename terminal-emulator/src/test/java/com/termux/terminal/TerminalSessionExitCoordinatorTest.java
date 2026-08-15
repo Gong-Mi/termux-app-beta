@@ -55,6 +55,17 @@ public class TerminalSessionExitCoordinatorTest extends TestCase {
         assertFalse(coordinator.shouldFinish(false));
     }
 
+    public void testDuplicateProcessExitKeepsFirstStatusAndDoesNotRescheduleTimeout() {
+        TerminalSessionExitCoordinator coordinator = new TerminalSessionExitCoordinator();
+
+        assertTrue(coordinator.markProcessExited(7));
+        assertFalse(coordinator.markProcessExited(9));
+        coordinator.markReaderFinished();
+
+        assertTrue(coordinator.shouldFinish(false));
+        assertEquals(7, coordinator.getExitStatus());
+    }
+
     public void testFinishedStateCannotCompleteTwice() {
         TerminalSessionExitCoordinator coordinator = new TerminalSessionExitCoordinator();
 
