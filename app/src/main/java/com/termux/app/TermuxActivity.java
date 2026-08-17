@@ -511,7 +511,8 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
         String mode = mPreferences.getTerminalRenderingMode();
         int layerType;
         if (TermuxPreferenceConstants.TERMUX_APP.TERMINAL_RENDERING_MODE_HWUI_GPU.equals(mode)) {
-            getWindow().addFlags(WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED);
+            // Do not touch the window flags: windows are hardware accelerated by
+            // default and a manual addFlags() would stick after switching back.
             layerType = View.LAYER_TYPE_HARDWARE;
         } else if (TermuxPreferenceConstants.TERMUX_APP.TERMINAL_RENDERING_MODE_SOFTWARE.equals(mode)) {
             layerType = View.LAYER_TYPE_SOFTWARE;

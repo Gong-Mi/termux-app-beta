@@ -32,6 +32,8 @@ public final class TerminalRenderer {
     final int mFontLineSpacingAndAscent;
 
     private final float[] asciiMeasures = new float[127];
+    /** Cached widths for Unicode Block Elements, commonly used by terminal graphics. */
+    private final float[] blockElementMeasures = new float[0x2600 - 0x2580];
 
     public TerminalRenderer(int textSize, Typeface typeface) {
         mTextSize = textSize;
@@ -50,6 +52,10 @@ public final class TerminalRenderer {
         for (int i = 0; i < asciiMeasures.length; i++) {
             sb.setCharAt(0, (char) i);
             asciiMeasures[i] = mTextPaint.measureText(sb, 0, 1);
+        }
+        for (int i = 0; i < blockElementMeasures.length; i++) {
+            sb.setCharAt(0, (char) (0x2580 + i));
+            blockElementMeasures[i] = mTextPaint.measureText(sb, 0, 1);
         }
     }
 
@@ -107,8 +113,14 @@ public final class TerminalRenderer {
                 // This could happen for some fonts which are not truly monospace, or for more exotic characters such as
                 // smileys which android font renders as wide.
                 // If this is detected, we draw this code point scaled to match what wcwidth() expects.
-                final float measuredCodePointWidth = (codePoint < asciiMeasures.length) ? asciiMeasures[codePoint] : mTextPaint.measureText(line,
-                    currentCharIndex, charsForCodePoint);
+                final float measuredCodePointWidth;
+                if (codePoint < asciiMeasures.length) {
+                    measuredCodePointWidth = asciiMeasures[codePoint];
+                } else if (codePoint >= 0x2580 && codePoint < 0x2600) {
+                    measuredCodePointWidth = blockElementMeasures[codePoint - 0x2580];
+                } else {
+                    measuredCodePointWidth = mTextPaint.measureText(line, currentCharIndex, charsForCodePoint);
+                }
                 final boolean fontWidthMismatch = Math.abs(measuredCodePointWidth / mFontWidth - codePointWcWidth) > 0.01;
 
                 if (style != lastRunStyle || insideCursor != lastRunInsideCursor || insideSelection != lastRunInsideSelection || fontWidthMismatch || lastRunFontWidthMismatch) {
@@ -189,6 +201,24 @@ public final class TerminalRenderer {
         float left = startColumn * mFontWidth;
         float right = left + runWidthColumns * mFontWidth;
 
+        // U+2580 is a geometric upper-half block. For a plain run it is exactly
+        // representable as two cell rectangles, avoiding glyph rasterization and
+        // drawTextRun() on terminal graphics workloads. Keep all styled, selected,
+        // cursor, inverse-video and mixed-character runs on the normal text path.
+        if (effect == 0 && cursor == 0 && !reverseVideo && runWidthChars == runWidthColumns
+            && isPlainUpperHalfBlockRun(text, startCharIndex, runWidthChars)) {
+            final float cellTop = y - mFontLineSpacingAndAscent + mFontAscent;
+            final float cellMiddle = cellTop + (y - cellTop) / 2.f;
+            // Always paint the cell background: the window background is updated
+            // asynchronously and can lag palette changes, so skipping this rect is
+            // not absolutely equivalent for full-half cells.
+            mTextPaint.setColor(backColor);
+            canvas.drawRect(left, cellTop, right, y, mTextPaint);
+            mTextPaint.setColor(foreColor);
+            canvas.drawRect(left, cellTop, right, cellMiddle, mTextPaint);
+            return;
+        }
+
         mes = mes / mFontWidth;
         boolean savedMatrix = false;
         if (Math.abs(mes - runWidthColumns) > 0.01) {
@@ -237,6 +267,14 @@ public final class TerminalRenderer {
         }
 
         if (savedMatrix) canvas.restore();
+    }
+
+    private static boolean isPlainUpperHalfBlockRun(char[] text, int start, int length) {
+        final int end = start + length;
+        for (int i = start; i < end; i++) {
+            if (text[i] != '\u2580') return false;
+        }
+        return true;
     }
 
     public float getFontWidth() {
