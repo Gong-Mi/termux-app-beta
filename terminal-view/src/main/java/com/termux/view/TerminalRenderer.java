@@ -209,11 +209,11 @@ public final class TerminalRenderer {
             && isPlainUpperHalfBlockRun(text, startCharIndex, runWidthChars)) {
             final float cellTop = y - mFontLineSpacingAndAscent + mFontAscent;
             final float cellMiddle = cellTop + (y - cellTop) / 2.f;
-            if (backColor != palette[TextStyle.COLOR_INDEX_BACKGROUND]) {
-                // Only draw non-default background; the default comes from the window background.
-                mTextPaint.setColor(backColor);
-                canvas.drawRect(left, cellTop, right, y, mTextPaint);
-            }
+            // Always paint the cell background: the window background is updated
+            // asynchronously and can lag palette changes, so skipping this rect is
+            // not absolutely equivalent for full-half cells.
+            mTextPaint.setColor(backColor);
+            canvas.drawRect(left, cellTop, right, y, mTextPaint);
             mTextPaint.setColor(foreColor);
             canvas.drawRect(left, cellTop, right, cellMiddle, mTextPaint);
             return;
