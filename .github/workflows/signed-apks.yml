@@ -1,0 +1,104 @@
+# Build a signed Android App Bundle and materialize its split APK set.
+# This is an experiment for measuring whether packaging modularity changes
+# runtime behavior/performance; it is not a release workflow.
+name: Signed APKS experiment
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ build/signed-apks ]
+
+permissions:
+  contents: read
+
+env:
+  JAVA_VERSION: 21
+  BUNDLETOOL_VERSION: 1.18.2
+
+jobs:
+  build-signed-apks:
+    name: bundleDebug -> signed .apks
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up JDK
+        uses: actions/setup-java@v5
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: temurin
+          cache: gradle
+
+      - name: Build Android App Bundle
+        run: |
+          ./gradlew bundleDebug --no-daemon
+          test -s app/build/outputs/bundle/debug/app-debug.aab
+
+      - name: Download bundletool
+        run: |
+          curl --fail --location --retry 3 \
+            -o bundletool.jar \
+            "https://github.com/google/bundletool/releases/download/${BUNDLETOOL_VERSION}/bundletool-all-${BUNDLETOOL_VERSION}.jar"
+          test -s bundletool.jar
+          sha256sum bundletool.jar | tee bundletool.sha256
+
+      - name: Build signed split APK set
+        env:
+          KS_PASSWORD: xrj45yWGLbsO7W0v
+        run: |
+          java -jar bundletool.jar build-apks \
+            --bundle=app/build/outputs/bundle/debug/app-debug.aab \
+            --output=termux-app-debug-default.apks \
+            --mode=default \
+            --ks=app/testkey_untrusted.jks \
+            --ks-key-alias=alias \
+            --ks-pass=pass:${KS_PASSWORD} \
+            --key-pass=pass:${KS_PASSWORD}
+
+          java -jar bundletool.jar build-apks \
+            --bundle=app/build/outputs/bundle/debug/app-debug.aab \
+            --output=termux-app-debug-universal.apks \
+            --mode=universal \
+            --ks=app/testkey_untrusted.jks \
+            --ks-key-alias=alias \
+            --ks-pass=pass:${KS_PASSWORD} \
+            --key-pass=pass:${KS_PASSWORD}
+
+      - name: Verify signed APKS contents
+        run: |
+          set -eu
+          for file in termux-app-debug-default.apks termux-app-debug-universal.apks; do
+            unzip -t "$file"
+            unzip -l "$file" | tee "${file}.listing"
+            unzip -p "$file" toc.pb > "${file}.toc.pb"
+            test -s "${file}.toc.pb"
+          done
+          unzip -l termux-app-debug-default.apks | grep -E 'base-master.apk|base-arm64_v8a.apk|base-x86_64.apk'
+          unzip -l termux-app-debug-universal.apks | grep 'universal.apk'
+          {
+            echo '## Signed APKS experiment'
+            echo
+            echo '### Artifacts'
+            sha256sum app/build/outputs/bundle/debug/app-debug.aab \
+              termux-app-debug-default.apks termux-app-debug-universal.apks
+            echo
+            echo '### Split APK entries'
+            unzip -l termux-app-debug-default.apks
+            echo
+            echo '### Bundletool'
+            java -jar bundletool.jar version
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload AAB and signed APKS
+        uses: actions/upload-artifact@v6
+        with:
+          name: termux-app-signed-apks
+          if-no-files-found: error
+          path: |
+            app/build/outputs/bundle/debug/app-debug.aab
+            termux-app-debug-default.apks
+            termux-app-debug-universal.apks
+            *.listing
+            *.sha256
