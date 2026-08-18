@@ -4,7 +4,7 @@
 
     <dist:module
         dist:instant="false"
-        dist:title="@string/application_name">
+        dist:title="@string/support_ui_title">
         <dist:delivery>
             <dist:install-time />
         </dist:delivery>
