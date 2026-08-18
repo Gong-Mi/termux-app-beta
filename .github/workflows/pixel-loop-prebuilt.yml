@@ -39,8 +39,7 @@ jobs:
           readelf -h pixel-loop | tee pixel-loop-elf-header.txt
           readelf -d pixel-loop | tee pixel-loop-dynamic.txt
           grep -q 'ARM aarch64' pixel-loop-file.txt
-          grep -q 'Android' pixel-loop-file.txt
-          grep -q 'INTERP.*linker64' pixel-loop-elf-header.txt || true
+          grep -q 'interpreter /system/bin/linker64' pixel-loop-file.txt
           ! grep -Eiq 'ffmpeg|libavcodec|player' pixel-loop-dynamic.txt
           test -x pixel-loop
           test "$(stat -c '%s' pixel-loop)" -eq 1112712
