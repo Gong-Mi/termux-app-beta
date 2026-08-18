@@ -228,15 +228,20 @@ jobs:
           adb shell dumpsys window | grep -E 'mCurrentFocus|mFocusedApp' | tee fused-focus.txt
           grep -q SettingsActivity fused-focus.txt
           adb exec-out screencap -p > fused-settings.png
-          # HelpActivity is exported=false: resolve proves the feature manifest survived
-          # the fuse, then launch as the app uid on the debuggable build
+          # HelpActivity is exported=false: resolve proves the feature manifest
+          # survived the fuse, and an external start must be DENIED (the fuse must
+          # not have widened the activity to exported). In-app launch is exercised
+          # by SettingsActivity above; am-as-app (run-as) is blocked by ATMS
+          # package/uid matching on modern Android.
           adb shell cmd package resolve-activity -a com.termux.action.OPEN_HELP | tee fused-resolve.txt
           grep -q 'HelpActivity' fused-resolve.txt
-          adb shell run-as com.termux am start -W -a com.termux.action.OPEN_HELP
-          sleep 5
-          adb shell dumpsys window | grep -E 'mCurrentFocus|mFocusedApp' | tee -a fused-focus.txt
-          grep -q 'HelpActivity' fused-focus.txt
-          adb exec-out screencap -p > fused-help.png
+          if adb shell am start -W -a com.termux.action.OPEN_HELP 2>&1 | tee fused-help-denied.txt | grep -q 'SecurityException'; then
+            echo "HELP_EXPORTED_FALSE_ENFORCED_POST_FUSE"
+          else
+            echo "FAIL: HelpActivity was externally startable (exported flag lost during fuse)"
+            cat fused-help-denied.txt
+            exit 1
+          fi
           adb logcat -d | grep -iE 'FATAL|AndroidRuntime.*com.termux' | tail -20 || true
 
       - name: Upload fused APK evidence
@@ -249,8 +254,8 @@ jobs:
             fused-pm-path.txt
             fused-focus.txt
             fused-resolve.txt
+            fused-help-denied.txt
             fused-settings.png
-            fused-help.png
           if-no-files-found: warn
 
       - name: Upload split emulator evidence
