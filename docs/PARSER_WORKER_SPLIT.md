@@ -1,78 +1,72 @@
-# Parser worker / latest-only mailbox 拆分计划
+# Parser Worker + Latest-Only Mailbox 拆分计划
 
-> 目标：把 `TerminalSession` 的 drain+parse 从主线程拆到独立 parser worker，并通过 `TerminalRenderMailbox` 让 UI 只渲染最新帧。
-> 依据：stress 日志确认主线程是瓶颈（Slow UI thread 619 / Slow issue draw commands 851），需要先把解析/模型构建拆出去。
+> 对应 PR #35 (https://github.com/Gong-Mi/termux-app-beta/pull/35)
+> 分支：`refactor/parser-worker-mailbox`
 
-## 已落地
+## 现状
 
-- `TerminalRenderMailbox`（terminal-view）+ 单元测试（PR #35）。
+- [x] Stage 1: `TerminalRenderMailbox<T>`（泛型、revision-only、单槽丢帧）
+- [x] Stage 2: `TerminalSessionClientMainThreadWrapper`（所有 emulator 回调回归主线程）
+- [x] Stage 3: parser worker 脚手架 + `TerminalModelFrame` + `TerminalFrameSink`
+- [ ] Stage 4: `TerminalSession` 只读 snapshot API（外部 `getEmulator()` 迁移）
+- [ ] Stage 5: 把 worker 和 mailbox 真正接入 `TerminalSession` / `TerminalView`
+- [ ] Stage 6: CI stress 断言更新与验证
 
-## 待拆分工作
+## 关键设计决策
 
-### Stage 2：callback 主线程化（可独立合并）
+### 模块依赖
 
-**文件**：`terminal-emulator/src/main/java/com/termux/terminal/TerminalSessionClientMainThreadWrapper.java`
+- `terminal-emulator` 不能依赖 `terminal-view`。
+- `TerminalRenderMailbox` / `RenderFrameMetrics` 继续留在 `terminal-view`。
+- 通过 `com.termux.terminal.FrameRevision` 接口让 mailbox 泛型化，同时 `TerminalModelFrame` 与 `TerminalRenderFrame` 都暴露 `screenRevision`。
+- `TerminalFrameSink` 接口在 `terminal-emulator` 中定义；`TerminalView` 实现 sink，把 model frame 转成 render frame 后丢进 mailbox。
 
-- 包装任意 `TerminalSessionClient`，把所有回调（`onTextChanged`、`onTitleChanged`、…、`log*`）post 到构造时传入的 `Handler`（主线程 looper）。
-- 这样 parser worker 可以直接调用原 client 方法，无需在每个回调点判断线程。
-- 可先在 `TerminalSession` 里替换 client，但保持 drain+parse 仍在主线程；行为等价，单测不变。
+这样 parser worker 可以放在 `terminal-emulator`，而 mailbox 留在 `terminal-view`，没有循环依赖。
 
-### Stage 3：parser worker 脚手架（可独立合并）
+### 线程边界
 
-**文件**：`terminal-emulator/src/main/java/com/termux/terminal/TerminalParserWorker.java`
+| 对象 | 所在线程 | 说明 |
+|---|---|---|
+| `TerminalEmulator` | parser worker | 所有 mutation（append/resize/reset/finish）串行化 |
+| `TerminalModelFrame` | parser worker 产出，主线程消费 | 不可变快照 |
+| `TerminalRenderFrame` | 主线程 | 包装 model frame + 当前文本选择 |
+| `TerminalRenderMailbox<TerminalModelFrame>` | 跨线程 | 单槽 AtomicReference，producer 发布，render 获取 |
+| `RenderFrameMetrics` | 主线程/跨线程 | 发布在 worker，ack/drop 在 render |
+| `TerminalSessionClientMainThreadWrapper` | 跨线程 | worker 线程调用，post 到主线程执行 |
 
-- 使用 `HandlerThread` + `Handler` 做一条专用 parser 线程。
-- 命令队列（`Message.what` 或显式 command 对象）：
-  - `APPEND`：从 `ByteQueue` drain 并调用 `TerminalEmulator.append`。
-  - `RESIZE(columns, rows, cellWidth, cellHeight)`。
-  - `VIEWPORT(topRow, selX1, selY1, selX2, selY2)`。
-  - `RESET`。
-  - `FINISH(exitCode, exitDescriptionBytes)`：进程退出后把 `[Process completed...]` 写进 emulator。
-  - `STOP`：清空队列并退出 looper。
-- 每处理完一个 `APPEND` batch 后，**暂不做 mailbox 发布**，先保持原 `notifyScreenUpdate` 触发主线程 invalidate；这样 Stage 3 只搬了线程，不改渲染路径。
-- 等价性：同一段字节序列仍按相同顺序进入 `TerminalEmulator.append`，只是线程变了。
+### 外部 `session.getEmulator()` 迁移
 
-### Stage 4：Session 只读快照 API（可独立合并，降低 Stage 5 风险）
+需要迁移的调用点（搜索 `.getEmulator()`）：
 
-**文件**：`TerminalSession.java` + 所有 `session.getEmulator()` 调用点
+- `TerminalView.java`：渲染、尺寸、选择、鼠标状态等 → 改为从 mailbox model frame / session snapshot 读取。
+- `TermuxTerminalViewClient.java`：`isMouseTrackingActive()`、`isAlternateBufferActive()` 等 → 使用 session snapshot 方法。
+- `TermuxTerminalSessionActivityClient.java`：背景色、reset → 使用 session snapshot 方法。
+- `ShellUtils.java`：transcript 文本 → 使用 session snapshot 方法或 frame 内的 `TerminalScreenSnapshot`。
 
-- 在 `TerminalSession` 上提供只读查询 API，外部调用者不再直接读 `TerminalEmulator`：
-  - `isMouseTrackingActive()`、`isAlternateBufferActive()`、`isAutoScrollDisabled()`
-  - `getActiveRows()`、`getActiveTranscriptRows()`、`getColumns()`
-  - `getTitle()`
-  - `getBackgroundColor()` / `getCurrentColors()` 副本
-  - `getSelectedText(Rect)` / `getTranscriptText()`
-  - `getCursorCol()`、`getCursorRow()`、`isCursorEnabled()`
-- Stage 4 仍让 emulator 跑在主线程，只是 API 统一；为 Stage 5 做准备。
-- 迁移清单（当前 5 个文件、约 40 处调用）：
-  - `TerminalView.java`：读 screen rows/columns、mouse/alt buffer、scroll counter、selected text 等。
-  - `TermuxTerminalViewClient.java`：读 mouse/alt buffer、rows、paste。
-  - `TermuxTerminalSessionActivityClient.java`：读 colors。
-  - `ShellUtils.java`：读 transcript。
+## Stage 5 集成步骤
 
-### Stage 5：emulator 迁到 worker + mailbox 渲染（必须与 Stage 4 一起或紧随其后）
+1. `TerminalSession` 创建 `TerminalParserWorker`（在 `initializeEmulator` 中）。
+2. reader thread 有新输入时调用 `worker.requestAppend()`，不再发 `MSG_NEW_INPUT`。
+3. `MainThreadHandler` 只负责进程退出协调；满足 `TerminalSessionExitCoordinator.shouldFinish(true)` 后，向 worker 发 `requestFinish(exitCode)`。
+4. worker 的 finish 命令负责：
+   - 调用 `cleanupResources(exitCode)`；
+   - 向 emulator append 退出提示文本；
+   - publish 最终 frame；
+   - 通过 wrapper 调用 `onSessionFinished`。
+5. `TerminalView` 在 `attachSession` 时设置 sink 并初始化 mailbox。
+6. `TerminalView.onDraw` 从 mailbox `acquireLatest()` model frame，构造 `TerminalRenderFrame` 并渲染。
+7. 外部调用者全部改为 session snapshot 方法；`TerminalView` 不再直接读 `mEmulator`。
 
-**文件**：`TerminalSession.java`、`TerminalView.java`
+## 不变量
 
-- `TerminalSession` 在 worker 线程创建并持有 `TerminalEmulator`。
-- `TerminalView.onDraw` 从 `TerminalRenderMailbox` 取 `TerminalRenderFrame`，不再读 `mEmulator`。
-- `TerminalView` 把 `topRow`/selection 变更作为 `VIEWPORT` 命令发给 worker。
-- 输入事件（键盘、鼠标、粘贴）发给 `TerminalSession`，由 session 转成命令发给 worker 或 PTY。
-- cursor blink 状态由 UI 线程命令控制。
-- `notifyScreenUpdate` 机制替换为：worker 每处理完一个 batch，构建 `TerminalRenderFrame` 并 `mailbox.publish(frame)`；UI `onDraw` 取帧并 `metrics.ack(...)`。
+- `published >= drawn + dropped`
+- `acked <= published`
+- `drawn == acked + dropped`
+- 主线程不再调用 `TerminalEmulator.append/resize/reset`
 
-### Stage 6：mailbox 跳帧验证 + CI stress
+## 测试策略
 
-- 扩展 `RenderFrameMetrics` 断言：`published >= drawn + dropped`，`dropped` 在 parser 超过 renderer 时应大于 0（在 SwiftShader emulator 上应能复现）。
-- 在 `pixel-loop-stress.yml` 里增加 `dropped > 0` 或 `coalesced > 0` 的合法断言，以及 janky 帧数占比的只记录不上限。
-- 真机/ARM 上重跑 stress，确认跳帧后 `Slow UI thread` 下降、draw 命令数减少。
-
-## 不能拆开的强耦合点
-
-1. **emulator 迁到 worker 与 view 从 mailbox 渲染必须同 PR**：否则主线程仍读 `TerminalEmulator` 会产生数据竞争；不能靠锁解决（用户要求不采用 parser 直接修改共享 buffer + 锁）。
-2. **Stage 4 的快照 API 必须在 Stage 5 之前完成**：否则 Stage 5 里外部调用者会出现悬空/并发访问。
-3. **callback wrapper 必须在 Stage 3/5 之前完成**：否则 worker 线程回调会触发 UI 操作异常。
-
-## 建议推进顺序
-
-按 Stage 2 → Stage 3 → Stage 4 → Stage 5 → Stage 6 顺序做，每个 Stage 一个独立 PR，避免一次性大改。
+- 单元测试：`TerminalRenderMailboxTest`、`TerminalRenderFrameTest`、`RenderFrameMetricsTest`
+- 编译：`:terminal-emulator:compileDebugJavaWithJavac`、`:terminal-view:compileDebugJavaWithJavac`
+- 全量单测：`:terminal-emulator:testDebugUnitTest`、`:terminal-view:testDebugUnitTest`
+- CI：触发 `pixel-loop-stress.yml` 并校验最终帧指标与 gfxinfo。
