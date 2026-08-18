@@ -1,6 +1,8 @@
 name: Build pixel-loop x86_64 prebuilt
 
 on:
+  push:
+    branches: [ ci/pixel-loop-terminal-stress ]
   workflow_dispatch:
 
 permissions:
