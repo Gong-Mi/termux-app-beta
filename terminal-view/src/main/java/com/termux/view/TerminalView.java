@@ -39,6 +39,7 @@ import androidx.annotation.Nullable;
 import androidx.annotation.RequiresApi;
 
 import com.termux.terminal.KeyHandler;
+import com.termux.terminal.TerminalBuffer;
 import com.termux.terminal.TerminalEmulator;
 import com.termux.terminal.TerminalSession;
 import com.termux.view.textselection.TextSelectionCursorController;
@@ -55,6 +56,10 @@ public final class TerminalView extends View {
     public TerminalEmulator mEmulator;
 
     public TerminalRenderer mRenderer;
+    /** 上一帧的渲染交接快照（供调试/审计：行级变更归属）。渲染本身不依赖它。 */
+    private TerminalRenderFrame mLastRenderFrame;
+    /** 打开后每帧打印变更台账摘要（默认关闭，零开销）。 */
+    private static volatile boolean sDebugFrameInfo = false;
 
     public TerminalViewClient mClient;
 
@@ -1032,9 +1037,17 @@ public final class TerminalView extends View {
                     mTextSelectionCursorController.getSelectors(sel);
                 }
 
+                // 显式交接：一次性采集本帧渲染所需的一切，渲染器只读该帧对象。
+                TerminalBuffer screen = mEmulator.getScreen();
+                int dirtyCount = screen.getDirtyMutationCount();
+                long[] dirtyBits = dirtyCount == 0 ? null : screen.getAndClearDirtyRowBits();
+                TerminalRenderFrame frame = new TerminalRenderFrame(mEmulator, mTopRow, dirtyBits, dirtyCount,
+                    sel[0], sel[1], sel[2], sel[3]);
+                mLastRenderFrame = frame;
+                if (sDebugFrameInfo) logFrameInfo(frame);
                 Trace.beginSection("Termux:TerminalRenderer.render");
                 try {
-                    mRenderer.render(mEmulator, canvas, mTopRow, sel[0], sel[1], sel[2], sel[3]);
+                    mRenderer.render(frame, canvas);
                 } finally {
                     Trace.endSection();
                 }
@@ -1049,6 +1062,27 @@ public final class TerminalView extends View {
 
     public TerminalSession getCurrentSession() {
         return mTermSession;
+    }
+
+    /** 打开/关闭每帧变更台账摘要日志。打开后每帧一行：解析/模型改了哪几行、本帧画了多少行。 */
+    public static void setDebugFrameInfoEnabled(boolean enabled) {
+        sDebugFrameInfo = enabled;
+    }
+
+    /** 上一帧的渲染交接快照，供行级归属调试（解析改了 vs 渲染画了）。 */
+    public TerminalRenderFrame getLastRenderFrame() {
+        return mLastRenderFrame;
+    }
+
+    private void logFrameInfo(TerminalRenderFrame f) {
+        int dirtyInView = 0;
+        for (int row = f.topRow; row < f.endRow; row++) {
+            if (f.rowNeedsRedraw(row)) dirtyInView++;
+        }
+        android.util.Log.i("Termux:TerminalView", "frame gen=" + f.dirtyMutationCount
+            + " visible=" + (f.endRow - f.topRow) + " redrawWorthies=" + dirtyInView
+            + " cursor=" + (f.cursorVisible ? f.cursorRow : "hidden")
+            + " sel=" + f.selectionY1 + ".." + f.selectionY2);
     }
 
     private CharSequence getText() {

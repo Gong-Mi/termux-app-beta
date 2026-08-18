@@ -20,6 +20,12 @@ public final class TerminalBuffer {
     /** The index in the circular buffer where the visible screen starts. */
     private int mScreenFirstRow = 0;
 
+    /** 变更台账：自上次 {@link #getAndClearDirtyRowBits()} 以来被修改过的行（内部坐标系，位图）。
+     *  纯审计/调试用，不参与任何渲染行为；渲染方用它在帧边界弄清“解析/模型改了哪几行”，从而把问题归属到
+     *  解析侧还是渲染侧。 */
+    private int mDirtyMutationCount = 0;
+    private long[] mDirtyRowBits;
+
     /**
      * Create a transcript screen.
      *
@@ -35,6 +41,56 @@ public final class TerminalBuffer {
         mLines = new TerminalRow[totalRows];
 
         blockSet(0, 0, columns, screenRows, ' ', TextStyle.NORMAL);
+    }
+
+    /** 记录内部行 [firstInternalRow, lastInternalRow]（含端点，必要时按环形处理）自上次清除以来被修改。
+     *  纯台账记账：不改变任何渲染/解析行为。 */
+    private void markRowsDirty(int firstInternalRow, int lastInternalRow) {
+        if (mTotalRows == 0) return;
+        mDirtyMutationCount++;
+        final int totalRows = mTotalRows;
+        final int first = Math.max(0, firstInternalRow);
+        final int last = Math.min(totalRows - 1, lastInternalRow);
+        if (first > last) return;
+        if (mDirtyRowBits == null || mDirtyRowBits.length * 64 < totalRows) {
+            mDirtyRowBits = new long[(totalRows + 63) / 64];
+        }
+        for (int r = first; r <= last; r++) {
+            mDirtyRowBits[r >> 6] |= (1L << (r & 63));
+        }
+    }
+
+    /** 记录一段首尾相接的内部行区间（环形，比如滚动后可见行的内部索引旋转）。 */
+    private void markRowsDirtyCyclic(int firstInternal, int lastInternal) {
+        final int totalRows = mTotalRows;
+        if (totalRows == 0) return;
+        final int f = ((firstInternal % totalRows) + totalRows) % totalRows;
+        final int l = ((lastInternal % totalRows) + totalRows) % totalRows;
+        if (f <= l) {
+            markRowsDirty(f, l);
+        } else {
+            markRowsDirty(f, totalRows - 1);
+            markRowsDirty(0, l);
+        }
+    }
+
+    /** 自上次 {@link #getAndClearDirtyRowBits()} 以来发生的内容变更批次计数（供审计，不影响行为）。 */
+    public final int getDirtyMutationCount() {
+        return mDirtyMutationCount;
+    }
+
+    /** 取出并清零变更台账：返回自上次调用以来被修改过的行的位图（内部坐标系），同时重置批次计数。
+     *  仅用于渲染/解析交接审计与调试，不改变任何渲染行为。 */
+    public final long[] getAndClearDirtyRowBits() {
+        final long[] copy;
+        if (mDirtyRowBits == null) {
+            copy = new long[(mTotalRows + 63) / 64];
+        } else {
+            copy = Arrays.copyOf(mDirtyRowBits, mDirtyRowBits.length);
+            Arrays.fill(mDirtyRowBits, 0L);
+        }
+        mDirtyMutationCount = 0;
+        return copy;
     }
 
     public String getTranscriptText() {
@@ -182,6 +238,7 @@ public final class TerminalBuffer {
 
     public void setLineWrap(int row) {
         mLines[externalToInternalRow(row)].mLineWrap = true;
+        markRowsDirty(externalToInternalRow(row), externalToInternalRow(row));
     }
 
     public boolean getLineWrap(int row) {
@@ -190,6 +247,7 @@ public final class TerminalBuffer {
 
     public void clearLineWrap(int row) {
         mLines[externalToInternalRow(row)].mLineWrap = false;
+        markRowsDirty(externalToInternalRow(row), externalToInternalRow(row));
     }
 
     /**
@@ -351,6 +409,9 @@ public final class TerminalBuffer {
 
         // Handle cursor scrolling off screen:
         if (cursor[0] < 0 || cursor[1] < 0) cursor[0] = cursor[1] = 0;
+
+        // Resize 重排了所有可见行（内部索引或内容均可能变化），整体记脏：
+        markRowsDirty(0, mTotalRows - 1);
     }
 
     /**
@@ -372,6 +433,8 @@ public final class TerminalBuffer {
             mLines[(srcInternal + i + 1) % totalRows] = mLines[(srcInternal + i) % totalRows];
         // Put back overwritten line, now above the block:
         mLines[(srcInternal) % totalRows] = lineToBeOverWritten;
+        // 行的引用被搬移，涉及的内部行整体记脏：
+        markRowsDirtyCyclic(srcInternal, srcInternal + len);
     }
 
     /**
@@ -403,6 +466,9 @@ public final class TerminalBuffer {
         } else {
             mLines[blankRow].clear(style);
         }
+
+        // 滚动后所有可见行的内部索引都旋转了，整体记脏：
+        markRowsDirtyCyclic(mScreenFirstRow, mScreenFirstRow + mScreenRows - 1);
     }
 
     /**
@@ -426,6 +492,14 @@ public final class TerminalBuffer {
             int y2 = copyingUp ? y : (h - (y + 1));
             TerminalRow sourceRow = allocateFullLineIfNecessary(externalToInternalRow(sy + y2));
             allocateFullLineIfNecessary(externalToInternalRow(dy + y2)).copyInterval(sourceRow, sx, sx + w, dx);
+        }
+        // 台账：区间重叠时源/目标都可能被改写，整段记脏；不重叠则只有目标区:
+        int srcFirst = externalToInternalRow(sy), srcLast = externalToInternalRow(sy + h - 1);
+        int dstFirst = externalToInternalRow(dy), dstLast = externalToInternalRow(dy + h - 1);
+        if (sy < dy + h && dy < sy + h) {
+            markRowsDirtyCyclic(Math.min(srcFirst, dstFirst), Math.max(srcLast, dstLast));
+        } else {
+            markRowsDirtyCyclic(dstFirst, dstLast);
         }
     }
 
@@ -453,6 +527,7 @@ public final class TerminalBuffer {
             throw new IllegalArgumentException("TerminalBuffer.setChar(): row=" + row + ", column=" + column + ", mScreenRows=" + mScreenRows + ", mColumns=" + mColumns);
         row = externalToInternalRow(row);
         allocateFullLineIfNecessary(row).setChar(column, codePoint, style);
+        markRowsDirty(row, row);
     }
 
     public long getStyleAt(int externalRow, int column) {
@@ -482,6 +557,7 @@ public final class TerminalBuffer {
                 line.mStyle[x] = TextStyle.encode(foreColor, backColor, effect);
             }
         }
+        if (top < bottom) markRowsDirtyCyclic(externalToInternalRow(top), externalToInternalRow(bottom - 1));
     }
 
     public void clearTranscript() {
@@ -492,6 +568,8 @@ public final class TerminalBuffer {
             Arrays.fill(mLines, mScreenFirstRow - mActiveTranscriptRows, mScreenFirstRow, null);
         }
         mActiveTranscriptRows = 0;
+        // 历史区整体清空，记脏：
+        markRowsDirty(0, mTotalRows - 1);
     }
 
 }
