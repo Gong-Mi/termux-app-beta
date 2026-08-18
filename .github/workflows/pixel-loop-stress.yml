@@ -1,0 +1,183 @@
+name: Pixel-loop emulator stress
+
+# Real producer -> Termux terminal session -> parser -> renderer evidence.
+# Manual-only: this is intentionally separate from ordinary APK/render smoke.
+
+on:
+  workflow_dispatch:
+    inputs:
+      duration_seconds:
+        description: "Producer run duration"
+        required: false
+        default: "20"
+        type: string
+
+env:
+  JAVA_VERSION: 21
+  PIXEL_LOOP_TAG: pixel-loop-085912
+  PIXEL_LOOP_SHA256: 611573282b5a44e9631975fa95bb34491ed8f27c3d235002a837a52d9598e43e
+  PIXEL_LOOP_ASSET: pixel-loop-x86_64
+
+jobs:
+  pixel-loop-stress:
+    name: x86_64 emulator pixel-loop stress
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Record runner spec
+        run: |
+          set -eux
+          nproc
+          free -h | head -2
+          ls -la /dev/kvm
+
+      - name: Enable KVM group perms
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Set up JDK
+        uses: actions/setup-java@v5
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: temurin
+
+      - name: Install Android SDK pieces
+        run: |
+          set -euxo pipefail
+          SDK="$ANDROID_HOME"
+          yes | "$SDK/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
+          "$SDK/cmdline-tools/latest/bin/sdkmanager" \
+            "platforms;android-36" "build-tools;34.0.0" "platform-tools" \
+            "emulator" "system-images;android-36;google_apis;x86_64" >/dev/null
+          echo "$SDK/platform-tools" >> "$GITHUB_PATH"
+          echo "$SDK/emulator" >> "$GITHUB_PATH"
+
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Build debug APK
+        run: ./gradlew assembleDebug --no-daemon --console=plain
+
+      - name: Download and verify x86_64 producer
+        run: |
+          set -euxo pipefail
+          curl --fail --location --retry 3 \
+            -o "$PIXEL_LOOP_ASSET" \
+            "https://github.com/Gong-Mi/termux-app-beta/releases/download/${PIXEL_LOOP_TAG}/${PIXEL_LOOP_ASSET}"
+          chmod 755 "$PIXEL_LOOP_ASSET"
+          printf '%s  %s\n' "$PIXEL_LOOP_SHA256" "$PIXEL_LOOP_ASSET" | sha256sum -c -
+          file "$PIXEL_LOOP_ASSET" | tee pixel-loop-file.txt
+          readelf -d "$PIXEL_LOOP_ASSET" | tee pixel-loop-dynamic.txt
+          grep -q 'x86-64' pixel-loop-file.txt
+          grep -q 'interpreter /system/bin/linker64' pixel-loop-file.txt
+          test -x "$PIXEL_LOOP_ASSET"
+
+      - name: Create and boot x86_64 emulator
+        env:
+          ANDROID_AVD_HOME: /home/runner/.android/avd
+        run: |
+          set -euxo pipefail
+          mkdir -p "$ANDROID_AVD_HOME"
+          echo "no" | "$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager" create avd \
+            -n pixel-loop-stress --package "system-images;android-36;google_apis;x86_64" --device pixel_5
+          test -f "$ANDROID_AVD_HOME/pixel-loop-stress.ini"
+          "$ANDROID_HOME/emulator/emulator" -avd pixel-loop-stress \
+            -gpu swiftshader_indirect -no-window -no-audio -no-boot-anim \
+            -no-snapshot -wipe-data -memory 3072 -cores 3 \
+            > /tmp/pixel-loop-emu.log 2>&1 &
+          for i in $(seq 1 15); do
+            sleep 60
+            boot=$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')
+            echo "[boot-wait minute $i] sys.boot_completed='$boot'"
+            if [ "$boot" = 1 ]; then break; fi
+            pgrep -f 'emulator.*-avd pixel-loop-stress' >/dev/null || { tail -80 /tmp/pixel-loop-emu.log; exit 43; }
+          done
+          test "$(adb shell getprop sys.boot_completed | tr -d '\r')" = 1
+          adb shell getprop ro.product.cpu.abi
+          adb shell getprop ro.hardware.egl
+
+      - name: Install Termux and stage producer inside app UID
+        run: |
+          set -euxo pipefail
+          APK=$(ls app/build/outputs/apk/debug/termux-app_*universal*.apk 2>/dev/null \
+                || ls app/build/outputs/apk/debug/termux-app_*x86_64*.apk)
+          adb install -r "$APK"
+          adb shell am start -W -n com.termux/.app.TermuxActivity
+          sleep 12
+          adb push "$PIXEL_LOOP_ASSET" /data/local/tmp/$PIXEL_LOOP_ASSET
+          adb shell run-as com.termux cp /data/local/tmp/$PIXEL_LOOP_ASSET /data/data/com.termux/files/usr/tmp/$PIXEL_LOOP_ASSET
+          adb shell run-as com.termux chmod 755 /data/data/com.termux/files/usr/tmp/$PIXEL_LOOP_ASSET
+          adb shell run-as com.termux sha256sum /data/data/com.termux/files/usr/tmp/$PIXEL_LOOP_ASSET
+
+      - name: Run producer through the real Termux terminal session
+        env:
+          DURATION: ${{ inputs.duration_seconds }}
+        run: |
+          set -euxo pipefail
+          adb shell input text /data/data/com.termux/files/usr/tmp/$PIXEL_LOOP_ASSET
+          adb shell input keyevent KEYCODE_ENTER
+          start=$(date +%s)
+          sleep "$DURATION"
+          end=$(date +%s)
+          echo "PRODUCER_REQUESTED_SECONDS=$DURATION" | tee stress-metrics.txt
+          echo "PRODUCER_WALL_SECONDS=$((end-start))" | tee -a stress-metrics.txt
+          adb exec-out screencap -p > pixel-loop-running.png
+          adb shell ps -A | grep -E 'com.termux|pixel-loop' | tee -a stress-metrics.txt || true
+          adb shell dumpsys gfxinfo com.termux > gfxinfo-running.txt
+          adb shell dumpsys meminfo com.termux > meminfo-running.txt
+          adb logcat -d > logcat-running.txt
+          adb shell input keyevent KEYCODE_CTRL_LEFT || true
+          adb shell input keyevent KEYCODE_C || true
+          sleep 3
+          adb exec-out screencap -p > pixel-loop-after-stop.png
+
+      - name: Collect terminal stress evidence
+        if: always()
+        run: |
+          set +e
+          adb shell dumpsys gfxinfo com.termux > gfxinfo-final.txt
+          adb shell dumpsys meminfo com.termux > meminfo-final.txt
+          adb shell ps -A > processes-final.txt
+          adb logcat -d > logcat-final.txt
+          adb shell dumpsys activity activities > activity-final.txt
+          grep -iE 'FATAL EXCEPTION|AndroidRuntime|Termux|TerminalView|frame rev=|published=|lastDrawnRev=' logcat-final.txt | tail -200 > terminal-log-summary.txt
+          {
+            echo '== producer hash inside app UID =='
+            adb shell run-as com.termux sha256sum /data/data/com.termux/files/usr/tmp/$PIXEL_LOOP_ASSET
+            echo '== ABI =='
+            adb shell getprop ro.product.cpu.abi
+            echo '== EGL =='
+            adb shell getprop ro.hardware.egl
+            echo '== stress metric files =='
+            cat stress-metrics.txt 2>/dev/null
+          } > stress-evidence.txt
+
+      - name: Upload pixel-loop stress evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: pixel-loop-stress-evidence-x86_64
+          path: |
+            pixel-loop-file.txt
+            pixel-loop-dynamic.txt
+            pixel-loop-running.png
+            pixel-loop-after-stop.png
+            stress-metrics.txt
+            stress-evidence.txt
+            gfxinfo-running.txt
+            gfxinfo-final.txt
+            meminfo-running.txt
+            meminfo-final.txt
+            processes-final.txt
+            activity-final.txt
+            terminal-log-summary.txt
+            logcat-running.txt
+            logcat-final.txt
+            /tmp/pixel-loop-emu.log
+          if-no-files-found: warn
+
+      - name: Kill emulator
+        if: always()
+        run: adb emu kill || pkill -f qemu-system || true
