@@ -56,4 +56,14 @@ public final class TerminalScreenSnapshot {
     public int endExternalRow() {
         return firstExternalRow + rows.length;
     }
+
+    /** Concatenate the visible text of all rows into a single string. */
+    public String getTranscriptText() {
+        StringBuilder sb = new StringBuilder();
+        for (TerminalRenderRow row : rows) {
+            int len = row.getSpaceUsed();
+            if (len > 0) sb.append(row.copyText(), 0, len);
+        }
+        return sb.toString();
+    }
 }

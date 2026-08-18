@@ -1,7 +1,8 @@
 package com.termux.terminal;
 
-import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Background parser worker that owns {@link TerminalEmulator} mutation.
@@ -34,8 +35,9 @@ public final class TerminalParserWorker {
     private final TerminalSession mSession;
     private final byte[] mReceiveBuffer;
     private final int mMaxBytesPerBatch;
-    private final BlockingQueue<Command> mCommandQueue = new ArrayBlockingQueue<>(64);
+    private final BlockingQueue<Command> mCommandQueue = new LinkedBlockingQueue<>();
     private final Thread mThread;
+    private final AtomicBoolean mAppendScheduled = new AtomicBoolean(false);
 
     private volatile Viewport mViewport = new Viewport(0);
     private volatile boolean mStopped;
@@ -58,51 +60,61 @@ public final class TerminalParserWorker {
 
     public void stop() {
         mStopped = true;
-        mCommandQueue.offer(Command.stop());
+        enqueueControl(Command.stop());
     }
 
     public void requestAppend() {
-        mCommandQueue.offer(Command.append());
+        // Collapse multiple append notifications into at most one queued command.
+        if (mAppendScheduled.compareAndSet(false, true)) {
+            mCommandQueue.add(Command.append());
+        }
     }
 
     public void requestResize(int columns, int rows, int cellWidth, int cellHeight) {
-        mCommandQueue.offer(Command.resize(columns, rows, cellWidth, cellHeight));
+        enqueueControl(Command.resize(columns, rows, cellWidth, cellHeight));
     }
 
     public void requestViewport(int topRow) {
-        mCommandQueue.offer(Command.viewport(topRow));
+        enqueueControl(Command.viewport(topRow));
     }
 
     public void requestReset() {
-        mCommandQueue.offer(Command.reset());
+        enqueueControl(Command.reset());
     }
 
     public void requestPaste(String text) {
-        mCommandQueue.offer(Command.paste(text));
+        enqueueControl(Command.paste(text));
     }
 
     public void requestSendMouseEvent(int button, int x, int y, boolean pressed) {
-        mCommandQueue.offer(Command.sendMouseEvent(button, x, y, pressed));
+        enqueueControl(Command.sendMouseEvent(button, x, y, pressed));
     }
 
     public void requestClearScrollCounter() {
-        mCommandQueue.offer(Command.clearScrollCounter());
+        enqueueControl(Command.clearScrollCounter());
     }
 
     public void requestSetCursorBlinkState(boolean visible) {
-        mCommandQueue.offer(Command.setCursorBlinkState(visible));
+        enqueueControl(Command.setCursorBlinkState(visible));
     }
 
     public void requestSetCursorBlinkingEnabled(boolean enabled) {
-        mCommandQueue.offer(Command.setCursorBlinkingEnabled(enabled));
+        enqueueControl(Command.setCursorBlinkingEnabled(enabled));
     }
 
     public void requestResetColors() {
-        mCommandQueue.offer(Command.resetColors());
+        enqueueControl(Command.resetColors());
     }
 
     public void requestFinish(int exitCode) {
-        mCommandQueue.offer(Command.finish(exitCode));
+        enqueueControl(Command.finish(exitCode));
+    }
+
+    private void enqueueControl(Command cmd) {
+        if (mStopped) return;
+        // Control commands must not be silently dropped; LinkedBlockingQueue is unbounded,
+        // so add() throws on failure instead of returning false.
+        mCommandQueue.add(cmd);
     }
 
     private void run() {
@@ -164,21 +176,36 @@ public final class TerminalParserWorker {
     }
 
     private void processAppend() {
-        int budgetRemaining = mMaxBytesPerBatch;
-        while (budgetRemaining > 0 && !mStopped) {
-            int toRead = Math.min(budgetRemaining, mReceiveBuffer.length);
-            int read = mInputQueue.read(mReceiveBuffer, 0, toRead, false);
-            if (read <= 0) break;
-            mEmulator.append(mReceiveBuffer, read);
-            budgetRemaining -= read;
-        }
+        try {
+            int budgetRemaining = mMaxBytesPerBatch;
+            while (budgetRemaining > 0 && !mStopped) {
+                int toRead = Math.min(budgetRemaining, mReceiveBuffer.length);
+                int read = mInputQueue.read(mReceiveBuffer, 0, toRead, false);
+                if (read <= 0) break;
+                mEmulator.append(mReceiveBuffer, read);
+                budgetRemaining -= read;
+            }
 
-        if (budgetRemaining <= 0 && !mStopped && mInputQueue.hasData()) {
-            // More input pending after budget exhausted; schedule another append.
-            mCommandQueue.offer(Command.append());
-        }
+            if (budgetRemaining <= 0 && !mStopped && mInputQueue.hasData()) {
+                // More input pending after budget exhausted; schedule another append.
+                scheduleAppendIfNeeded();
+            }
 
-        publishFrame();
+            publishFrame();
+        } finally {
+            mAppendScheduled.set(false);
+            // A concurrent requestAppend() may have been collapsed while we were processing.
+            // If input still remains, ensure another append is scheduled.
+            if (!mStopped && mInputQueue.hasData()) {
+                scheduleAppendIfNeeded();
+            }
+        }
+    }
+
+    private void scheduleAppendIfNeeded() {
+        if (mAppendScheduled.compareAndSet(false, true)) {
+            mCommandQueue.add(Command.append());
+        }
     }
 
     private void processFinish(int exitCode) {
@@ -192,7 +219,7 @@ public final class TerminalParserWorker {
             budgetRemaining -= read;
         }
 
-        mSession.cleanupResources(exitCode);
+        if (mSession != null) mSession.cleanupResources(exitCode);
 
         String exitDescription = "\r\n[Process completed";
         if (exitCode > 0) {
