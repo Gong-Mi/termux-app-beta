@@ -270,43 +270,71 @@ public final class TerminalSession extends TerminalOutput {
     /** @return whether mouse tracking is active, based on the latest frame or emulator. */
     public boolean isMouseTrackingActive() {
         TerminalModelFrame frame = mLatestFrame;
-        return frame != null ? frame.mouseTrackingActive : (mEmulator != null && mEmulator.isMouseTrackingActive());
+        if (frame != null) return frame.mouseTrackingActive;
+        if (mEmulator == null) return false;
+        synchronized (mEmulator) {
+            return mEmulator.isMouseTrackingActive();
+        }
     }
 
     /** @return whether the alternate buffer is active. */
     public boolean isAlternateBufferActive() {
         TerminalModelFrame frame = mLatestFrame;
-        return frame != null ? frame.alternateBufferActive : (mEmulator != null && mEmulator.isAlternateBufferActive());
+        if (frame != null) return frame.alternateBufferActive;
+        if (mEmulator == null) return false;
+        synchronized (mEmulator) {
+            return mEmulator.isAlternateBufferActive();
+        }
     }
 
     /** @return whether auto-scroll is disabled. */
     public boolean isAutoScrollDisabled() {
         TerminalModelFrame frame = mLatestFrame;
-        return frame != null ? frame.autoScrollDisabled : (mEmulator != null && mEmulator.isAutoScrollDisabled());
+        if (frame != null) return frame.autoScrollDisabled;
+        if (mEmulator == null) return false;
+        synchronized (mEmulator) {
+            return mEmulator.isAutoScrollDisabled();
+        }
     }
 
     /** @return number of visible screen rows. */
     public int getScreenRows() {
         TerminalModelFrame frame = mLatestFrame;
-        return frame != null ? frame.rows : (mEmulator != null ? mEmulator.mRows : 0);
+        if (frame != null) return frame.rows;
+        if (mEmulator == null) return 0;
+        synchronized (mEmulator) {
+            return mEmulator.mRows;
+        }
     }
 
     /** @return number of screen columns. */
     public int getScreenColumns() {
         TerminalModelFrame frame = mLatestFrame;
-        return frame != null ? frame.columns : (mEmulator != null ? mEmulator.mColumns : 0);
+        if (frame != null) return frame.columns;
+        if (mEmulator == null) return 0;
+        synchronized (mEmulator) {
+            return mEmulator.mColumns;
+        }
     }
 
     /** @return cursor column, or 0 if unavailable. */
     public int getCursorCol() {
         TerminalModelFrame frame = mLatestFrame;
-        return frame != null ? frame.cursorCol : (mEmulator != null ? mEmulator.getCursorCol() : 0);
+        if (frame != null) return frame.cursorCol;
+        if (mEmulator == null) return 0;
+        synchronized (mEmulator) {
+            return mEmulator.getCursorCol();
+        }
     }
 
     /** @return cursor row, or 0 if unavailable. */
     public int getCursorRow() {
         TerminalModelFrame frame = mLatestFrame;
-        return frame != null ? frame.cursorRow : (mEmulator != null ? mEmulator.getCursorRow() : 0);
+        if (frame != null) return frame.cursorRow;
+        if (mEmulator == null) return 0;
+        synchronized (mEmulator) {
+            return mEmulator.getCursorRow();
+        }
     }
 
     /** @return active rows (transcript + screen) from the latest frame or live emulator. */
