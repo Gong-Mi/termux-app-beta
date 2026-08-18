@@ -309,6 +309,78 @@ public final class TerminalSession extends TerminalOutput {
         return frame != null ? frame.cursorRow : (mEmulator != null ? mEmulator.getCursorRow() : 0);
     }
 
+    /** @return active rows (transcript + screen) from the latest frame or live emulator. */
+    public int getScreenActiveRows() {
+        TerminalModelFrame frame = mLatestFrame;
+        if (frame != null) return frame.activeTranscriptRows + frame.rows;
+        synchronized (mEmulator) {
+            return mEmulator != null ? mEmulator.getScreen().getActiveRows() : 0;
+        }
+    }
+
+    /** @return current scroll counter from the latest frame or live emulator. */
+    public int getScrollCounter() {
+        TerminalModelFrame frame = mLatestFrame;
+        if (frame != null) return frame.scrollCounter;
+        synchronized (mEmulator) {
+            return mEmulator != null ? mEmulator.getScrollCounter() : 0;
+        }
+    }
+
+    /** Clear the scroll counter, serialized with parser worker updates. */
+    public void clearScrollCounter() {
+        if (mParserWorker != null) {
+            mParserWorker.requestClearScrollCounter();
+        } else if (mEmulator != null) {
+            synchronized (mEmulator) {
+                mEmulator.clearScrollCounter();
+            }
+        }
+    }
+
+    /** Set cursor blink state, serialized with parser worker updates. */
+    public void setCursorBlinkState(boolean visible) {
+        if (mParserWorker != null) {
+            mParserWorker.requestSetCursorBlinkState(visible);
+        } else if (mEmulator != null) {
+            synchronized (mEmulator) {
+                mEmulator.setCursorBlinkState(visible);
+            }
+        }
+    }
+
+    /** Enable/disable cursor blinking, serialized with parser worker updates. */
+    public void setCursorBlinkingEnabled(boolean enabled) {
+        if (mParserWorker != null) {
+            mParserWorker.requestSetCursorBlinkingEnabled(enabled);
+        } else if (mEmulator != null) {
+            synchronized (mEmulator) {
+                mEmulator.setCursorBlinkingEnabled(enabled);
+            }
+        }
+    }
+
+    /** @return a transcript string of the latest frame's visible screen, or empty if unavailable. */
+    public CharSequence getScreenTranscriptText() {
+        TerminalModelFrame frame = mLatestFrame;
+        if (frame != null) return frame.screen.getTranscriptText();
+        synchronized (mEmulator) {
+            return mEmulator != null ? mEmulator.getScreen().getTranscriptText() : "";
+        }
+    }
+
+    /** @return whether the cursor is enabled in the latest frame or live emulator. */
+    public boolean isCursorEnabled() {
+        TerminalModelFrame frame = mLatestFrame;
+        if (frame != null) {
+            // Cursor visible implies enabled; use cursorStyle as fallback if needed.
+            return frame.cursorVisible || frame.cursorStyle != 0;
+        }
+        synchronized (mEmulator) {
+            return mEmulator != null && mEmulator.isCursorEnabled();
+        }
+    }
+
     /** @return active transcript rows. */
     public int getActiveTranscriptRows() {
         TerminalModelFrame frame = mLatestFrame;
@@ -378,39 +450,6 @@ public final class TerminalSession extends TerminalOutput {
         } else if (mEmulator != null) {
             synchronized (mEmulator) {
                 mEmulator.sendMouseEvent(button, x, y, pressed);
-            }
-        }
-    }
-
-    /** Clear the scroll counter. */
-    public void clearScrollCounter() {
-        if (mParserWorker != null) {
-            mParserWorker.requestClearScrollCounter();
-        } else if (mEmulator != null) {
-            synchronized (mEmulator) {
-                mEmulator.clearScrollCounter();
-            }
-        }
-    }
-
-    /** Set cursor blink visibility state. */
-    public void setCursorBlinkState(boolean visible) {
-        if (mParserWorker != null) {
-            mParserWorker.requestSetCursorBlinkState(visible);
-        } else if (mEmulator != null) {
-            synchronized (mEmulator) {
-                mEmulator.setCursorBlinkState(visible);
-            }
-        }
-    }
-
-    /** Enable or disable cursor blinking. */
-    public void setCursorBlinkingEnabled(boolean enabled) {
-        if (mParserWorker != null) {
-            mParserWorker.requestSetCursorBlinkingEnabled(enabled);
-        } else if (mEmulator != null) {
-            synchronized (mEmulator) {
-                mEmulator.setCursorBlinkingEnabled(enabled);
             }
         }
     }

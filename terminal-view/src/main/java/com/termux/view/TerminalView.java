@@ -462,8 +462,7 @@ public final class TerminalView extends View {
 
     @Override
     protected int computeVerticalScrollRange() {
-        TerminalEmulator emulator = mTermSession != null ? mTermSession.getEmulator() : null;
-        return emulator == null ? 1 : emulator.getScreen().getActiveRows();
+        return mTermSession != null ? mTermSession.getScreenActiveRows() : 1;
     }
 
     @Override
@@ -473,8 +472,9 @@ public final class TerminalView extends View {
 
     @Override
     protected int computeVerticalScrollOffset() {
-        TerminalEmulator emulator = mTermSession != null ? mTermSession.getEmulator() : null;
-        return emulator == null ? 1 : emulator.getScreen().getActiveRows() + mTopRow - emulator.mRows;
+        if (mTermSession == null) return 1;
+        int activeRows = mTermSession.getScreenActiveRows();
+        return activeRows + mTopRow - mTermSession.getScreenRows();
     }
 
     public void onScreenUpdated() {
@@ -490,11 +490,7 @@ public final class TerminalView extends View {
         if (isSelectingText() || mTermSession.isAutoScrollDisabled()) {
 
             // Do not scroll when selecting text.
-            TerminalEmulator emulator = mTermSession.getEmulator();
-            int rowShift;
-            synchronized (emulator) {
-                rowShift = emulator.getScrollCounter();
-            }
+            int rowShift = mTermSession.getScrollCounter();
             if (-mTopRow + rowShift > rowsInHistory) {
                 // .. unless we're hitting the end of history transcript, in which
                 // case we abort text selection and scroll to end.
@@ -523,10 +519,7 @@ public final class TerminalView extends View {
             mTopRow = 0;
         }
 
-        TerminalEmulator emulator = mTermSession.getEmulator();
-        synchronized (emulator) {
-            emulator.clearScrollCounter();
-        }
+        mTermSession.clearScrollCounter();
 
         invalidate();
         if (mAccessibilityEnabled) setContentDescription(getText());
@@ -601,11 +594,8 @@ public final class TerminalView extends View {
                 mMouseScrollStartY = y;
             }
         }
-        TerminalEmulator emulator = mTermSession != null ? mTermSession.getEmulator() : null;
-        if (emulator != null) {
-            synchronized (emulator) {
-                emulator.sendMouseEvent(button, x, y, pressed);
-            }
+        if (mTermSession != null) {
+            mTermSession.sendMouseEvent(button, x, y, pressed);
         }
     }
 
@@ -662,11 +652,8 @@ public final class TerminalView extends View {
                     if (clipItem != null) {
                         CharSequence text = clipItem.coerceToText(getContext());
                         if (!TextUtils.isEmpty(text)) {
-                            TerminalEmulator emulator = mTermSession != null ? mTermSession.getEmulator() : null;
-                            if (emulator != null) {
-                                synchronized (emulator) {
-                                    emulator.paste(text.toString());
-                                }
+                            if (mTermSession != null) {
+                                mTermSession.paste(text.toString());
                             }
                         }
                     }
@@ -896,12 +883,7 @@ public final class TerminalView extends View {
         if (mTermSession == null) return;
 
         // Ensure cursor is shown when a key is pressed down like long hold on (arrow) keys
-        TerminalEmulator emulator = mTermSession.getEmulator();
-        if (emulator != null) {
-            synchronized (emulator) {
-                emulator.setCursorBlinkState(true);
-            }
-        }
+        mTermSession.setCursorBlinkState(true);
 
         final boolean controlDown = controlDownFromEvent || mClient.readControlKey();
         final boolean altDown = leftAltDownFromEvent || mClient.readAltKey();
@@ -959,21 +941,16 @@ public final class TerminalView extends View {
     /** Input the specified keyCode if applicable and return if the input was consumed. */
     public boolean handleKeyCode(int keyCode, int keyMod) {
         // Ensure cursor is shown when a key is pressed down like long hold on (arrow) keys
-        TerminalEmulator emulator = mTermSession != null ? mTermSession.getEmulator() : null;
-        if (emulator != null) {
-            synchronized (emulator) {
-                emulator.setCursorBlinkState(true);
-            }
+        if (mTermSession != null) {
+            mTermSession.setCursorBlinkState(true);
         }
 
         if (handleKeyCodeAction(keyCode, keyMod))
             return true;
 
-        TerminalEmulator term = mTermSession.getEmulator();
-        String code;
-        synchronized (term) {
-            code = KeyHandler.getCode(keyCode, keyMod, term.isCursorKeysApplicationMode(), term.isKeypadApplicationMode());
-        }
+        if (mTermSession == null) return false;
+        String code = KeyHandler.getCode(keyCode, keyMod,
+                mTermSession.isCursorKeysApplicationMode(), mTermSession.isKeypadApplicationMode());
         if (code == null) return false;
         mTermSession.write(code);
         return true;
@@ -1045,15 +1022,9 @@ public final class TerminalView extends View {
         int newColumns = Math.max(4, (int) (viewWidth / mRenderer.mFontWidth));
         int newRows = Math.max(4, (viewHeight - mRenderer.mFontLineSpacingAndAscent) / mRenderer.mFontLineSpacing);
 
-        TerminalEmulator emulator = mTermSession.getEmulator();
-        if (emulator == null || (newColumns != emulator.mColumns || newRows != emulator.mRows)) {
+        if (mTermSession.getEmulator() == null || (newColumns != mTermSession.getScreenColumns() || newRows != mTermSession.getScreenRows())) {
             mTermSession.updateSize(newColumns, newRows, (int) mRenderer.getFontWidth(), mRenderer.getFontLineSpacing());
-            emulator = mTermSession.getEmulator();
             mClient.onEmulatorSet();
-
-            // Update mTerminalCursorBlinkerRunnable inner class emulator on session change
-            if (mTerminalCursorBlinkerRunnable != null)
-                mTerminalCursorBlinkerRunnable.setEmulator(emulator);
 
             mTopRow = 0;
             scrollTo(0, 0);
@@ -1168,11 +1139,8 @@ public final class TerminalView extends View {
     }
 
     private CharSequence getText() {
-        TerminalEmulator emulator = mTermSession != null ? mTermSession.getEmulator() : null;
-        if (emulator == null) return "";
-        // TerminalScreenSnapshot does not yet expose getSelectedText(), so fall back to the live screen
-        // while the parser worker owns the emulator. This is only used for accessibility content description.
-        return emulator.getScreen().getSelectedText(0, mTopRow, emulator.mColumns, mTopRow + emulator.mRows);
+        if (mTermSession == null) return "";
+        return mTermSession.getScreenTranscriptText();
     }
 
     public int getCursorX(float x) {
@@ -1414,24 +1382,14 @@ public final class TerminalView extends View {
 
         if (mTermSession == null) return;
 
-        TerminalEmulator emulator = mTermSession.getEmulator();
-        if (emulator != null) {
-            synchronized (emulator) {
-                emulator.setCursorBlinkingEnabled(false);
-            }
-        }
+        mTermSession.setCursorBlinkingEnabled(false);
 
         if (start) {
             // If cursor blinker is not enabled or is not valid
             if (mTerminalCursorBlinkerRate < TERMINAL_CURSOR_BLINK_RATE_MIN || mTerminalCursorBlinkerRate > TERMINAL_CURSOR_BLINK_RATE_MAX)
                 return;
             // If cursor blinder is to be started only if cursor is enabled
-            boolean cursorEnabled = false;
-            if (emulator != null) {
-                synchronized (emulator) {
-                    cursorEnabled = emulator.isCursorEnabled();
-                }
-            }
+            boolean cursorEnabled = mTermSession.isCursorEnabled();
             if (startOnlyIfCursorEnabled && !cursorEnabled) {
                 if (TERMINAL_VIEW_KEY_LOGGING_ENABLED)
                     mClient.logVerbose(LOG_TAG, "Ignoring call to start cursor blinker since cursor is not enabled");
@@ -1444,11 +1402,7 @@ public final class TerminalView extends View {
             if (mTerminalCursorBlinkerHandler == null)
                 mTerminalCursorBlinkerHandler = new Handler(Looper.getMainLooper());
             mTerminalCursorBlinkerRunnable = new TerminalCursorBlinkerRunnable(mTermSession, mTerminalCursorBlinkerRate);
-            if (emulator != null) {
-                synchronized (emulator) {
-                    emulator.setCursorBlinkingEnabled(true);
-                }
-            }
+            mTermSession.setCursorBlinkingEnabled(true);
             mTerminalCursorBlinkerRunnable.run();
         }
     }
@@ -1478,26 +1432,19 @@ public final class TerminalView extends View {
         }
 
         public void setEmulator(TerminalEmulator emulator) {
-            // Kept for API compatibility; the runnable now resolves the emulator from the session.
-            if (emulator != null && emulator != mSession.getEmulator()) {
-                // If an explicit emulator is provided, stash it for the rare case where the session
-                // emulator reference has not yet been set. The session is still the source of truth.
-            }
+            // Kept for API compatibility; the runnable now resolves all state from the session.
         }
 
         public void run() {
             try {
-                TerminalEmulator emulator = mSession != null ? mSession.getEmulator() : null;
-                if (emulator != null) {
+                if (mSession != null) {
                     // Toggle the blink state and then invalidate() the view so
                     // that onDraw() is called, which then calls TerminalRenderer.render()
                     // which checks with TerminalEmulator.shouldCursorBeVisible() to decide whether
                     // to draw the cursor or not
                     mCursorVisible = !mCursorVisible;
                     //mClient.logVerbose(LOG_TAG, "Toggling cursor blink state to " + mCursorVisible);
-                    synchronized (emulator) {
-                        emulator.setCursorBlinkState(mCursorVisible);
-                    }
+                    mSession.setCursorBlinkState(mCursorVisible);
                     invalidate();
                 }
             } finally {
