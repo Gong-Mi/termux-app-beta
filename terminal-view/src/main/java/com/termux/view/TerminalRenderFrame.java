@@ -1,5 +1,6 @@
 package com.termux.view;
 
+import com.termux.terminal.FrameRevision;
 import com.termux.terminal.TerminalEmulator;
 import com.termux.terminal.TerminalModelFrame;
 import com.termux.terminal.TerminalScreenSnapshot;
@@ -14,7 +15,7 @@ import java.util.Arrays;
  * 必须显式加在这个帧上；渲染 bug 归属（解析改了没 / 渲染用了旧值）也以本对象为准。
  * 本类不改变任何渲染行为 —— 采集的值与原先渲染时现场读取的值完全一致（同一线程，渲染期间无并发变更）。
  */
-public final class TerminalRenderFrame {
+public final class TerminalRenderFrame implements FrameRevision {
 
     /** 外部坐标系顶行（含 transcript 滚动偏移），来自 TerminalView.mTopRow。 */
     public final int topRow;
@@ -87,6 +88,11 @@ public final class TerminalRenderFrame {
 
     public int[] copyPalette() {
         return Arrays.copyOf(palette, palette.length);
+    }
+
+    @Override
+    public long getScreenRevision() {
+        return screenRevision;
     }
 
     /**

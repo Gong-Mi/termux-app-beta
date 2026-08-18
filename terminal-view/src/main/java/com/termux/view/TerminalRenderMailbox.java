@@ -1,57 +1,58 @@
 package com.termux.view;
 
+import com.termux.terminal.FrameRevision;
+
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
- * A single-slot, latest-only mailbox between the terminal parser worker thread
- * and the main/UI render thread.
+ * A single-slot, latest-only mailbox between a producer thread (the terminal
+ * parser worker) and a consumer thread (the main/UI render thread).
  *
- * <p>The parser produces immutable {@link TerminalRenderFrame} snapshots and
- * publishes them here. The renderer acquires the latest frame on the UI thread
- * and draws it. If the parser outruns the renderer, older frames are replaced
- * without being rendered: they are counted as dropped by the mailbox so that
- * the {@link RenderFrameMetrics} invariant {@code published >= drawn + dropped}
- * remains observable.</p>
+ * <p>The producer calls {@link #publish(T)} whenever a new frame is ready. The
+ * consumer calls {@link #acquireLatest()} from the render thread to get the
+ * latest frame, dropping any intermediate frames.</p>
+ *
+ * @param <T> The concrete frame type; must expose a screen revision for metrics.
  */
-public final class TerminalRenderMailbox {
+public final class TerminalRenderMailbox<T extends FrameRevision> {
 
     private final RenderFrameMetrics mMetrics;
-    private final AtomicReference<TerminalRenderFrame> mSlot = new AtomicReference<>();
+    private final AtomicReference<T> mSlot = new AtomicReference<>();
 
     public TerminalRenderMailbox(RenderFrameMetrics metrics) {
         mMetrics = metrics;
     }
 
     /**
-     * Called from the parser worker thread.
+     * Called from the producer thread.
      *
      * <p>Places {@code frame} in the slot. If a previous frame was still
      * unrendered, it is dropped and the metrics drop counter is incremented.
      * The published counter is always incremented for the new frame.</p>
      */
-    public void publish(TerminalRenderFrame frame) {
+    public void publish(T frame) {
         if (frame == null) throw new IllegalArgumentException("frame is null");
-        TerminalRenderFrame previous = mSlot.getAndSet(frame);
+        T previous = mSlot.getAndSet(frame);
         if (previous != null) {
             mMetrics.drop();
         }
-        mMetrics.publish(frame.screenRevision);
+        mMetrics.publish(frame.getScreenRevision());
     }
 
     /**
      * Called from the render/UI thread.
      *
-     * <p>Returns the latest frame produced by the parser worker, or {@code null}
+     * <p>Returns the latest frame produced by the producer, or {@code null}
      * if no frame has been published since the last acquisition. The caller
      * should render the frame and then call {@link RenderFrameMetrics#ack(long)}
-     * with {@link TerminalRenderFrame#screenRevision}.</p>
+     * with the frame's revision.</p>
      */
-    public TerminalRenderFrame acquireLatest() {
+    public T acquireLatest() {
         return mSlot.getAndSet(null);
     }
 
     /** Peek without consuming; intended for tests and diagnostics only. */
-    TerminalRenderFrame peek() {
+    T peek() {
         return mSlot.get();
     }
 }

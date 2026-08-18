@@ -37,7 +37,7 @@ public class TerminalRenderMailboxTest {
     @Test
     public void acquireReturnsNullWhenEmpty() {
         RenderFrameMetrics metrics = new RenderFrameMetrics();
-        TerminalRenderMailbox mailbox = new TerminalRenderMailbox(metrics);
+        TerminalRenderMailbox<TerminalRenderFrame> mailbox = new TerminalRenderMailbox<>(metrics);
         assertNull(mailbox.acquireLatest());
         assertEquals(0, metrics.getPublishedFrameCount());
         assertEquals(0, metrics.getDrawnFrameCount());
@@ -50,7 +50,7 @@ public class TerminalRenderMailboxTest {
         TerminalRenderFrame f = frame(emulator, 1L);
 
         RenderFrameMetrics metrics = new RenderFrameMetrics();
-        TerminalRenderMailbox mailbox = new TerminalRenderMailbox(metrics);
+        TerminalRenderMailbox<TerminalRenderFrame> mailbox = new TerminalRenderMailbox<>(metrics);
         mailbox.publish(f);
 
         assertEquals(1, metrics.getPublishedFrameCount());
@@ -66,7 +66,7 @@ public class TerminalRenderMailboxTest {
         TerminalRenderFrame second = frame(emulator, 2L);
 
         RenderFrameMetrics metrics = new RenderFrameMetrics();
-        TerminalRenderMailbox mailbox = new TerminalRenderMailbox(metrics);
+        TerminalRenderMailbox<TerminalRenderFrame> mailbox = new TerminalRenderMailbox<>(metrics);
         mailbox.publish(first);
         mailbox.publish(second);
 
@@ -80,7 +80,7 @@ public class TerminalRenderMailboxTest {
     public void multipleUnrenderedFramesAreDropped() {
         TerminalEmulator emulator = emulator();
         RenderFrameMetrics metrics = new RenderFrameMetrics();
-        TerminalRenderMailbox mailbox = new TerminalRenderMailbox(metrics);
+        TerminalRenderMailbox<TerminalRenderFrame> mailbox = new TerminalRenderMailbox<>(metrics);
 
         TerminalRenderFrame last = null;
         for (int i = 0; i < 5; i++) {
@@ -98,7 +98,7 @@ public class TerminalRenderMailboxTest {
     public void coalescedRevisionCountTracksSkippedRevisions() {
         TerminalEmulator emulator = emulator();
         RenderFrameMetrics metrics = new RenderFrameMetrics();
-        TerminalRenderMailbox mailbox = new TerminalRenderMailbox(metrics);
+        TerminalRenderMailbox<TerminalRenderFrame> mailbox = new TerminalRenderMailbox<>(metrics);
 
         // Publish and ack the first frame.
         TerminalRenderFrame f1 = frame(emulator, 1L);

@@ -17,6 +17,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.lang.reflect.Field;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.UUID;
 
 /**
@@ -61,6 +62,15 @@ public final class TerminalSession extends TerminalOutput {
 
     /** Callback passed to the emulator; posts callbacks to {@link #mClient} on the main thread. */
     private TerminalSessionClient mEmulatorClient;
+
+    /** Sink that will receive immutable model frames once the parser worker is wired in. */
+    private TerminalFrameSink mFrameSink;
+
+    /** Parser worker owning {@link #mEmulator} mutation. Not started yet. */
+    private TerminalParserWorker mParserWorker;
+
+    /** Latest frame published by the parser worker, used by main-thread snapshot methods. */
+    private volatile TerminalModelFrame mLatestFrame;
 
     /** The pid of the shell process. 0 if not started and -1 if finished running. */
     int mShellPid;
@@ -115,6 +125,21 @@ public final class TerminalSession extends TerminalOutput {
 
         if (mEmulator != null)
             mEmulator.updateTerminalSessionClient(mEmulatorClient);
+    }
+
+    /**
+     * Set the sink that receives immutable terminal model frames from the parser worker.
+     * Currently a stub that caches frames for snapshot methods; the worker is not yet active.
+     */
+    public synchronized void setFrameSink(TerminalFrameSink sink) {
+        final TerminalFrameSink delegate = sink;
+        mFrameSink = new TerminalFrameSink() {
+            @Override
+            public void publishFrame(TerminalModelFrame frame) {
+                mLatestFrame = frame;
+                if (delegate != null) delegate.publishFrame(frame);
+            }
+        };
     }
 
     /** Inform the attached pty of the new size and reflow or initialize the emulator. */
@@ -245,6 +270,62 @@ public final class TerminalSession extends TerminalOutput {
 
     public TerminalEmulator getEmulator() {
         return mEmulator;
+    }
+
+    /** @return whether mouse tracking is active, based on the latest frame or emulator. */
+    public boolean isMouseTrackingActive() {
+        TerminalModelFrame frame = mLatestFrame;
+        return frame != null ? frame.mouseTrackingActive : (mEmulator != null && mEmulator.isMouseTrackingActive());
+    }
+
+    /** @return whether the alternate buffer is active. */
+    public boolean isAlternateBufferActive() {
+        TerminalModelFrame frame = mLatestFrame;
+        return frame != null ? frame.alternateBufferActive : (mEmulator != null && mEmulator.isAlternateBufferActive());
+    }
+
+    /** @return whether auto-scroll is disabled. */
+    public boolean isAutoScrollDisabled() {
+        TerminalModelFrame frame = mLatestFrame;
+        return frame != null ? frame.autoScrollDisabled : (mEmulator != null && mEmulator.isAutoScrollDisabled());
+    }
+
+    /** @return number of visible screen rows. */
+    public int getScreenRows() {
+        TerminalModelFrame frame = mLatestFrame;
+        return frame != null ? frame.rows : (mEmulator != null ? mEmulator.mRows : 0);
+    }
+
+    /** @return number of screen columns. */
+    public int getScreenColumns() {
+        TerminalModelFrame frame = mLatestFrame;
+        return frame != null ? frame.columns : (mEmulator != null ? mEmulator.mColumns : 0);
+    }
+
+    /** @return cursor column, or 0 if unavailable. */
+    public int getCursorCol() {
+        TerminalModelFrame frame = mLatestFrame;
+        return frame != null ? frame.cursorCol : (mEmulator != null ? mEmulator.getCursorCol() : 0);
+    }
+
+    /** @return cursor row, or 0 if unavailable. */
+    public int getCursorRow() {
+        TerminalModelFrame frame = mLatestFrame;
+        return frame != null ? frame.cursorRow : (mEmulator != null ? mEmulator.getCursorRow() : 0);
+    }
+
+    /** @return active transcript rows. */
+    public int getActiveTranscriptRows() {
+        TerminalModelFrame frame = mLatestFrame;
+        return frame != null ? frame.activeTranscriptRows : (mEmulator != null ? mEmulator.getScreen().getActiveTranscriptRows() : 0);
+    }
+
+    /** @return a copy of the current color palette, or null if unavailable. */
+    public int[] getCurrentColors() {
+        TerminalModelFrame frame = mLatestFrame;
+        if (frame != null) return frame.copyPalette();
+        if (mEmulator != null) return Arrays.copyOf(mEmulator.mColors.mCurrentColors, mEmulator.mColors.mCurrentColors.length);
+        return null;
     }
 
     /** Notify the {@link #mClient} that the screen has changed. */

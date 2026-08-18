@@ -32,6 +32,21 @@ public final class TerminalModelFrame {
     /** Reverse-video flag captured at snapshot time. */
     public final boolean reverseVideo;
 
+    /** Mouse tracking state captured at snapshot time. */
+    public final boolean mouseTrackingActive;
+
+    /** Alternate buffer state captured at snapshot time. */
+    public final boolean alternateBufferActive;
+
+    /** Auto-scroll disabled state captured at snapshot time. */
+    public final boolean autoScrollDisabled;
+
+    /** Key passthrough state captured at snapshot time (unused, kept for external API parity). */
+    public final boolean keyPassthroughEnabled;
+
+    /** Active transcript rows captured at snapshot time. */
+    public final int activeTranscriptRows;
+
     /** Current color palette at snapshot time. */
     private final int[] palette;
 
@@ -58,6 +73,11 @@ public final class TerminalModelFrame {
         this.cursorStyle = emulator.getCursorStyle();
         this.cursorVisible = emulator.shouldCursorBeVisible();
         this.reverseVideo = emulator.isReverseVideo();
+        this.mouseTrackingActive = emulator.isMouseTrackingActive();
+        this.alternateBufferActive = emulator.isAlternateBufferActive();
+        this.autoScrollDisabled = emulator.isAutoScrollDisabled();
+        this.keyPassthroughEnabled = false;
+        this.activeTranscriptRows = emulator.getScreen().getActiveTranscriptRows();
         this.palette = Arrays.copyOf(emulator.mColors.mCurrentColors, emulator.mColors.mCurrentColors.length);
         this.screen = TerminalScreenSnapshot.capture(emulator.getScreen(), this.topRow, this.endRow, this.columns);
         this.screenRevision = emulator.getScreenRevision();
