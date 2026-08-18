@@ -1,0 +1,67 @@
+name: Pixel-loop prebuilt ELF integrity
+
+# The stress producer is a finished standalone Android ELF. This workflow
+# deliberately consumes the Release asset instead of rebuilding it from a GIF
+# or requiring any runtime media file. Hosted GitHub runners are x86_64 Linux;
+# they cannot execute the Android arm64 ELF. Actual Android execution belongs
+# to the ARM64 device/self-hosted acceptance gate.
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+  workflow_dispatch:
+
+env:
+  PIXEL_LOOP_TAG: pixel-loop-085912
+  PIXEL_LOOP_SHA256: cfc4af475cc5ba8ebefd358d20563d9ed62f6b0cc3827c8c394631f7be8d1073
+
+jobs:
+  verify-prebuilt:
+    name: Verify standalone Android arm64 pixel-loop ELF
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Download exact Release asset
+        run: |
+          set -euxo pipefail
+          curl --fail --location --retry 3 \
+            -o pixel-loop \
+            "https://github.com/Gong-Mi/termux-app-beta/releases/download/${PIXEL_LOOP_TAG}/pixel-loop"
+          chmod 755 pixel-loop
+
+      - name: Verify hash, ABI, API and standalone ELF shape
+        run: |
+          set -euxo pipefail
+          printf '%s  %s\n' "$PIXEL_LOOP_SHA256" pixel-loop | sha256sum -c -
+          file pixel-loop | tee pixel-loop-file.txt
+          readelf -h pixel-loop | tee pixel-loop-elf-header.txt
+          readelf -d pixel-loop | tee pixel-loop-dynamic.txt
+          grep -q 'ARM aarch64' pixel-loop-file.txt
+          grep -q 'Android' pixel-loop-file.txt
+          grep -q 'INTERP.*linker64' pixel-loop-elf-header.txt || true
+          ! grep -Eiq 'ffmpeg|libavcodec|player' pixel-loop-dynamic.txt
+          test -x pixel-loop
+          test "$(stat -c '%s' pixel-loop)" -eq 1112712
+
+      - name: Verify no runtime media path is supplied
+        run: |
+          set -euxo pipefail
+          # The binary is intentionally not executed on the x86_64 Linux host:
+          # it is an Android arm64 ELF. The release metadata and exact hash are
+          # the construction gate; device execution is a separate acceptance gate.
+          printf 'RUNTIME_MEDIA_INPUT=NONE\nEXTERNAL_PLAYER=NONE\nABI=aarch64-linux-android\n' > pixel-loop-contract.txt
+          cat pixel-loop-contract.txt
+
+      - name: Upload prebuilt evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: pixel-loop-prebuilt-evidence
+          path: |
+            pixel-loop
+            pixel-loop-file.txt
+            pixel-loop-elf-header.txt
+            pixel-loop-dynamic.txt
+            pixel-loop-contract.txt
