@@ -235,7 +235,12 @@ jobs:
           # package/uid matching on modern Android.
           adb shell cmd package resolve-activity -a com.termux.action.OPEN_HELP | tee fused-resolve.txt
           grep -q 'HelpActivity' fused-resolve.txt
-          if adb shell am start -W -a com.termux.action.OPEN_HELP 2>&1 | tee fused-help-denied.txt | grep -q 'SecurityException'; then
+          # external start must be DENIED. On API 36 the resolver filters
+          # non-exported components at resolution ("unable to resolve"); older
+          # platforms may surface SecurityException at start instead. Both prove
+          # exported=false survived the fuse (a component widened by the fuse
+          # would be blindly startable).
+          if adb shell am start -W -a com.termux.action.OPEN_HELP 2>&1 | tee fused-help-denied.txt | grep -qE 'SecurityException|unable to resolve|Activity not started'; then
             echo "HELP_EXPORTED_FALSE_ENFORCED_POST_FUSE"
           else
             echo "FAIL: HelpActivity was externally startable (exported flag lost during fuse)"
