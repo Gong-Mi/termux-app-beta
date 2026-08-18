@@ -58,6 +58,8 @@ public final class TerminalView extends View {
     public TerminalRenderer mRenderer;
     /** 上一帧的渲染交接快照（供调试/审计：行级变更归属）。渲染本身不依赖它。 */
     private TerminalRenderFrame mLastRenderFrame;
+    /** Immutable accounting object tracking publish/draw/ack lifecycle. */
+    private final RenderFrameMetrics mFrameMetrics = new RenderFrameMetrics();
     /** 打开后每帧打印变更台账摘要（默认关闭，零开销）。 */
     private static volatile boolean sDebugFrameInfo = false;
 
@@ -1044,10 +1046,15 @@ public final class TerminalView extends View {
                 TerminalRenderFrame frame = new TerminalRenderFrame(mEmulator, mTopRow, dirtyBits, dirtyCount,
                     sel[0], sel[1], sel[2], sel[3]);
                 mLastRenderFrame = frame;
+                mFrameMetrics.publish(frame.screenRevision);
                 if (sDebugFrameInfo) logFrameInfo(frame);
                 Trace.beginSection("Termux:TerminalRenderer.render");
                 try {
                     mRenderer.render(frame, canvas);
+                    mFrameMetrics.ack(frame.screenRevision);
+                } catch (RuntimeException e) {
+                    mFrameMetrics.drop();
+                    throw e;
                 } finally {
                     Trace.endSection();
                 }
@@ -1074,12 +1081,44 @@ public final class TerminalView extends View {
         return mLastRenderFrame;
     }
 
+    public long getPublishedFrameCount() {
+        return mFrameMetrics.getPublishedFrameCount();
+    }
+
+    public long getLastPublishedScreenRevision() {
+        return mFrameMetrics.getLastPublishedScreenRevision();
+    }
+
+    public long getDrawnFrameCount() {
+        return mFrameMetrics.getDrawnFrameCount();
+    }
+
+    public long getLastDrawnScreenRevision() {
+        return mFrameMetrics.getLastDrawnScreenRevision();
+    }
+
+    public long getDroppedFrameCount() {
+        return mFrameMetrics.getDroppedFrameCount();
+    }
+
+    public long getCoalescedRevisionCount() {
+        return mFrameMetrics.getCoalescedRevisionCount();
+    }
+
+    public long getLastAckedScreenRevision() {
+        return mFrameMetrics.getLastAckedScreenRevision();
+    }
+
     private void logFrameInfo(TerminalRenderFrame f) {
         int dirtyInView = 0;
         for (int row = f.topRow; row < f.endRow; row++) {
             if (f.rowNeedsRedraw(row)) dirtyInView++;
         }
-        android.util.Log.i("Termux:TerminalView", "frame gen=" + f.dirtyMutationCount
+        android.util.Log.i("Termux:TerminalView", "frame rev=" + f.screenRevision
+            + " published=" + mFrameMetrics.getPublishedFrameCount() + " lastPublishedRev=" + mFrameMetrics.getLastPublishedScreenRevision()
+            + " drawn=" + mFrameMetrics.getDrawnFrameCount() + " lastDrawnRev=" + mFrameMetrics.getLastDrawnScreenRevision()
+            + " dropped=" + mFrameMetrics.getDroppedFrameCount() + " coalesced=" + mFrameMetrics.getCoalescedRevisionCount() + " acked=" + mFrameMetrics.getLastAckedScreenRevision()
+            + " mutations=" + f.dirtyMutationCount
             + " visible=" + (f.endRow - f.topRow) + " redrawWorthies=" + dirtyInView
             + " cursor=" + (f.cursorVisible ? f.cursorRow : "hidden")
             + " sel=" + f.selectionY1 + ".." + f.selectionY2);

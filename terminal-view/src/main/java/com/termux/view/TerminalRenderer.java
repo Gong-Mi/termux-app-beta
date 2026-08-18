@@ -5,9 +5,9 @@ import android.graphics.Paint;
 import android.graphics.PorterDuff;
 import android.graphics.Typeface;
 
-import com.termux.terminal.TerminalBuffer;
 import com.termux.terminal.TerminalEmulator;
-import com.termux.terminal.TerminalRow;
+import com.termux.terminal.TerminalRenderRow;
+import com.termux.terminal.TerminalScreenSnapshot;
 import com.termux.terminal.TextStyle;
 import com.termux.terminal.WcWidth;
 
@@ -61,8 +61,8 @@ public final class TerminalRenderer {
         final int cursorCol = frame.cursorCol;
         final int cursorRow = frame.cursorRow;
         final boolean cursorVisible = frame.cursorVisible;
-        final TerminalBuffer screen = frame.screen;
-        final int[] palette = frame.palette;
+        final TerminalScreenSnapshot screen = frame.screen;
+        final int[] palette = frame.copyPalette();
         final int cursorShape = frame.cursorStyle;
         final int selectionX1 = frame.selectionX1;
         final int selectionY1 = frame.selectionY1;
@@ -84,8 +84,8 @@ public final class TerminalRenderer {
                 selx2 = (row == selectionY2) ? selectionX2 : columns;
             }
 
-            TerminalRow lineObject = screen.allocateFullLineIfNecessary(screen.externalToInternalRow(row));
-            final char[] line = lineObject.mText;
+            TerminalRenderRow lineObject = screen.rowAtExternal(row);
+            final char[] line = lineObject.copyText();
             final int charsUsedInLine = lineObject.getSpaceUsed();
 
             long lastRunStyle = 0;

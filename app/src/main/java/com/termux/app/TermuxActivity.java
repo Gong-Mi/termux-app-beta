@@ -6,6 +6,7 @@ import android.content.ActivityNotFoundException;
 import android.content.BroadcastReceiver;
 import android.content.ComponentName;
 import android.content.Context;
+import android.content.pm.ApplicationInfo;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.ServiceConnection;
@@ -241,6 +242,11 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
         }
 
         setTermuxTerminalViewAndClients();
+
+        if ((getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0
+            && getIntent().getBooleanExtra("com.termux.DEBUG_FRAME_INFO", false)) {
+            TerminalView.setDebugFrameInfoEnabled(true);
+        }
 
         setTerminalToolbarView(savedInstanceState);
 

@@ -1,0 +1,78 @@
+name: Pixel-loop prebuilt ELF integrity
+
+# The stress producer is a finished standalone Android ELF. This workflow
+# deliberately consumes the Release asset instead of rebuilding it from a GIF
+# or requiring any runtime media file. Both arm64 and x86_64 assets are verified
+# because the x86_64 emulator smoke/stress gates depend on the x86_64 ELF.
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+  workflow_dispatch:
+
+env:
+  PIXEL_LOOP_TAG: pixel-loop-085912
+
+jobs:
+  verify-prebuilt:
+    name: Verify standalone Android ${{ matrix.abi_name }} pixel-loop ELF
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - asset: pixel-loop
+            sha256: cfc4af475cc5ba8ebefd358d20563d9ed62f6b0cc3827c8c394631f7be8d1073
+            size: 1112712
+            abi_name: arm64
+            file_grep: 'ARM aarch64'
+            abi_contract: aarch64-linux-android
+          - asset: pixel-loop-x86_64
+            sha256: 611573282b5a44e9631975fa95bb34491ed8f27c3d235002a837a52d9598e43e
+            size: 1084200
+            abi_name: x86_64
+            file_grep: 'x86-64'
+            abi_contract: x86_64-linux-android
+
+    steps:
+      - name: Download exact Release asset
+        run: |
+          set -euxo pipefail
+          curl --fail --location --retry 3 \
+            -o "${{ matrix.asset }}" \
+            "https://github.com/Gong-Mi/termux-app-beta/releases/download/${PIXEL_LOOP_TAG}/${{ matrix.asset }}"
+          chmod 755 "${{ matrix.asset }}"
+
+      - name: Verify hash, ABI, API and standalone ELF shape
+        run: |
+          set -euxo pipefail
+          printf '%s  %s\n' '${{ matrix.sha256 }}' '${{ matrix.asset }}' | sha256sum -c -
+          file '${{ matrix.asset }}' | tee '${{ matrix.asset }}-file.txt'
+          readelf -h '${{ matrix.asset }}' | tee '${{ matrix.asset }}-elf-header.txt'
+          readelf -d '${{ matrix.asset }}' | tee '${{ matrix.asset }}-dynamic.txt'
+          grep -q '${{ matrix.file_grep }}' '${{ matrix.asset }}-file.txt'
+          grep -q 'interpreter /system/bin/linker64' '${{ matrix.asset }}-file.txt'
+          ! grep -Eiq 'ffmpeg|libavcodec|player' '${{ matrix.asset }}-dynamic.txt'
+          test -x '${{ matrix.asset }}'
+          test "$(stat -c '%s' '${{ matrix.asset }}')" -eq ${{ matrix.size }}
+
+      - name: Verify no runtime media path is supplied
+        run: |
+          set -euxo pipefail
+          printf 'RUNTIME_MEDIA_INPUT=NONE\nEXTERNAL_PLAYER=NONE\nABI=${{ matrix.abi_contract }}\n' > '${{ matrix.asset }}-contract.txt'
+          cat '${{ matrix.asset }}-contract.txt'
+
+      - name: Upload prebuilt evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: pixel-loop-prebuilt-evidence-${{ matrix.abi_name }}
+          path: |
+            ${{ matrix.asset }}
+            ${{ matrix.asset }}-file.txt
+            ${{ matrix.asset }}-elf-header.txt
+            ${{ matrix.asset }}-dynamic.txt
+            ${{ matrix.asset }}-contract.txt
