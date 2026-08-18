@@ -39,7 +39,7 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-linux-android
+          targets: aarch64-linux-android,x86_64-linux-android
 
       - name: Checkout
         uses: actions/checkout@v6
@@ -59,17 +59,18 @@ jobs:
       - name: Build debug APK
         run: ./gradlew assembleDebug
 
-      - name: Build Android arm64 pixel-loop producer
+      - name: Build Android arm64 and x86_64 pixel-loop producers
         working-directory: tools/pixel-loop
         env:
           ANDROID_NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/29.0.14206865
         run: |
           TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
-          test -x "$TOOLCHAIN/aarch64-linux-android24-clang"
-          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$TOOLCHAIN/aarch64-linux-android24-clang"
-          cargo build --release --target aarch64-linux-android
-          file target/aarch64-linux-android/release/pixel-loop
-          test "$(stat -c '%s' target/aarch64-linux-android/release/pixel-loop)" -gt 100000
+          for target in aarch64-linux-android x86_64-linux-android; do
+            export CARGO_TARGET_$(echo "$target" | tr '[:lower:]-' '[:upper:]_')_LINKER="$TOOLCHAIN/${target}24-clang"
+            cargo build --release --target "$target"
+            file "target/$target/release/pixel-loop"
+            test "$(stat -c '%s' "target/$target/release/pixel-loop")" -gt 100000
+          done
 
       - name: Boot emulator with SwiftShader
         env:
@@ -97,7 +98,7 @@ jobs:
           adb install -r "$APK"
           adb shell am start -W -n com.termux/.app.TermuxActivity
           sleep 10
-          adb push tools/pixel-loop/target/aarch64-linux-android/release/pixel-loop /data/local/tmp/pixel-loop
+          adb push tools/pixel-loop/target/x86_64-linux-android/release/pixel-loop /data/local/tmp/pixel-loop
           adb shell run-as com.termux sh -c 'mkdir -p files/usr/bin files/home/.termux && cp /data/local/tmp/pixel-loop files/usr/bin/pixel-loop && chmod 755 files/usr/bin/pixel-loop && printf "allow-external-apps=true\n" > files/home/.termux/termux.properties'
 
       - name: Run sustained pixel-loop through RUN_COMMAND
