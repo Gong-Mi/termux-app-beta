@@ -107,6 +107,7 @@ jobs:
           adb shell am start -W -n com.termux/.app.TermuxActivity
           sleep 12
           adb push "$PIXEL_LOOP_ASSET" /data/local/tmp/$PIXEL_LOOP_ASSET
+          adb shell run-as com.termux mkdir -p /data/data/com.termux/files/usr/tmp
           adb shell run-as com.termux cp /data/local/tmp/$PIXEL_LOOP_ASSET /data/data/com.termux/files/usr/tmp/$PIXEL_LOOP_ASSET
           adb shell run-as com.termux chmod 755 /data/data/com.termux/files/usr/tmp/$PIXEL_LOOP_ASSET
           adb shell run-as com.termux sha256sum /data/data/com.termux/files/usr/tmp/$PIXEL_LOOP_ASSET
