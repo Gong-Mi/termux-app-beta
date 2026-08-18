@@ -40,10 +40,9 @@ jobs:
 
       - name: Build only x86_64 producer
         working-directory: tools/pixel-loop
-        env:
-          ANDROID_NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/29.0.14206865
         run: |
           set -euxo pipefail
+          ANDROID_NDK_HOME="$ANDROID_HOME/ndk/29.0.14206865"
           TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
           export CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER="$TOOLCHAIN/x86_64-linux-android24-clang"
           cargo build --release --target x86_64-linux-android
