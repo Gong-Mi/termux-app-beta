@@ -39,8 +39,6 @@ import com.termux.shared.android.PermissionUtils;
 import com.termux.shared.data.DataUtils;
 import com.termux.shared.termux.TermuxConstants;
 import com.termux.shared.termux.TermuxConstants.TERMUX_APP.TERMUX_ACTIVITY;
-import com.termux.app.activities.HelpActivity;
-import com.termux.app.activities.SettingsActivity;
 import com.termux.shared.termux.crash.TermuxCrashUtils;
 import com.termux.shared.termux.settings.preferences.TermuxAppSharedPreferences;
 import com.termux.shared.termux.settings.preferences.TermuxPreferenceConstants;
@@ -596,7 +594,7 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
     private void setSettingsButtonView() {
         ImageButton settingsButton = findViewById(R.id.settings_button);
         settingsButton.setOnClickListener(v -> {
-            ActivityUtils.startActivity(this, new Intent(this, SettingsActivity.class));
+            ActivityUtils.startActivity(this, new Intent("com.termux.action.OPEN_SETTINGS").setPackage(getPackageName()));
         });
     }
 
@@ -722,10 +720,10 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
                 toggleKeepScreenOn();
                 return true;
             case CONTEXT_MENU_HELP_ID:
-                ActivityUtils.startActivity(this, new Intent(this, HelpActivity.class));
+                ActivityUtils.startActivity(this, new Intent("com.termux.action.OPEN_HELP").setPackage(getPackageName()));
                 return true;
             case CONTEXT_MENU_SETTINGS_ID:
-                ActivityUtils.startActivity(this, new Intent(this, SettingsActivity.class));
+                ActivityUtils.startActivity(this, new Intent("com.termux.action.OPEN_SETTINGS").setPackage(getPackageName()));
                 return true;
             case CONTEXT_MENU_REPORT_ID:
                 mTermuxTerminalViewClient.reportIssueFromTranscript();

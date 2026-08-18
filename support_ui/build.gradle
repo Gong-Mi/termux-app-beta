@@ -1,0 +1,26 @@
+plugins {
+    id "com.android.dynamic-feature"
+}
+
+android {
+    namespace "com.termux.supportui"
+    compileSdkVersion project.properties.compileSdkVersion.toInteger()
+
+    defaultConfig {
+        minSdkVersion project(":app").ext.buildMinSdk
+        targetSdkVersion project(":app").ext.buildTargetSdk
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+}
+
+dependencies {
+    implementation project(":app")
+    compileOnly project(":termux-shared")
+    implementation "androidx.annotation:annotation:1.3.0"
+    implementation "androidx.appcompat:appcompat:1.3.1"
+    implementation "androidx.preference:preference:1.1.1"
+}

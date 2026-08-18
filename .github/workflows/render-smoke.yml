@@ -110,7 +110,16 @@ jobs:
       - name: Cold start + capture screenshots
         run: |
           set -x
-          APK=$(ls app/build/outputs/apk/debug/*x86_64*.apk | head -1)
+          # Debug outputs: split-APK builds name files termux-app_*_x86_64.apk (legacy
+          # default "1"), dynamic-feature builds produce termux-app_*_universal.apk
+          # (splits.disabled). Prefer universal so the emulator install covers all ABIs.
+          APK=$(ls app/build/outputs/apk/debug/termux-app_*universal*.apk 2>/dev/null \
+                || ls app/build/outputs/apk/debug/termux-app_*x86_64*.apk 2>/dev/null || true)
+          if [ -z "$APK" ]; then
+            echo "NO_APK_FOUND - outputs:"
+            ls -la app/build/outputs/apk/debug/ 2>&1
+            exit 3
+          fi
           adb install -r "$APK"
           # Grant storage permission so the bootstrap can write, then cold start
           adb shell pm grant com.termux android.permission.WRITE_EXTERNAL_STORAGE || true
