@@ -58,6 +58,10 @@ public final class TerminalView extends View {
     public TerminalRenderer mRenderer;
     /** 上一帧的渲染交接快照（供调试/审计：行级变更归属）。渲染本身不依赖它。 */
     private TerminalRenderFrame mLastRenderFrame;
+    /** Number of successfully completed terminal frame renders. */
+    private long mDrawnFrameCount;
+    /** Model revision observed by the most recently completed frame render. */
+    private long mLastDrawnScreenRevision = -1;
     /** 打开后每帧打印变更台账摘要（默认关闭，零开销）。 */
     private static volatile boolean sDebugFrameInfo = false;
 
@@ -1048,6 +1052,8 @@ public final class TerminalView extends View {
                 Trace.beginSection("Termux:TerminalRenderer.render");
                 try {
                     mRenderer.render(frame, canvas);
+                    mDrawnFrameCount++;
+                    mLastDrawnScreenRevision = frame.screenRevision;
                 } finally {
                     Trace.endSection();
                 }
@@ -1074,12 +1080,22 @@ public final class TerminalView extends View {
         return mLastRenderFrame;
     }
 
+    public long getDrawnFrameCount() {
+        return mDrawnFrameCount;
+    }
+
+    public long getLastDrawnScreenRevision() {
+        return mLastDrawnScreenRevision;
+    }
+
     private void logFrameInfo(TerminalRenderFrame f) {
         int dirtyInView = 0;
         for (int row = f.topRow; row < f.endRow; row++) {
             if (f.rowNeedsRedraw(row)) dirtyInView++;
         }
-        android.util.Log.i("Termux:TerminalView", "frame gen=" + f.dirtyMutationCount
+        android.util.Log.i("Termux:TerminalView", "frame rev=" + f.screenRevision
+            + " drawn=" + mDrawnFrameCount + " lastDrawnRev=" + mLastDrawnScreenRevision
+            + " mutations=" + f.dirtyMutationCount
             + " visible=" + (f.endRow - f.topRow) + " redrawWorthies=" + dirtyInView
             + " cursor=" + (f.cursorVisible ? f.cursorRow : "hidden")
             + " sel=" + f.selectionY1 + ".." + f.selectionY2);

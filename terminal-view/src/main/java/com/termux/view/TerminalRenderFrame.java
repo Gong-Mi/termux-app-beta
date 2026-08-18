@@ -38,6 +38,8 @@ public final class TerminalRenderFrame {
      */
     public final long[] dirtyRowBits;
     public final int dirtyMutationCount;
+    /** Parser/model batch revision observed when this frame was collected. */
+    public final long screenRevision;
 
     public TerminalRenderFrame(TerminalEmulator emulator, int topRow, long[] dirtyRowBits, int dirtyMutationCount,
                                int selectionX1, int selectionY1, int selectionX2, int selectionY2) {
@@ -51,6 +53,7 @@ public final class TerminalRenderFrame {
         this.reverseVideo = emulator.isReverseVideo();
         this.palette = emulator.mColors.mCurrentColors;
         this.screen = emulator.getScreen();
+        this.screenRevision = emulator.getScreenRevision();
         this.dirtyRowBits = dirtyRowBits;
         this.dirtyMutationCount = dirtyMutationCount;
         this.selectionX1 = selectionX1;

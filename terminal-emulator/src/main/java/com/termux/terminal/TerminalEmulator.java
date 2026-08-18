@@ -269,6 +269,9 @@ public final class TerminalEmulator {
     private final byte[] mUtf8InputBuffer = new byte[4];
     private int mLastEmittedCodePoint = -1;
 
+    /** Monotonic parser/model batch revision. It identifies append and actual-resize batches, not individual mutations. */
+    private long mScreenRevision;
+
     public final TerminalColors mColors = new TerminalColors();
 
     private static final String LOG_TAG = "TerminalEmulator";
@@ -348,6 +351,11 @@ public final class TerminalEmulator {
         return mScreen;
     }
 
+    /** Revision of the most recently appended parser/model input batch. */
+    public long getScreenRevision() {
+        return mScreenRevision;
+    }
+
     public boolean isAlternateBufferActive() {
         return mScreen == mAltBuffer;
     }
@@ -393,6 +401,7 @@ public final class TerminalEmulator {
             throw new IllegalArgumentException("rows=" + rows + ", columns=" + columns);
         }
 
+        mScreenRevision++;
         if (mRows != rows) {
             mRows = rows;
             mTopMargin = 0;
@@ -498,6 +507,7 @@ public final class TerminalEmulator {
      * @param length the number of bytes in the array to process
      */
     public void append(byte[] buffer, int length) {
+        if (length > 0) mScreenRevision++;
         // Process in smaller chunks to avoid JIT OSR storms (identified by simpleperf)
         final int chunkSize = 1024;
         for (int i = 0; i < length; i += chunkSize) {
