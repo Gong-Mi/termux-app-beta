@@ -521,8 +521,8 @@ public class TermuxTerminalSessionActivityClient extends TermuxTerminalSessionCl
 
             TerminalColors.COLOR_SCHEME.updateWith(props);
             TerminalSession session = mActivity.getCurrentSession();
-            if (session != null && session.getEmulator() != null) {
-                session.getEmulator().mColors.reset();
+            if (session != null) {
+                session.resetColors();
             }
             updateBackgroundColor();
 
@@ -538,8 +538,11 @@ public class TermuxTerminalSessionActivityClient extends TermuxTerminalSessionCl
 
         mActivity.runOnUiThread(() -> {
             TerminalSession session = mActivity.getCurrentSession();
-            if (session != null && session.getEmulator() != null) {
-                mActivity.getWindow().getDecorView().setBackgroundColor(session.getEmulator().mColors.mCurrentColors[TextStyle.COLOR_INDEX_BACKGROUND]);
+            if (session != null) {
+                int[] colors = session.getCurrentColors();
+                if (colors != null) {
+                    mActivity.getWindow().getDecorView().setBackgroundColor(colors[TextStyle.COLOR_INDEX_BACKGROUND]);
+                }
             }
         });
     }

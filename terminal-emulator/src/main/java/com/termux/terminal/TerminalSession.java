@@ -342,7 +342,18 @@ public final class TerminalSession extends TerminalOutput {
         }
     }
 
-    /** @return selected text in the latest frame, or null if unavailable. */
+    /** Get transcript text from the terminal session. */
+    public String getTranscriptText(boolean linesJoined, boolean trim) {
+        synchronized (mEmulator) {
+            if (mEmulator == null) return null;
+            TerminalBuffer buffer = mEmulator.getScreen();
+            String text = linesJoined ? buffer.getTranscriptTextWithFullLinesJoined() : buffer.getTranscriptTextWithoutJoinedLines();
+            if (text == null) return null;
+            return trim ? text.trim() : text;
+        }
+    }
+
+    /** Get selected text in the given region from the latest frame or live screen. */
     public String getSelectedText(int x1, int y1, int x2, int y2, boolean rectangular) {
         synchronized (mEmulator) {
             return mEmulator != null ? mEmulator.getScreen().getSelectedText(x1, y1, x2, y2, rectangular) : null;
