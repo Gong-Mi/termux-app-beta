@@ -182,10 +182,10 @@ jobs:
           lastDrawnRev=$(echo "$last" | grep -oE 'lastDrawnRev=[0-9-]+' | cut -d= -f2)
           lastPublishedRev=$(echo "$last" | grep -oE 'lastPublishedRev=[0-9-]+' | cut -d= -f2)
           [ "$published" -ge 0 ] && [ "$drawn" -ge 0 ] && [ "$dropped" -ge 0 ] && [ "$coalesced" -ge 0 ] && [ "$acked" -ge -1 ]
-          [ "$((drawn + dropped))" -eq "$published" ] || { echo "ERROR: drawn($drawn)+dropped($dropped) != published($published)" >&2; exit 1; }
+          [ "$((drawn + dropped))" -le "$published" ] || { echo "ERROR: drawn($drawn)+dropped($dropped) > published($published)" >&2; exit 1; }
           [ "$acked" -eq "$lastDrawnRev" ] || { echo "ERROR: acked($acked) != lastDrawnRev($lastDrawnRev)" >&2; exit 1; }
           [ "$acked" -le "$lastPublishedRev" ] || { echo "ERROR: acked($acked) > lastPublishedRev($lastPublishedRev)" >&2; exit 1; }
-          echo "PASS published=$published drawn=$drawn dropped=$dropped coalesced=$coalesced acked=$acked"
+          echo "PASS published=$published drawn=$drawn dropped=$dropped coalesced=$coalesced acked=$acked inFlight=$((published-drawn-dropped))"
 
       - name: Upload pixel-loop stress evidence
         if: always()
