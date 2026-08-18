@@ -26,7 +26,7 @@ jobs:
         run: |
           set -euxo pipefail
           SDK="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
-          yes | "$SDK" --licenses >/dev/null
+          yes | "$SDK" --licenses >/dev/null || true
           "$SDK" "platforms;android-36" "ndk;29.0.14206865" >/dev/null
 
       - name: Restore build-only producer source from its original commit
