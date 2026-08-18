@@ -58,14 +58,8 @@ public final class TerminalView extends View {
     public TerminalRenderer mRenderer;
     /** 上一帧的渲染交接快照（供调试/审计：行级变更归属）。渲染本身不依赖它。 */
     private TerminalRenderFrame mLastRenderFrame;
-    /** Number of frames handed from TerminalView to the renderer. */
-    private long mPublishedFrameCount;
-    /** Model revision on the most recently handed-off frame. */
-    private long mLastPublishedScreenRevision = -1;
-    /** Number of successfully completed terminal frame renders. */
-    private long mDrawnFrameCount;
-    /** Model revision observed by the most recently completed frame render. */
-    private long mLastDrawnScreenRevision = -1;
+    /** Immutable accounting object tracking publish/draw/ack lifecycle. */
+    private final RenderFrameMetrics mFrameMetrics = new RenderFrameMetrics();
     /** 打开后每帧打印变更台账摘要（默认关闭，零开销）。 */
     private static volatile boolean sDebugFrameInfo = false;
 
@@ -1052,14 +1046,15 @@ public final class TerminalView extends View {
                 TerminalRenderFrame frame = new TerminalRenderFrame(mEmulator, mTopRow, dirtyBits, dirtyCount,
                     sel[0], sel[1], sel[2], sel[3]);
                 mLastRenderFrame = frame;
-                mPublishedFrameCount++;
-                mLastPublishedScreenRevision = frame.screenRevision;
+                mFrameMetrics.publish(frame.screenRevision);
                 if (sDebugFrameInfo) logFrameInfo(frame);
                 Trace.beginSection("Termux:TerminalRenderer.render");
                 try {
                     mRenderer.render(frame, canvas);
-                    mDrawnFrameCount++;
-                    mLastDrawnScreenRevision = frame.screenRevision;
+                    mFrameMetrics.ack(frame.screenRevision);
+                } catch (RuntimeException e) {
+                    mFrameMetrics.drop();
+                    throw e;
                 } finally {
                     Trace.endSection();
                 }
@@ -1087,19 +1082,31 @@ public final class TerminalView extends View {
     }
 
     public long getPublishedFrameCount() {
-        return mPublishedFrameCount;
+        return mFrameMetrics.getPublishedFrameCount();
     }
 
     public long getLastPublishedScreenRevision() {
-        return mLastPublishedScreenRevision;
+        return mFrameMetrics.getLastPublishedScreenRevision();
     }
 
     public long getDrawnFrameCount() {
-        return mDrawnFrameCount;
+        return mFrameMetrics.getDrawnFrameCount();
     }
 
     public long getLastDrawnScreenRevision() {
-        return mLastDrawnScreenRevision;
+        return mFrameMetrics.getLastDrawnScreenRevision();
+    }
+
+    public long getDroppedFrameCount() {
+        return mFrameMetrics.getDroppedFrameCount();
+    }
+
+    public long getCoalescedRevisionCount() {
+        return mFrameMetrics.getCoalescedRevisionCount();
+    }
+
+    public long getLastAckedScreenRevision() {
+        return mFrameMetrics.getLastAckedScreenRevision();
     }
 
     private void logFrameInfo(TerminalRenderFrame f) {
@@ -1108,8 +1115,9 @@ public final class TerminalView extends View {
             if (f.rowNeedsRedraw(row)) dirtyInView++;
         }
         android.util.Log.i("Termux:TerminalView", "frame rev=" + f.screenRevision
-            + " published=" + mPublishedFrameCount + " lastPublishedRev=" + mLastPublishedScreenRevision
-            + " drawn=" + mDrawnFrameCount + " lastDrawnRev=" + mLastDrawnScreenRevision
+            + " published=" + mFrameMetrics.getPublishedFrameCount() + " lastPublishedRev=" + mFrameMetrics.getLastPublishedScreenRevision()
+            + " drawn=" + mFrameMetrics.getDrawnFrameCount() + " lastDrawnRev=" + mFrameMetrics.getLastDrawnScreenRevision()
+            + " dropped=" + mFrameMetrics.getDroppedFrameCount() + " coalesced=" + mFrameMetrics.getCoalescedRevisionCount() + " acked=" + mFrameMetrics.getLastAckedScreenRevision()
             + " mutations=" + f.dirtyMutationCount
             + " visible=" + (f.endRow - f.topRow) + " redrawWorthies=" + dirtyInView
             + " cursor=" + (f.cursorVisible ? f.cursorRow : "hidden")
