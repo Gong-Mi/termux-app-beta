@@ -181,7 +181,7 @@ jobs:
         run: |
           java -jar bundletool.jar install-apks \
             --apks=termux-app-debug-emulator.apks \
-            --adb=adb
+            --adb="$ANDROID_HOME/platform-tools/adb"
           adb shell pm path com.termux | tee installed-splits.txt
           test "$(grep -c '^package:' installed-splits.txt)" -gt 1
           adb shell am start -W -n com.termux/.app.TermuxActivity
