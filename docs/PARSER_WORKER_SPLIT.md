@@ -8,8 +8,8 @@
 - [x] Stage 1: `TerminalRenderMailbox<T>`（泛型、revision-only、单槽丢帧）
 - [x] Stage 2: `TerminalSessionClientMainThreadWrapper`（所有 emulator 回调回归主线程）
 - [x] Stage 3: parser worker 脚手架 + `TerminalModelFrame` + `TerminalFrameSink`
-- [ ] Stage 4: `TerminalSession` 只读 snapshot API（外部 `getEmulator()` 迁移）
-- [ ] Stage 5: 把 worker 和 mailbox 真正接入 `TerminalSession` / `TerminalView`
+- [x] Stage 4: `TerminalSession` 只读 snapshot API（外部 `getEmulator()` 迁移）
+- [x] Stage 5: 把 worker 和 mailbox 真正接入 `TerminalSession` / `TerminalView`
 - [ ] Stage 6: CI stress 断言更新与验证
 
 ## 关键设计决策
@@ -70,3 +70,10 @@
 - 编译：`:terminal-emulator:compileDebugJavaWithJavac`、`:terminal-view:compileDebugJavaWithJavac`
 - 全量单测：`:terminal-emulator:testDebugUnitTest`、`:terminal-view:testDebugUnitTest`
 - CI：触发 `pixel-loop-stress.yml` 并校验最终帧指标与 gfxinfo。
+
+
+## Stage 6 剩余工作
+
+- [ ] 在目标 Android 真机上做 parser / snapshot copy / Canvas / RenderThread / GPU 分层验收。
+- [ ] 在 CI 中加入端到端 frame invariant（publish/draw/dropped 计数、revision 单调性、输入尾延迟）。
+- [ ] 目前 `TerminalView.updateSize()` 仍保留 `mTermSession.getEmulator() == null` 这一处仅用于判断 emulator 是否已初始化的兼容性读取；不影响线程隔离。
