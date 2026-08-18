@@ -1,4 +1,4 @@
-package com.termux.app.fragments.settings.termux_widget;
+package com.termux.app.fragments.settings.termux_float;
 
 import android.content.Context;
 import android.os.Bundle;
@@ -12,8 +12,8 @@ import androidx.preference.PreferenceDataStore;
 import androidx.preference.PreferenceFragmentCompat;
 import androidx.preference.PreferenceManager;
 
-import com.termux.R;
-import com.termux.shared.termux.settings.preferences.TermuxWidgetAppSharedPreferences;
+import com.termux.supportui.R;
+import com.termux.shared.termux.settings.preferences.TermuxFloatAppSharedPreferences;
 
 @Keep
 public class DebuggingPreferencesFragment extends PreferenceFragmentCompat {
@@ -26,7 +26,7 @@ public class DebuggingPreferencesFragment extends PreferenceFragmentCompat {
         PreferenceManager preferenceManager = getPreferenceManager();
         preferenceManager.setPreferenceDataStore(DebuggingPreferencesDataStore.getInstance(context));
 
-        setPreferencesFromResource(R.xml.termux_widget_debugging_preferences, rootKey);
+        setPreferencesFromResource(R.xml.termux_float_debugging_preferences, rootKey);
 
         configureLoggingPreferences(context);
     }
@@ -37,7 +37,7 @@ public class DebuggingPreferencesFragment extends PreferenceFragmentCompat {
 
         ListPreference logLevelListPreference = findPreference("log_level");
         if (logLevelListPreference != null) {
-            TermuxWidgetAppSharedPreferences preferences = TermuxWidgetAppSharedPreferences.build(context, true);
+            TermuxFloatAppSharedPreferences preferences = TermuxFloatAppSharedPreferences.build(context, true);
             if (preferences == null) return;
 
             com.termux.app.fragments.settings.termux.DebuggingPreferencesFragment.
@@ -50,13 +50,13 @@ public class DebuggingPreferencesFragment extends PreferenceFragmentCompat {
 class DebuggingPreferencesDataStore extends PreferenceDataStore {
 
     private final Context mContext;
-    private final TermuxWidgetAppSharedPreferences mPreferences;
+    private final TermuxFloatAppSharedPreferences mPreferences;
 
     private static DebuggingPreferencesDataStore mInstance;
 
     private DebuggingPreferencesDataStore(Context context) {
         mContext = context;
-        mPreferences = TermuxWidgetAppSharedPreferences.build(context, true);
+        mPreferences = TermuxFloatAppSharedPreferences.build(context, true);
     }
 
     public static synchronized DebuggingPreferencesDataStore getInstance(Context context) {
@@ -95,6 +95,31 @@ class DebuggingPreferencesDataStore extends PreferenceDataStore {
                 break;
             default:
                 break;
+        }
+    }
+
+    @Override
+    public void putBoolean(String key, boolean value) {
+        if (mPreferences == null) return;
+        if (key == null) return;
+
+        switch (key) {
+            case "terminal_view_key_logging_enabled":
+                mPreferences.setTerminalViewKeyLoggingEnabled(value, true);
+                break;
+            default:
+                break;
+        }
+    }
+
+    @Override
+    public boolean getBoolean(String key, boolean defValue) {
+        if (mPreferences == null) return false;
+        switch (key) {
+            case "terminal_view_key_logging_enabled":
+                return mPreferences.isTerminalViewKeyLoggingEnabled(true);
+            default:
+                return false;
         }
     }
 

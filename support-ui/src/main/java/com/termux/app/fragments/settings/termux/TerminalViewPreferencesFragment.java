@@ -10,7 +10,7 @@ import androidx.preference.PreferenceDataStore;
 import androidx.preference.PreferenceFragmentCompat;
 import androidx.preference.PreferenceManager;
 
-import com.termux.R;
+import com.termux.supportui.R;
 import com.termux.shared.termux.settings.preferences.TermuxAppSharedPreferences;
 import com.termux.shared.termux.settings.preferences.TermuxPreferenceConstants;
 
@@ -41,28 +41,28 @@ public class TerminalViewPreferencesFragment extends PreferenceFragmentCompat {
 
         int layerType = preferences.getLastTerminalRenderingLayerType();
         if (layerType == TermuxPreferenceConstants.TERMUX_APP.DEFAULT_TERMINAL_RENDERING_LAST_LAYER_TYPE) {
-            statusPreference.setSummary(R.string.termux_terminal_rendering_status_not_observed);
+            statusPreference.setSummary(com.termux.R.string.termux_terminal_rendering_status_not_observed);
             return;
         }
 
         int canvasState = preferences.wasLastTerminalCanvasHardwareAccelerated() ?
-            R.string.termux_terminal_rendering_canvas_hardware : R.string.termux_terminal_rendering_canvas_software;
+            com.termux.R.string.termux_terminal_rendering_canvas_hardware : com.termux.R.string.termux_terminal_rendering_canvas_software;
         int layerState;
         switch (layerType) {
             case View.LAYER_TYPE_NONE:
-                layerState = R.string.termux_terminal_rendering_layer_none;
+                layerState = com.termux.R.string.termux_terminal_rendering_layer_none;
                 break;
             case View.LAYER_TYPE_HARDWARE:
-                layerState = R.string.termux_terminal_rendering_layer_hardware;
+                layerState = com.termux.R.string.termux_terminal_rendering_layer_hardware;
                 break;
             case View.LAYER_TYPE_SOFTWARE:
-                layerState = R.string.termux_terminal_rendering_layer_software;
+                layerState = com.termux.R.string.termux_terminal_rendering_layer_software;
                 break;
             default:
-                layerState = R.string.termux_terminal_rendering_layer_unknown;
+                layerState = com.termux.R.string.termux_terminal_rendering_layer_unknown;
                 break;
         }
-        statusPreference.setSummary(getString(R.string.termux_terminal_rendering_status_format,
+        statusPreference.setSummary(getString(com.termux.R.string.termux_terminal_rendering_status_format,
             getString(canvasState), getString(layerState)));
     }
 
