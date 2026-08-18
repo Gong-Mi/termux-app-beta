@@ -58,6 +58,10 @@ public final class TerminalView extends View {
     public TerminalRenderer mRenderer;
     /** 上一帧的渲染交接快照（供调试/审计：行级变更归属）。渲染本身不依赖它。 */
     private TerminalRenderFrame mLastRenderFrame;
+    /** Number of frames handed from TerminalView to the renderer. */
+    private long mPublishedFrameCount;
+    /** Model revision on the most recently handed-off frame. */
+    private long mLastPublishedScreenRevision = -1;
     /** Number of successfully completed terminal frame renders. */
     private long mDrawnFrameCount;
     /** Model revision observed by the most recently completed frame render. */
@@ -1048,6 +1052,8 @@ public final class TerminalView extends View {
                 TerminalRenderFrame frame = new TerminalRenderFrame(mEmulator, mTopRow, dirtyBits, dirtyCount,
                     sel[0], sel[1], sel[2], sel[3]);
                 mLastRenderFrame = frame;
+                mPublishedFrameCount++;
+                mLastPublishedScreenRevision = frame.screenRevision;
                 if (sDebugFrameInfo) logFrameInfo(frame);
                 Trace.beginSection("Termux:TerminalRenderer.render");
                 try {
@@ -1080,6 +1086,14 @@ public final class TerminalView extends View {
         return mLastRenderFrame;
     }
 
+    public long getPublishedFrameCount() {
+        return mPublishedFrameCount;
+    }
+
+    public long getLastPublishedScreenRevision() {
+        return mLastPublishedScreenRevision;
+    }
+
     public long getDrawnFrameCount() {
         return mDrawnFrameCount;
     }
@@ -1094,6 +1108,7 @@ public final class TerminalView extends View {
             if (f.rowNeedsRedraw(row)) dirtyInView++;
         }
         android.util.Log.i("Termux:TerminalView", "frame rev=" + f.screenRevision
+            + " published=" + mPublishedFrameCount + " lastPublishedRev=" + mLastPublishedScreenRevision
             + " drawn=" + mDrawnFrameCount + " lastDrawnRev=" + mLastDrawnScreenRevision
             + " mutations=" + f.dirtyMutationCount
             + " visible=" + (f.endRow - f.topRow) + " redrawWorthies=" + dirtyInView

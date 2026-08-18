@@ -1,7 +1,9 @@
 package com.termux.view;
 
-import com.termux.terminal.TerminalBuffer;
 import com.termux.terminal.TerminalEmulator;
+import com.termux.terminal.TerminalScreenSnapshot;
+
+import java.util.Arrays;
 
 /**
  * 单帧渲染的唯一数据交接对象：在 {@link TerminalView#onDraw(android.graphics.Canvas)} 入口一次性从
@@ -26,17 +28,17 @@ public final class TerminalRenderFrame {
     public final boolean cursorVisible;
     /** 反相显示标志。 */
     public final boolean reverseVideo;
-    /** 当前调色板（渲染前快照；调色板数组被替换时本帧仍使用采集时的引用）。 */
-    public final int[] palette;
+    /** 当前调色板的不可变副本。 */
+    private final int[] palette;
     /** 活动屏幕缓冲（主屏或备用屏，渲染前快照）。 */
-    public final TerminalBuffer screen;
+    public final TerminalScreenSnapshot screen;
     /** 文本选择的矩形（外部坐标）。 */
     public final int selectionX1, selectionY1, selectionX2, selectionY2;
     /**
      * 渲染前采集的变更台账：自上一帧清除以来被解析/模型修改过的行（内部坐标系位图）与批次计数。
      * 用于把渲染问题归属到“解析改了哪些行” vs “渲染画了什么”。
      */
-    public final long[] dirtyRowBits;
+    private final long[] dirtyRowBits;
     public final int dirtyMutationCount;
     /** Parser/model batch revision observed when this frame was collected. */
     public final long screenRevision;
@@ -51,15 +53,19 @@ public final class TerminalRenderFrame {
         this.cursorStyle = emulator.getCursorStyle();
         this.cursorVisible = emulator.shouldCursorBeVisible();
         this.reverseVideo = emulator.isReverseVideo();
-        this.palette = emulator.mColors.mCurrentColors;
-        this.screen = emulator.getScreen();
+        this.palette = Arrays.copyOf(emulator.mColors.mCurrentColors, emulator.mColors.mCurrentColors.length);
+        this.screen = TerminalScreenSnapshot.capture(emulator.getScreen(), this.topRow, this.endRow, this.columns);
         this.screenRevision = emulator.getScreenRevision();
-        this.dirtyRowBits = dirtyRowBits;
+        this.dirtyRowBits = dirtyRowBits == null ? null : Arrays.copyOf(dirtyRowBits, dirtyRowBits.length);
         this.dirtyMutationCount = dirtyMutationCount;
         this.selectionX1 = selectionX1;
         this.selectionY1 = selectionY1;
         this.selectionX2 = selectionX2;
         this.selectionY2 = selectionY2;
+    }
+
+    public int[] copyPalette() {
+        return Arrays.copyOf(palette, palette.length);
     }
 
     /**
@@ -68,7 +74,7 @@ public final class TerminalRenderFrame {
      */
     public final boolean rowNeedsRedraw(int externalRow) {
         if (dirtyRowBits != null) {
-            int internal = screen.externalToInternalRow(externalRow);
+            int internal = screen.internalRowAtExternal(externalRow);
             if ((dirtyRowBits[internal >> 6] & (1L << (internal & 63))) != 0) return true;
         }
         if (cursorVisible && externalRow == cursorRow) return true;

@@ -42,6 +42,46 @@ public class TerminalRenderFrameTest {
     }
 
     @Test
+    public void snapshotDoesNotChangeAfterEmulatorMutation() {
+        TerminalEmulator emulator = emulator();
+        byte[] input = "A".getBytes(StandardCharsets.UTF_8);
+        emulator.append(input, input.length);
+        emulator.getScreen().getAndClearDirtyRowBits();
+        TerminalRenderFrame frame = new TerminalRenderFrame(emulator, 0, null, 0, 0, 0, -1, -1);
+
+        emulator.append("B".getBytes(StandardCharsets.UTF_8), 1);
+        emulator.mColors.mCurrentColors[0] = 0x12345678;
+
+        assertEquals('A', frame.screen.rowAtExternal(0).copyText()[0]);
+        assertEquals(1L, frame.screenRevision);
+        assertFalse(frame.copyPalette()[0] == 0x12345678);
+    }
+
+    @Test
+    public void snapshotPreservesNullRowsAsBlankRows() {
+        TerminalEmulator emulator = emulator();
+        TerminalRenderFrame frame = new TerminalRenderFrame(emulator, 0, null, 0, 0, 0, -1, -1);
+
+        assertEquals(' ', frame.screen.rowAtExternal(0).copyText()[0]);
+        assertTrue(frame.screen.rowAtExternal(0).getStyle(0) != 0);
+    }
+
+    @Test
+    public void snapshotPreservesWideCombiningAndStyleData() {
+        TerminalEmulator emulator = emulator();
+        byte[] input = "\033[31m界e\u0301".getBytes(StandardCharsets.UTF_8);
+        emulator.append(input, input.length);
+        TerminalRenderFrame frame = new TerminalRenderFrame(emulator, 0, null, 0, 0, 0, -1, -1);
+        char[] text = frame.screen.rowAtExternal(0).copyText();
+
+        assertEquals('界', text[0]);
+        assertEquals('e', text[1]);
+        assertEquals('\u0301', text[2]);
+        assertTrue(frame.screen.rowAtExternal(0).getSpaceUsed() >= 3);
+        assertTrue(frame.screen.rowAtExternal(0).getStyle(0) != 0);
+    }
+
+    @Test
     public void cursorAndSelectionAddRedrawReasons() {
         TerminalEmulator emulator = emulator();
         emulator.getScreen().getAndClearDirtyRowBits();
