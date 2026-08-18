@@ -1,6 +1,7 @@
 package com.termux.view;
 
 import com.termux.terminal.TerminalEmulator;
+import com.termux.terminal.TerminalModelFrame;
 import com.termux.terminal.TerminalScreenSnapshot;
 
 import java.util.Arrays;
@@ -58,6 +59,26 @@ public final class TerminalRenderFrame {
         this.screenRevision = emulator.getScreenRevision();
         this.dirtyRowBits = dirtyRowBits == null ? null : Arrays.copyOf(dirtyRowBits, dirtyRowBits.length);
         this.dirtyMutationCount = dirtyMutationCount;
+        this.selectionX1 = selectionX1;
+        this.selectionY1 = selectionY1;
+        this.selectionX2 = selectionX2;
+        this.selectionY2 = selectionY2;
+    }
+
+    public TerminalRenderFrame(TerminalModelFrame model, int selectionX1, int selectionY1, int selectionX2, int selectionY2) {
+        this.topRow = model.topRow;
+        this.endRow = model.endRow;
+        this.columns = model.columns;
+        this.cursorCol = model.cursorCol;
+        this.cursorRow = model.cursorRow;
+        this.cursorStyle = model.cursorStyle;
+        this.cursorVisible = model.cursorVisible;
+        this.reverseVideo = model.reverseVideo;
+        this.palette = model.copyPalette();
+        this.screen = model.screen;
+        this.screenRevision = model.screenRevision;
+        this.dirtyRowBits = model.copyDirtyRowBits();
+        this.dirtyMutationCount = model.dirtyMutationCount;
         this.selectionX1 = selectionX1;
         this.selectionY1 = selectionY1;
         this.selectionX2 = selectionX2;
