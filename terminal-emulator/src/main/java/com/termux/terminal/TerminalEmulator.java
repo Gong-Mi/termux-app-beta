@@ -2619,6 +2619,11 @@ public final class TerminalEmulator {
         if (bracketed) mSession.write("\033[201~");
     }
 
+    /** Returns if bracketed paste mode (DECSET 2004) is enabled. */
+    public boolean isBracketedPasteModeEnabled() {
+        return isDecsetInternalBitSet(DECSET_BIT_BRACKETED_PASTE_MODE);
+    }
+
     /** http://www.vt100.net/docs/vt510-rm/DECSC */
     static final class SavedScreenState {
         /** Saved state of the cursor position, Used to implement the save/restore cursor position escape sequences. */

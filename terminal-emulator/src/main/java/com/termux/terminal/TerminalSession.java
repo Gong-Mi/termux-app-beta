@@ -4,7 +4,6 @@ import android.annotation.SuppressLint;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.Message;
-import android.os.Trace;
 import android.system.ErrnoException;
 import android.system.Os;
 import android.system.OsConstants;
@@ -33,11 +32,10 @@ import java.util.UUID;
  */
 public final class TerminalSession extends TerminalOutput {
 
-    private static final int MSG_NEW_INPUT = 1;
     private static final int MSG_PROCESS_EXITED = 4;
     private static final int MSG_PROCESS_READER_FINISHED = 5;
     private static final int MSG_PROCESS_READER_TIMEOUT = 6;
-    private static final int MAX_PROCESS_TO_TERMINAL_BYTES_PER_BATCH = 32 * 1024;
+
     private static final long PROCESS_READER_FINISH_GRACE_MILLIS = 2000;
 
     public final String mHandle = UUID.randomUUID().toString();
@@ -148,7 +146,7 @@ public final class TerminalSession extends TerminalOutput {
             initializeEmulator(columns, rows, cellWidthPixels, cellHeightPixels);
         } else {
             JNI.setPtyWindowSize(mTerminalFileDescriptor, rows, columns, cellWidthPixels, cellHeightPixels);
-            mEmulator.resize(columns, rows, cellWidthPixels, cellHeightPixels);
+            mParserWorker.requestResize(columns, rows, cellWidthPixels, cellHeightPixels);
         }
     }
 
@@ -165,6 +163,8 @@ public final class TerminalSession extends TerminalOutput {
      */
     public void initializeEmulator(int columns, int rows, int cellWidthPixels, int cellHeightPixels) {
         mEmulator = new TerminalEmulator(this, columns, rows, cellWidthPixels, cellHeightPixels, mTranscriptRows, mEmulatorClient);
+        mParserWorker = new TerminalParserWorker(mEmulator, mProcessToTerminalIOQueue, mFrameSink, mEmulatorClient, this, 64 * 1024, 32 * 1024);
+        mParserWorker.start();
 
         int[] processId = new int[1];
         mTerminalFileDescriptor = JNI.createSubprocess(mShellPath, mCwd, mArgs, mEnv, processId, rows, columns, cellWidthPixels, cellHeightPixels);
@@ -184,12 +184,7 @@ public final class TerminalSession extends TerminalOutput {
                         if (read == -1) return;
                         if (mProcessReaderStopRequested) return;
                         if (!mProcessToTerminalIOQueue.write(buffer, 0, read)) return;
-                        // Coalesce: if a MSG_NEW_INPUT is already pending, the
-                        // pending handler run will drain everything queued so
-                        // far; no need to enqueue another message per read.
-                        if (!mMainThreadHandler.hasMessages(MSG_NEW_INPUT)) {
-                            mMainThreadHandler.sendEmptyMessage(MSG_NEW_INPUT);
-                        }
+                        mParserWorker.requestAppend();
                     }
                 } catch (Exception e) {
                     // Ignore, just shutting down.
@@ -320,12 +315,104 @@ public final class TerminalSession extends TerminalOutput {
         return frame != null ? frame.activeTranscriptRows : (mEmulator != null ? mEmulator.getScreen().getActiveTranscriptRows() : 0);
     }
 
+    /** @return cursor-keys application mode, or false if unavailable. */
+    public boolean isCursorKeysApplicationMode() {
+        TerminalModelFrame frame = mLatestFrame;
+        return frame != null ? frame.cursorKeysApplicationMode : (mEmulator != null && mEmulator.isCursorKeysApplicationMode());
+    }
+
+    /** @return keypad application mode, or false if unavailable. */
+    public boolean isKeypadApplicationMode() {
+        TerminalModelFrame frame = mLatestFrame;
+        return frame != null ? frame.keypadApplicationMode : (mEmulator != null && mEmulator.isKeypadApplicationMode());
+    }
+
     /** @return a copy of the current color palette, or null if unavailable. */
     public int[] getCurrentColors() {
         TerminalModelFrame frame = mLatestFrame;
         if (frame != null) return frame.copyPalette();
         if (mEmulator != null) return Arrays.copyOf(mEmulator.mColors.mCurrentColors, mEmulator.mColors.mCurrentColors.length);
         return null;
+    }
+
+    /** @return the word at the given column/row, or null if unavailable. */
+    public String getWordAtLocation(int x, int y) {
+        synchronized (mEmulator) {
+            return mEmulator != null ? mEmulator.getScreen().getWordAtLocation(x, y) : null;
+        }
+    }
+
+    /** @return selected text in the latest frame, or null if unavailable. */
+    public String getSelectedText(int x1, int y1, int x2, int y2, boolean rectangular) {
+        synchronized (mEmulator) {
+            return mEmulator != null ? mEmulator.getScreen().getSelectedText(x1, y1, x2, y2, rectangular) : null;
+        }
+    }
+
+    /** Paste text into the terminal, serialized with parser worker updates. */
+    public void paste(String text) {
+        if (mParserWorker != null) {
+            mParserWorker.requestPaste(text);
+        } else if (mEmulator != null) {
+            synchronized (mEmulator) {
+                mEmulator.paste(text);
+            }
+        }
+    }
+
+    /** Send a mouse event, serialized with parser worker updates. */
+    public void sendMouseEvent(int button, int x, int y, boolean pressed) {
+        if (mParserWorker != null) {
+            mParserWorker.requestSendMouseEvent(button, x, y, pressed);
+        } else if (mEmulator != null) {
+            synchronized (mEmulator) {
+                mEmulator.sendMouseEvent(button, x, y, pressed);
+            }
+        }
+    }
+
+    /** Clear the scroll counter. */
+    public void clearScrollCounter() {
+        if (mParserWorker != null) {
+            mParserWorker.requestClearScrollCounter();
+        } else if (mEmulator != null) {
+            synchronized (mEmulator) {
+                mEmulator.clearScrollCounter();
+            }
+        }
+    }
+
+    /** Set cursor blink visibility state. */
+    public void setCursorBlinkState(boolean visible) {
+        if (mParserWorker != null) {
+            mParserWorker.requestSetCursorBlinkState(visible);
+        } else if (mEmulator != null) {
+            synchronized (mEmulator) {
+                mEmulator.setCursorBlinkState(visible);
+            }
+        }
+    }
+
+    /** Enable or disable cursor blinking. */
+    public void setCursorBlinkingEnabled(boolean enabled) {
+        if (mParserWorker != null) {
+            mParserWorker.requestSetCursorBlinkingEnabled(enabled);
+        } else if (mEmulator != null) {
+            synchronized (mEmulator) {
+                mEmulator.setCursorBlinkingEnabled(enabled);
+            }
+        }
+    }
+
+    /** Reset the terminal color palette. */
+    public void resetColors() {
+        if (mParserWorker != null) {
+            mParserWorker.requestResetColors();
+        } else if (mEmulator != null) {
+            synchronized (mEmulator) {
+                mEmulator.mColors.reset();
+            }
+        }
     }
 
     /** Notify the {@link #mClient} that the screen has changed. */
@@ -335,8 +422,12 @@ public final class TerminalSession extends TerminalOutput {
 
     /** Reset state for terminal emulator state. */
     public void reset() {
-        mEmulator.reset();
-        notifyScreenUpdate();
+        if (mParserWorker != null) {
+            mParserWorker.requestReset();
+        } else if (mEmulator != null) {
+            mEmulator.reset();
+            notifyScreenUpdate();
+        }
     }
 
     /** Finish this terminal session by sending SIGKILL to the shell. */
@@ -444,14 +535,7 @@ public final class TerminalSession extends TerminalOutput {
     @SuppressLint("HandlerLeak")
     class MainThreadHandler extends Handler {
 
-        final byte[] mReceiveBuffer = new byte[64 * 1024];
         final TerminalSessionExitCoordinator mExitCoordinator = new TerminalSessionExitCoordinator();
-        final TerminalInputQueueDrain.Consumer mReceiveConsumer = new TerminalInputQueueDrain.Consumer() {
-            @Override
-            public void accept(byte[] buffer, int length) {
-                mEmulator.append(buffer, length);
-            }
-        };
 
         @Override
         public void handleMessage(Message msg) {
@@ -472,56 +556,12 @@ public final class TerminalSession extends TerminalOutput {
                 Logger.logWarn(mClient, LOG_TAG, "event=PTY_READER_TIMEOUT session=" + mHandle);
             }
 
-            TerminalInputQueueDrain.Result drainResult;
-            Trace.beginSection("Termux:TerminalSession.drain+parse");
-            try {
-                drainResult = TerminalInputQueueDrain.drain(
-                    mProcessToTerminalIOQueue, mReceiveBuffer,
-                    MAX_PROCESS_TO_TERMINAL_BYTES_PER_BATCH, mReceiveConsumer);
-            } finally {
-                Trace.endSection();
-            }
-            if (drainResult.getBytesRead() > 0) {
-                Trace.beginSection("Termux:notifyScreenUpdate");
-                try {
-                    notifyScreenUpdate();
-                } finally {
-                    Trace.endSection();
-                }
-            }
-
-            // A full 64KB receive buffer used to make the nominal 32KB cap
-            // ineffective. Yield after the real budget and explicitly retain
-            // the wakeup for the queued tail.
-            if (drainResult.hasMore()) {
-                if (!hasMessages(MSG_NEW_INPUT)) {
-                    sendEmptyMessage(MSG_NEW_INPUT);
-                }
-                return;
-            }
-
             if (mExitCoordinator.shouldFinish(false)) {
                 mExitCoordinator.markFinished();
                 removeMessages(MSG_PROCESS_READER_TIMEOUT);
                 int exitCode = mExitCoordinator.getExitStatus();
-                Logger.logInfo(mClient, LOG_TAG, "event=FINAL_CLEANUP session=" + mHandle + " exitStatus=" + exitCode);
-                cleanupResources(exitCode);
-
-                String exitDescription = "\r\n[Process completed";
-                if (exitCode > 0) {
-                    // Non-zero process exit.
-                    exitDescription += " (code " + exitCode + ")";
-                } else if (exitCode < 0) {
-                    // Negated signal.
-                    exitDescription += " (signal " + (-exitCode) + ")";
-                }
-                exitDescription += " - press Enter]";
-
-                byte[] bytesToWrite = exitDescription.getBytes(StandardCharsets.UTF_8);
-                mEmulator.append(bytesToWrite, bytesToWrite.length);
-                notifyScreenUpdate();
-
-                mClient.onSessionFinished(TerminalSession.this);
+                Logger.logInfo(mClient, LOG_TAG, "event=FINISHING session=" + mHandle + " exitStatus=" + exitCode);
+                mParserWorker.requestFinish(exitCode);
             }
         }
 

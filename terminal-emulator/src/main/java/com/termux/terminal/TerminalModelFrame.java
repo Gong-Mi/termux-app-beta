@@ -12,7 +12,7 @@ import java.util.Arrays;
  * {@code TerminalRenderFrame} with its own viewport/selection without touching
  * the emulator.</p>
  */
-public final class TerminalModelFrame {
+public final class TerminalModelFrame implements FrameRevision {
 
     /** Viewport top row used when this snapshot was captured. */
     public final int topRow;
@@ -43,6 +43,15 @@ public final class TerminalModelFrame {
 
     /** Key passthrough state captured at snapshot time (unused, kept for external API parity). */
     public final boolean keyPassthroughEnabled;
+
+    /** Cursor-keys application mode. */
+    public final boolean cursorKeysApplicationMode;
+    /** Keypad application mode. */
+    public final boolean keypadApplicationMode;
+    /** Bracketed paste mode. */
+    public final boolean bracketedPasteMode;
+    /** Current scroll counter. */
+    public final int scrollCounter;
 
     /** Active transcript rows captured at snapshot time. */
     public final int activeTranscriptRows;
@@ -77,12 +86,21 @@ public final class TerminalModelFrame {
         this.alternateBufferActive = emulator.isAlternateBufferActive();
         this.autoScrollDisabled = emulator.isAutoScrollDisabled();
         this.keyPassthroughEnabled = false;
+        this.cursorKeysApplicationMode = emulator.isCursorKeysApplicationMode();
+        this.keypadApplicationMode = emulator.isKeypadApplicationMode();
+        this.bracketedPasteMode = emulator.isBracketedPasteModeEnabled();
+        this.scrollCounter = emulator.getScrollCounter();
         this.activeTranscriptRows = emulator.getScreen().getActiveTranscriptRows();
         this.palette = Arrays.copyOf(emulator.mColors.mCurrentColors, emulator.mColors.mCurrentColors.length);
         this.screen = TerminalScreenSnapshot.capture(emulator.getScreen(), this.topRow, this.endRow, this.columns);
         this.screenRevision = emulator.getScreenRevision();
         this.dirtyRowBits = dirtyRowBits == null ? null : Arrays.copyOf(dirtyRowBits, dirtyRowBits.length);
         this.dirtyMutationCount = dirtyMutationCount;
+    }
+
+    @Override
+    public long getScreenRevision() {
+        return screenRevision;
     }
 
     public int[] copyPalette() {

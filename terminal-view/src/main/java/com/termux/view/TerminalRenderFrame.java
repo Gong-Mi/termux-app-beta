@@ -67,8 +67,12 @@ public final class TerminalRenderFrame implements FrameRevision {
     }
 
     public TerminalRenderFrame(TerminalModelFrame model, int selectionX1, int selectionY1, int selectionX2, int selectionY2) {
-        this.topRow = model.topRow;
-        this.endRow = model.endRow;
+        this(model, model.topRow, selectionX1, selectionY1, selectionX2, selectionY2);
+    }
+
+    public TerminalRenderFrame(TerminalModelFrame model, int topRow, int selectionX1, int selectionY1, int selectionX2, int selectionY2) {
+        this.topRow = topRow;
+        this.endRow = topRow + model.rows;
         this.columns = model.columns;
         this.cursorCol = model.cursorCol;
         this.cursorRow = model.cursorRow;
