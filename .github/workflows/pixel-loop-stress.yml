@@ -105,7 +105,15 @@ jobs:
                 || ls app/build/outputs/apk/debug/termux-app_*x86_64*.apk)
           adb install -r "$APK"
           adb shell am start -W -n com.termux/.app.TermuxActivity
-          sleep 12
+          for i in $(seq 1 24); do
+            if adb shell run-as com.termux test -x /data/data/com.termux/files/usr/bin/sh; then
+              echo "TERMUX_PREFIX_READY_AFTER_${i}0_SECONDS=1"
+              break
+            fi
+            echo "[termux-bootstrap-wait] prefix not ready at ${i}0s"
+            sleep 10
+          done
+          adb shell run-as com.termux test -x /data/data/com.termux/files/usr/bin/sh
           adb push "$PIXEL_LOOP_ASSET" /data/local/tmp/$PIXEL_LOOP_ASSET
           adb shell run-as com.termux mkdir -p /data/data/com.termux/files/usr/tmp
           adb shell run-as com.termux cp /data/local/tmp/$PIXEL_LOOP_ASSET /data/data/com.termux/files/usr/tmp/$PIXEL_LOOP_ASSET
