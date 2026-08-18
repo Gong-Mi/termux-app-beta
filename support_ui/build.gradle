@@ -7,8 +7,8 @@ android {
     compileSdkVersion project.properties.compileSdkVersion.toInteger()
 
     defaultConfig {
-        minSdkVersion project.properties.minSdkVersion.toInteger()
-        targetSdkVersion project.properties.targetSdkVersion.toInteger()
+        minSdkVersion project(":app").ext.buildMinSdk
+        targetSdkVersion project(":app").ext.buildTargetSdk
     }
 
     compileOptions {
