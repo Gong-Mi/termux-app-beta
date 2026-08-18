@@ -23,8 +23,6 @@ jobs:
           targets: x86_64-linux-android
 
       - name: Install Android NDK
-        env:
-          ANDROID_HOME: ${{ env.ANDROID_HOME }}
         run: |
           set -euxo pipefail
           SDK="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
