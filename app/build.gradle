@@ -21,7 +21,7 @@ ext {
 
 android {
     namespace "com.termux"
-    dynamicFeatures = [":support-ui"]
+    dynamicFeatures = [":support_ui"]
     buildFeatures {
         buildConfig true
     }
