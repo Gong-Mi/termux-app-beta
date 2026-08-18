@@ -2,6 +2,7 @@ package com.termux.terminal;
 
 import android.annotation.SuppressLint;
 import android.os.Handler;
+import android.os.Looper;
 import android.os.Message;
 import android.os.Trace;
 import android.system.ErrnoException;
@@ -58,6 +59,9 @@ public final class TerminalSession extends TerminalOutput {
     /** Callback which gets notified when a session finishes or changes title. */
     TerminalSessionClient mClient;
 
+    /** Callback passed to the emulator; posts callbacks to {@link #mClient} on the main thread. */
+    private TerminalSessionClient mEmulatorClient;
+
     /** The pid of the shell process. 0 if not started and -1 if finished running. */
     int mShellPid;
 
@@ -94,6 +98,11 @@ public final class TerminalSession extends TerminalOutput {
         this.mEnv = env;
         this.mTranscriptRows = transcriptRows;
         this.mClient = client;
+        this.mEmulatorClient = wrapClient(client);
+    }
+
+    private TerminalSessionClient wrapClient(TerminalSessionClient client) {
+        return new TerminalSessionClientMainThreadWrapper(client, new Handler(Looper.getMainLooper()));
     }
 
     /**
@@ -102,9 +111,10 @@ public final class TerminalSession extends TerminalOutput {
      */
     public void updateTerminalSessionClient(TerminalSessionClient client) {
         mClient = client;
+        mEmulatorClient = wrapClient(client);
 
         if (mEmulator != null)
-            mEmulator.updateTerminalSessionClient(client);
+            mEmulator.updateTerminalSessionClient(mEmulatorClient);
     }
 
     /** Inform the attached pty of the new size and reflow or initialize the emulator. */
@@ -129,7 +139,7 @@ public final class TerminalSession extends TerminalOutput {
      * @param rows    The number of rows in the terminal window.
      */
     public void initializeEmulator(int columns, int rows, int cellWidthPixels, int cellHeightPixels) {
-        mEmulator = new TerminalEmulator(this, columns, rows, cellWidthPixels, cellHeightPixels, mTranscriptRows, mClient);
+        mEmulator = new TerminalEmulator(this, columns, rows, cellWidthPixels, cellHeightPixels, mTranscriptRows, mEmulatorClient);
 
         int[] processId = new int[1];
         mTerminalFileDescriptor = JNI.createSubprocess(mShellPath, mCwd, mArgs, mEnv, processId, rows, columns, cellWidthPixels, cellHeightPixels);
