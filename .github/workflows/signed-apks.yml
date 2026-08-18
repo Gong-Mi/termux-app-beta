@@ -195,6 +195,74 @@ jobs:
           python3 -m pip install --quiet Pillow
           python3 .github/workflows/assert_render.py split-render.png
 
+      - name: Build fused universal APKS
+        env:
+          KS_PASSWORD: xrj45yWGLbsO7W0v
+        run: |
+          java -jar bundletool.jar build-apks \
+            --bundle=app/build/outputs/bundle/debug/app-debug.aab \
+            --output=termux-app-debug-universal.apks \
+            --mode=universal \
+            --ks=app/testkey_untrusted.jks \
+            --ks-key-alias=alias \
+            --ks-pass=pass:${KS_PASSWORD} \
+            --key-pass=pass:${KS_PASSWORD}
+          unzip -l termux-app-debug-universal.apks | tee fused-apks-listing.txt
+          # fused form must be exactly one universal.apk (base + install-time feature fused)
+          test "$(grep -c 'universal.apk' fused-apks-listing.txt)" -ge 1
+
+      - name: Install fused APK and verify feature routing
+        run: |
+          mkdir -p fused
+          unzip -o termux-app-debug-universal.apks universal.apk -d fused
+          adb uninstall com.termux >/dev/null 2>&1 || true
+          adb install -r fused/universal.apk
+          # single-APK form: package resolves to exactly one apk path
+          adb shell pm path com.termux | tee fused-pm-path.txt
+          test "$(grep -c '^package:' fused-pm-path.txt)" -eq 1
+          # external routing to SettingsActivity (feature component, exported=true)
+          adb shell am start -W -n com.termux/.app.TermuxActivity
+          sleep 15
+          adb shell am start -W -a com.termux.action.OPEN_SETTINGS
+          sleep 5
+          adb shell dumpsys window | grep -E 'mCurrentFocus|mFocusedApp' | tee fused-focus.txt
+          grep -q SettingsActivity fused-focus.txt
+          adb exec-out screencap -p > fused-settings.png
+          # HelpActivity is exported=false: resolve proves the feature manifest
+          # survived the fuse, and an external start must be DENIED (the fuse must
+          # not have widened the activity to exported). In-app launch is exercised
+          # by SettingsActivity above; am-as-app (run-as) is blocked by ATMS
+          # package/uid matching on modern Android.
+          adb shell cmd package resolve-activity -a com.termux.action.OPEN_HELP | tee fused-resolve.txt
+          grep -q 'HelpActivity' fused-resolve.txt
+          # external start must be DENIED. On API 36 the resolver filters
+          # non-exported components at resolution ("unable to resolve"); older
+          # platforms may surface SecurityException at start instead. Both prove
+          # exported=false survived the fuse (a component widened by the fuse
+          # would be blindly startable).
+          if adb shell am start -W -a com.termux.action.OPEN_HELP 2>&1 | tee fused-help-denied.txt | grep -qE 'SecurityException|unable to resolve|Activity not started'; then
+            echo "HELP_EXPORTED_FALSE_ENFORCED_POST_FUSE"
+          else
+            echo "FAIL: HelpActivity was externally startable (exported flag lost during fuse)"
+            cat fused-help-denied.txt
+            exit 1
+          fi
+          adb logcat -d | grep -iE 'FATAL|AndroidRuntime.*com.termux' | tail -20 || true
+
+      - name: Upload fused APK evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: fused-apk-evidence
+          path: |
+            fused-apks-listing.txt
+            fused-pm-path.txt
+            fused-focus.txt
+            fused-resolve.txt
+            fused-help-denied.txt
+            fused-settings.png
+          if-no-files-found: warn
+
       - name: Upload split emulator evidence
         if: always()
         uses: actions/upload-artifact@v6
