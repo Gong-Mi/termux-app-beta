@@ -8,7 +8,7 @@ TerminalView.logFrameInfo() with DEBUG_FRAME_INFO enabled, e.g.
         dropped=0 coalesced=12 acked=122 mutations=5 visible=24 ...
 
 Invariants checked (per log line, in order):
-  1. revision strictly increases across lines (rev_{i+1} > rev_i)
+  1. revision is non-decreasing across draw log lines (a frame may be redrawn)
   2. lastPublishedRev monotonically non-decreasing
   3. published >= drawn + dropped  (a frame is either drawn or dropped, never both)
   4. acked == lastDrawnRev        (ack records the last successfully drawn revision)
@@ -84,8 +84,8 @@ def main():
     prev_published_rev = None
     for i, row in enumerate(rows):
         rev = row["rev"]
-        if prev_rev is not None and rev <= prev_rev:
-            print(f"FAIL: revision not strictly increasing at line {i + 1}: {rev} <= {prev_rev}")
+        if prev_rev is not None and rev < prev_rev:
+            print(f"FAIL: revision decreased at line {i + 1}: {rev} < {prev_rev}")
             sys.exit(1)
         prev_rev = rev
         lpr = row.get("lastPublishedRev")
