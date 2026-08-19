@@ -127,7 +127,7 @@ public final class TerminalSession extends TerminalOutput {
 
     /**
      * Set the sink that receives immutable terminal model frames from the parser worker.
-     * Currently a stub that caches frames for snapshot methods; the worker is not yet active.
+     * The worker caches the latest frame for snapshot methods and forwards it to the view sink.
      */
     public synchronized void setFrameSink(TerminalFrameSink sink) {
         final TerminalFrameSink delegate = sink;
@@ -138,6 +138,12 @@ public final class TerminalSession extends TerminalOutput {
                 if (delegate != null) delegate.publishFrame(frame);
             }
         };
+    }
+
+    /** Return a point-in-time snapshot of parser-side pipeline counters. */
+    public TerminalParserMetrics.Snapshot getParserMetricsSnapshot() {
+        TerminalParserWorker worker = mParserWorker;
+        return worker == null ? new TerminalParserMetrics().snapshot() : worker.getMetricsSnapshot();
     }
 
     /** Inform the attached pty of the new size and reflow or initialize the emulator. */

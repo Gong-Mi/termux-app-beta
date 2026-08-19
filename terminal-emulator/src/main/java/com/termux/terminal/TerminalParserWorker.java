@@ -35,6 +35,7 @@ public final class TerminalParserWorker {
     private final TerminalSession mSession;
     private final byte[] mReceiveBuffer;
     private final int mMaxBytesPerBatch;
+    private final TerminalParserMetrics mMetrics = new TerminalParserMetrics();
     private final BlockingQueue<Command> mCommandQueue = new LinkedBlockingQueue<>();
     private final Thread mThread;
     private final AtomicBoolean mAppendScheduled = new AtomicBoolean(false);
@@ -69,6 +70,10 @@ public final class TerminalParserWorker {
     public boolean awaitStopped(long timeoutMs) throws InterruptedException {
         mThread.join(timeoutMs);
         return !mThread.isAlive();
+    }
+
+    public TerminalParserMetrics.Snapshot getMetricsSnapshot() {
+        return mMetrics.snapshot();
     }
 
     public void requestAppend() {
@@ -141,42 +146,56 @@ public final class TerminalParserWorker {
         synchronized (mEmulator) {
             switch (cmd.type) {
                 case MSG_APPEND:
+                    mMetrics.recordAppendCommand();
                     processAppend();
                     break;
                 case MSG_RESIZE:
+                    mMetrics.recordControlCommand();
                     mEmulator.resize(cmd.columns, cmd.rows, cmd.cellWidth, cmd.cellHeight);
                     publishFrame();
                     break;
                 case MSG_VIEWPORT:
+                    mMetrics.recordControlCommand();
                     mViewport = new Viewport(cmd.topRow);
                     publishFrame();
                     break;
                 case MSG_RESET:
+                    mMetrics.recordControlCommand();
                     mEmulator.reset();
                     publishFrame();
                     break;
                 case MSG_PASTE:
+                    mMetrics.recordControlCommand();
                     mEmulator.paste(cmd.text);
                     break;
                 case MSG_SEND_MOUSE_EVENT:
+                    mMetrics.recordControlCommand();
                     mEmulator.sendMouseEvent(cmd.mouseButton, cmd.mouseColumn, cmd.mouseRow, cmd.mousePressed);
                     break;
                 case MSG_CLEAR_SCROLL_COUNTER:
+                    mMetrics.recordControlCommand();
                     mEmulator.clearScrollCounter();
                     break;
                 case MSG_SET_CURSOR_BLINK_STATE:
+                    mMetrics.recordControlCommand();
                     mEmulator.setCursorBlinkState(cmd.enabled);
                     break;
                 case MSG_SET_CURSOR_BLINKING_ENABLED:
+                    mMetrics.recordControlCommand();
                     mEmulator.setCursorBlinkingEnabled(cmd.enabled);
                     break;
                 case MSG_RESET_COLORS:
+                    mMetrics.recordControlCommand();
                     mEmulator.mColors.reset();
                     break;
                 case MSG_FINISH:
+                    mMetrics.recordControlCommand();
+                    mMetrics.recordFinishCommand();
                     processFinish(cmd.exitCode);
                     break;
                 case MSG_STOP:
+                    mMetrics.recordControlCommand();
+                    mMetrics.recordStopCommand();
                     mStopped = true;
                     break;
             }
@@ -191,6 +210,7 @@ public final class TerminalParserWorker {
                 int read = mInputQueue.read(mReceiveBuffer, 0, toRead, false);
                 if (read <= 0) break;
                 mEmulator.append(mReceiveBuffer, read);
+                mMetrics.recordInputBytes(read);
                 budgetRemaining -= read;
             }
 
@@ -223,6 +243,7 @@ public final class TerminalParserWorker {
             int read = mInputQueue.read(mReceiveBuffer, 0, toRead, false);
             if (read <= 0) break;
             mEmulator.append(mReceiveBuffer, read);
+            mMetrics.recordInputBytes(read);
         }
 
         if (mSession != null) mSession.cleanupResources(exitCode);
@@ -247,6 +268,7 @@ public final class TerminalParserWorker {
         int dirtyCount = screen.getDirtyMutationCount();
         long[] dirtyBits = dirtyCount == 0 ? null : screen.getAndClearDirtyRowBits();
         TerminalModelFrame frame = new TerminalModelFrame(mEmulator, mViewport.topRow, dirtyBits, dirtyCount);
+        mMetrics.recordPublishedFrame();
         if (mFrameSink != null) mFrameSink.publishFrame(frame);
         mClient.onTextChanged(mSession); // posted to main thread; triggers UI invalidate
     }

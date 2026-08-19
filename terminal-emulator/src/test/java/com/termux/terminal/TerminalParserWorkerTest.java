@@ -160,6 +160,10 @@ public class TerminalParserWorkerTest extends TestCase {
                     first.screen.getTranscriptText().contains("hello"));
             assertFalse("Earlier frame must not observe later parser mutation",
                     first.screen.getTranscriptText().contains("world"));
+            TerminalParserMetrics.Snapshot metrics = h.worker.getMetricsSnapshot();
+            assertEquals(10, metrics.inputBytes);
+            assertEquals(2, metrics.appendCommands);
+            assertTrue("Each append should publish a model frame", metrics.publishedFrames >= 2);
         } finally {
             h.worker.stop();
         }
@@ -243,6 +247,10 @@ public class TerminalParserWorkerTest extends TestCase {
                     h.sink.last().screen.getTranscriptText().contains("drain-me"));
             assertTrue("Finish text should be present",
                     h.sink.last().screen.getTranscriptText().contains("Process completed"));
+            TerminalParserMetrics.Snapshot metrics = h.worker.getMetricsSnapshot();
+            assertEquals(payload.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8).length,
+                    metrics.inputBytes);
+            assertEquals(1, metrics.finishCommands);
         } finally {
             h.worker.stop();
         }
@@ -257,6 +265,7 @@ public class TerminalParserWorkerTest extends TestCase {
             h.worker.requestPaste("ignored");
             h.worker.stop();
             assertTrue("Worker should stop cleanly", h.worker.awaitStopped(5000));
+            assertEquals(1, h.worker.getMetricsSnapshot().stopCommands);
         } finally {
             h.worker.stop();
         }

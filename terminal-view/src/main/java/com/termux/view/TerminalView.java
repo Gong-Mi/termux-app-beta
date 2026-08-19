@@ -1124,6 +1124,7 @@ public final class TerminalView extends View {
     }
 
     private void logFrameInfo(TerminalRenderFrame f) {
+        com.termux.terminal.TerminalParserMetrics.Snapshot parser = mTermSession.getParserMetricsSnapshot();
         int dirtyInView = 0;
         for (int row = f.topRow; row < f.endRow; row++) {
             if (f.rowNeedsRedraw(row)) dirtyInView++;
@@ -1132,6 +1133,9 @@ public final class TerminalView extends View {
             + " published=" + mFrameMetrics.getPublishedFrameCount() + " lastPublishedRev=" + mFrameMetrics.getLastPublishedScreenRevision()
             + " drawn=" + mFrameMetrics.getDrawnFrameCount() + " lastDrawnRev=" + mFrameMetrics.getLastDrawnScreenRevision()
             + " dropped=" + mFrameMetrics.getDroppedFrameCount() + " coalesced=" + mFrameMetrics.getCoalescedRevisionCount() + " acked=" + mFrameMetrics.getLastAckedScreenRevision()
+            + " parserBytes=" + parser.inputBytes + " appendCommands=" + parser.appendCommands
+            + " controlCommands=" + parser.controlCommands + " parserFrames=" + parser.publishedFrames
+            + " finishCommands=" + parser.finishCommands + " stopCommands=" + parser.stopCommands
             + " mutations=" + f.dirtyMutationCount
             + " visible=" + (f.endRow - f.topRow) + " redrawWorthies=" + dirtyInView
             + " cursor=" + (f.cursorVisible ? f.cursorRow : "hidden")
