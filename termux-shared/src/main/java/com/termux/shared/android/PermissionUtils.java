@@ -214,10 +214,10 @@ public class PermissionUtils {
      * @param context The context for operations.
      * @param filePath The path to check.
      * @param requestCode The request code to use while asking for permission.
-     * @param prioritizeManageExternalStoragePermission If {@link Manifest.permission#MANAGE_EXTERNAL_STORAGE}
-     *                                                  permission should be requested if on
-     *                                                  Android `>= 11` instead of getting legacy
-     *                                                  storage permission.
+     * @param prioritizeManageExternalStoragePermission Retained for source
+     *                                                  compatibility. The
+     *                                                  API-version policy now
+     *                                                  selects the route.
      * @param showErrorMessage If an error message toast should be shown if permission is not granted.
      * @return Returns {@code true} if permission is granted, otherwise {@code false}.
      */
@@ -236,17 +236,11 @@ public class PermissionUtils {
     /**
      * Check if legacy or manage external storage permissions has been granted.
      *
-     * - If `prioritizeManageExternalStoragePermission` is `true and running on Android `>= 11`, then
-     *   it will be checked if app has been granted the
-     *   {@link Manifest.permission#MANAGE_EXTERNAL_STORAGE}.
-     * - If `prioritizeManageExternalStoragePermission` is `false` and running on Android `>= 11`, then
-     *   if {@link #isLegacyExternalStoragePossible(Context)} returns `true`, them it will be
-     *   checked if app has has been granted {@link Manifest.permission#READ_EXTERNAL_STORAGE} and
-     *   {@link Manifest.permission#WRITE_EXTERNAL_STORAGE} permissions, otherwise it will be checked
-     *   if app has been granted the {@link Manifest.permission#MANAGE_EXTERNAL_STORAGE} permission.
-     * - If running on Android `< 11`, then it will only be checked if app has been granted
-     * {@link Manifest.permission#READ_EXTERNAL_STORAGE} and
-     * {@link Manifest.permission#WRITE_EXTERNAL_STORAGE} permissions.
+     * The route is selected by {@link StoragePermissionPolicy}: Android API 32
+     * and below use READ/WRITE runtime permissions, while API 33 and above use
+     * MANAGE_EXTERNAL_STORAGE. The legacy route is not inferred from whether
+     * a maxSdkVersion-filtered manifest permission happens to be reported by
+     * PackageManager.
      *
      * If storage permission is missing, it will be requested from the user if {@code context} is an
      * instance of {@link Activity} or {@link AppCompatActivity} and {@code requestCode}
@@ -269,10 +263,10 @@ public class PermissionUtils {
      *}
      * @param context The context for operations.
      * @param requestCode The request code to use while asking for permission.
-     * @param prioritizeManageExternalStoragePermission If {@link Manifest.permission#MANAGE_EXTERNAL_STORAGE}
-     *                                                  permission should be requested if on
-     *                                                  Android `>= 11` instead of getting legacy
-     *                                                  storage permission.
+     * @param prioritizeManageExternalStoragePermission Retained for source
+     *                                                  compatibility. The
+     *                                                  API-version policy now
+     *                                                  selects the route.
      * @param showErrorMessage If an error message toast should be shown if permission is not granted.
      * @return Returns {@code true} if permission is granted, otherwise {@code false}.
      */
@@ -283,17 +277,15 @@ public class PermissionUtils {
         Logger.logVerbose(LOG_TAG, "Checking storage permission");
 
         String errmsg;
-        Boolean requestLegacyStoragePermission = null;
-
-        if (prioritizeManageExternalStoragePermission && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R)
-            requestLegacyStoragePermission = false;
-
-        if (requestLegacyStoragePermission == null)
-            requestLegacyStoragePermission = isLegacyExternalStoragePossible(context);
+        StoragePermissionPolicy.Route storageRoute =
+            StoragePermissionPolicy.routeForDeviceSdk(Build.VERSION.SDK_INT);
+        boolean requestLegacyStoragePermission =
+            storageRoute == StoragePermissionPolicy.Route.LEGACY_RUNTIME;
 
         boolean checkIfHasRequestedLegacyExternalStorage = checkIfHasRequestedLegacyExternalStorage(context);
 
-        Logger.logVerbose(LOG_TAG, "prioritizeManageExternalStoragePermission=" + prioritizeManageExternalStoragePermission +
+        Logger.logVerbose(LOG_TAG, "storageRoute=" + storageRoute +
+                ", prioritizeManageExternalStoragePermission=" + prioritizeManageExternalStoragePermission +
                 ", requestLegacyStoragePermission=" + requestLegacyStoragePermission +
                 ", checkIfHasRequestedLegacyExternalStorage=" + checkIfHasRequestedLegacyExternalStorage);
 
@@ -303,7 +295,7 @@ public class PermissionUtils {
                 return false;
         }
 
-        if (checkStoragePermission(context, requestLegacyStoragePermission)) {
+        if (checkStoragePermission(context, storageRoute)) {
             return true;
         }
 
@@ -316,9 +308,9 @@ public class PermissionUtils {
         if (requestCode < 0 || Build.VERSION.SDK_INT < Build.VERSION_CODES.M)
             return false;
 
-        if (requestLegacyStoragePermission || Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+        if (storageRoute == StoragePermissionPolicy.Route.LEGACY_RUNTIME) {
             requestLegacyStorageExternalPermission(context, requestCode);
-        } else {
+        } else if (storageRoute == StoragePermissionPolicy.Route.MANAGE_ALL_FILES) {
             requestManageStorageExternalPermission(context, requestCode);
         }
 
@@ -329,16 +321,15 @@ public class PermissionUtils {
      * Check if app has been granted storage permission.
      *
      * @param context The context for operations.
-     * @param checkLegacyStoragePermission If set to {@code true}, then it will be checked if app
-     *                                     has been granted {@link Manifest.permission#READ_EXTERNAL_STORAGE}
-     *                                     and {@link Manifest.permission#WRITE_EXTERNAL_STORAGE}
-     *                                     permissions, otherwise it will be checked if app has been
-     *                                     granted the {@link Manifest.permission#MANAGE_EXTERNAL_STORAGE}
-     *                                     permission.
+     * @param storageRoute The route selected by
+     *                     {@link StoragePermissionPolicy#routeForDeviceSdk(int)}.
      * @return Returns {@code true} if permission is granted, otherwise {@code false}.
      */
-    public static boolean checkStoragePermission(@NonNull Context context, boolean checkLegacyStoragePermission) {
-        if (checkLegacyStoragePermission || Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+    public static boolean checkStoragePermission(@NonNull Context context,
+                                                 @NonNull StoragePermissionPolicy.Route storageRoute) {
+        if (storageRoute == StoragePermissionPolicy.Route.NONE) {
+            return true;
+        } else if (storageRoute == StoragePermissionPolicy.Route.LEGACY_RUNTIME) {
             return checkPermissions(context,
                 new String[]{Manifest.permission.READ_EXTERNAL_STORAGE,
                     Manifest.permission.WRITE_EXTERNAL_STORAGE});
@@ -413,13 +404,12 @@ public class PermissionUtils {
     }
 
     /**
-     * If app is targeting targetSdkVersion 30 (android 11) and running on sdk 30 (android 11) or
-     * higher, then {@link android.R.attr#requestLegacyExternalStorage} attribute is ignored.
-     * https://developer.android.com/training/data-storage/use-cases#opt-out-scoped-storage
+     * Return whether this app's API-version permission policy uses the
+     * legacy route. The targetSdk/manifest compatibility details are kept
+     * separate from route selection in {@link StoragePermissionPolicy}.
      */
     public static boolean isLegacyExternalStoragePossible(@NonNull Context context) {
-        return !(Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
-            PackageUtils.getTargetSDKForPackage(context) >= Build.VERSION_CODES.R);
+        return StoragePermissionPolicy.usesLegacyRuntimePermissions(Build.VERSION.SDK_INT);
     }
 
     /**
