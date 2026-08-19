@@ -6,7 +6,6 @@ import android.content.ActivityNotFoundException;
 import android.content.BroadcastReceiver;
 import android.content.ComponentName;
 import android.content.Context;
-import android.content.pm.ApplicationInfo;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.ServiceConnection;
@@ -243,8 +242,9 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
 
         setTermuxTerminalViewAndClients();
 
-        if ((getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0
-            && getIntent().getBooleanExtra("com.termux.DEBUG_FRAME_INFO", false)) {
+        // Keep frame diagnostics available for the debug-only emulator gate. Release builds
+        // never emit this per-draw log; the intent remains an explicit opt-in for callers.
+        if (BuildConfig.DEBUG || getIntent().getBooleanExtra("com.termux.DEBUG_FRAME_INFO", false)) {
             TerminalView.setDebugFrameInfoEnabled(true);
         }
 
