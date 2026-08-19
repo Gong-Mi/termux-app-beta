@@ -21,6 +21,7 @@ import com.termux.shared.interact.ShareUtils;
 import com.termux.shared.termux.shell.command.runner.terminal.TermuxSession;
 import com.termux.shared.termux.interact.TextInputDialogUtils;
 import com.termux.app.TermuxActivity;
+import com.termux.app.TermuxSessionActivityClient;
 import com.termux.shared.termux.terminal.TermuxTerminalSessionClientBase;
 import com.termux.shared.termux.TermuxConstants;
 import com.termux.app.TermuxService;
@@ -38,7 +39,7 @@ import java.io.InputStream;
 import java.util.Properties;
 
 /** The {@link TerminalSessionClient} implementation that may require an {@link Activity} for its interface methods. */
-public class TermuxTerminalSessionActivityClient extends TermuxTerminalSessionClientBase {
+public class TermuxTerminalSessionActivityClient extends TermuxTerminalSessionClientBase implements TermuxSessionActivityClient {
 
     private final TermuxActivity mActivity;
 
@@ -52,6 +53,11 @@ public class TermuxTerminalSessionActivityClient extends TermuxTerminalSessionCl
 
     public TermuxTerminalSessionActivityClient(TermuxActivity activity) {
         this.mActivity = activity;
+    }
+
+    @Override
+    public TermuxTerminalSessionClientBase asTerminalSessionClient() {
+        return this;
     }
 
     /**
