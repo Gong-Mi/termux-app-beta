@@ -5,7 +5,7 @@ import android.os.Build;
 
 import androidx.annotation.NonNull;
 
-import com.termux.shared.R;
+import com.termux.supportui.R;
 import com.termux.shared.android.PermissionUtils;
 import com.termux.shared.logger.Logger;
 
@@ -53,7 +53,7 @@ public final class StoragePermissionUiCoordinator {
         if (granted)
             return true;
 
-        String message = context.getString(R.string.msg_storage_permission_not_granted);
+        String message = context.getString(R.string.msg_storage_permission_ui_not_granted);
         Logger.logError(LOG_TAG, message);
         if (showErrorMessage)
             Logger.showToast(context, message, false);

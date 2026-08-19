@@ -3,4 +3,5 @@
     <string name="support_ui_title">Termux support UI</string>
     <string name="msg_storage_permission_granted_on_request">The storage permission granted by user on request</string>
     <string name="msg_storage_permission_not_granted_on_request">The storage permission not granted by user on request</string>
+    <string name="msg_storage_permission_ui_not_granted">The storage permission is not granted.</string>
 </resources>
