@@ -17,6 +17,7 @@ on:
 
 env:
   JAVA_VERSION: 21
+  BUNDLETOOL_VERSION: 1.18.2
 
 jobs:
   render-smoke:
@@ -60,8 +61,24 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Build debug APK
-        run: ./gradlew assembleDebug
+      - name: Build fused debug APK from AAB
+        env:
+          KS_PASSWORD: xrj45yWGLbsO7W0v
+        run: |
+          ./gradlew bundleDebug --no-daemon
+          curl --fail --location --retry 3 \
+            -o bundletool.jar \
+            "https://github.com/google/bundletool/releases/download/${BUNDLETOOL_VERSION}/bundletool-all-${BUNDLETOOL_VERSION}.jar"
+          java -jar bundletool.jar build-apks \
+            --bundle=app/build/outputs/bundle/debug/app-debug.aab \
+            --output=termux-app-debug-universal.apks \
+            --mode=universal \
+            --ks=app/testkey_untrusted.jks \
+            --ks-key-alias=alias \
+            --ks-pass=pass:${KS_PASSWORD} \
+            --key-pass=pass:${KS_PASSWORD}
+          mkdir -p render-apk
+          unzip -o termux-app-debug-universal.apks universal.apk -d render-apk
 
       - name: Boot emulator with SwiftShader (timed)
         env:
@@ -110,17 +127,7 @@ jobs:
       - name: Cold start + capture screenshots
         run: |
           set -x
-          # Debug outputs: split-APK builds name files termux-app_*_x86_64.apk (legacy
-          # default "1"), dynamic-feature builds produce termux-app_*_universal.apk
-          # (splits.disabled). Prefer universal so the emulator install covers all ABIs.
-          APK=$(ls app/build/outputs/apk/debug/termux-app_*universal*.apk 2>/dev/null \
-                || ls app/build/outputs/apk/debug/termux-app_*x86_64*.apk 2>/dev/null || true)
-          if [ -z "$APK" ]; then
-            echo "NO_APK_FOUND - outputs:"
-            ls -la app/build/outputs/apk/debug/ 2>&1
-            exit 3
-          fi
-          adb install -r "$APK"
+          adb install -r render-apk/universal.apk
           # Grant storage permission so the bootstrap can write, then cold start
           adb shell pm grant com.termux android.permission.WRITE_EXTERNAL_STORAGE || true
           # DEBUG_FRAME_INFO (debug builds only) makes TerminalView.logFrameInfo()
