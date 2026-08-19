@@ -21,9 +21,13 @@ env:
 
 jobs:
   render-smoke:
-    name: Emulator render smoke (x86_64 + SwiftShader)
+    name: Emulator render smoke (x86_64 + ${{ matrix.gpu }})
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        gpu: [swiftshader_indirect, off]
     steps:
       - name: Record runner spec
         run: |
@@ -94,7 +98,7 @@ jobs:
           fi
           t0=$(date +%s)
           nohup "$ANDROID_HOME/emulator/emulator" -avd smoke \
-            -gpu swiftshader_indirect -no-window -no-audio -no-boot-anim \
+            -gpu "${{ matrix.gpu }}" -no-window -no-audio -no-boot-anim \
             -no-snapshot -wipe-data -memory 3072 -cores 3 \
             > /tmp/emu.log 2>&1 &
           # Boot wait with hard cap and per-minute progress evidence
@@ -174,6 +178,7 @@ jobs:
           python3 .github/workflows/verify_frame_metrics.py frame-info-lines.txt --min-lines 3
 
       - name: Pixel assertions
+        if: matrix.gpu == 'swiftshader_indirect'
         run: |
           python3 -m pip install --quiet Pillow
           python3 .github/workflows/assert_render.py render_initial.png
@@ -183,7 +188,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v6
         with:
-          name: render-smoke-evidence
+          name: render-smoke-evidence-${{ matrix.gpu }}
           path: |
             render_initial.png
             render_after_input.png
