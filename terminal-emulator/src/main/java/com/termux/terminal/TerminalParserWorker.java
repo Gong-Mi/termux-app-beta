@@ -180,14 +180,17 @@ public final class TerminalParserWorker {
                 case MSG_PASTE:
                     mMetrics.recordControlCommand();
                     mEmulator.paste(cmd.text);
+                    publishFrame();
                     break;
                 case MSG_SEND_MOUSE_EVENT:
                     mMetrics.recordControlCommand();
                     mEmulator.sendMouseEvent(cmd.mouseButton, cmd.mouseColumn, cmd.mouseRow, cmd.mousePressed);
+                    publishFrame();
                     break;
                 case MSG_CLEAR_SCROLL_COUNTER:
                     mMetrics.recordControlCommand();
                     mEmulator.clearScrollCounter();
+                    publishFrame();
                     break;
                 case MSG_SET_CURSOR_BLINK_STATE:
                     mMetrics.recordControlCommand();

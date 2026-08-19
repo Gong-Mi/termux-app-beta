@@ -243,6 +243,33 @@ public class TerminalParserWorkerTest extends TestCase {
         }
     }
 
+    public void testInputControlsPublishFramesAfterWorkerMutation() throws Exception {
+        WorkerHarness h = new WorkerHarness(MAX_BYTES_PER_BATCH);
+        h.worker.start();
+        try {
+            h.worker.requestPaste("paste-me");
+            assertTrue("Paste must publish a post-mutation frame",
+                    h.client.textLatch.await(5, TimeUnit.SECONDS));
+
+            h.client.textLatch = new CountDownLatch(1);
+            h.worker.requestSendMouseEvent(TerminalEmulator.MOUSE_LEFT_BUTTON, 3, 4, true);
+            assertTrue("Mouse input must publish a post-mutation frame",
+                    h.client.textLatch.await(5, TimeUnit.SECONDS));
+
+            h.client.textLatch = new CountDownLatch(1);
+            h.worker.requestClearScrollCounter();
+            assertTrue("Scroll-counter control must publish a post-mutation frame",
+                    h.client.textLatch.await(5, TimeUnit.SECONDS));
+
+            assertEquals("Each input control must publish exactly one frame", 3, h.sink.size());
+            assertEquals("All input controls must be accounted for", 3,
+                    h.worker.getMetricsSnapshot().controlCommands);
+        } finally {
+            h.worker.stop();
+            assertTrue(h.worker.awaitStopped(5000));
+        }
+    }
+
     public void testStopRejectsFinishAndDuplicateStop() throws Exception {
         WorkerHarness h = new WorkerHarness(MAX_BYTES_PER_BATCH);
         h.worker.start();
