@@ -42,12 +42,13 @@ jobs:
           path: |
             ~/.gradle/caches
             ~/.gradle/wrapper/dists
-          key: gradle-validation-${{ runner.os }}-${{ env.CACHE_EPOCH }}-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties', 'gradle/libs.versions.toml', 'gradle.properties', 'settings.gradle*') }}
+          key: gradle-validation-${{ runner.os }}-${{ env.CACHE_EPOCH }}-${{ hashFiles('**/build.gradle', '**/build.gradle.kts', '**/settings.gradle', '**/settings.gradle.kts', 'gradle/libs.versions.toml', 'gradle.properties', 'gradle/wrapper/gradle-wrapper.properties', 'buildSrc/**') }}
 
       - name: Record cache state
         run: |
           set -euo pipefail
           hit='${{ steps.cache.outputs.cache-hit }}'
+          if [ "$hit" != 'true' ]; then hit=false; fi
           modules="$HOME/.gradle/caches/modules-2/files-2.1"
           wrapper="$HOME/.gradle/wrapper/dists"
           module_files=0
@@ -87,4 +88,4 @@ jobs:
           path: |
             ~/.gradle/caches
             ~/.gradle/wrapper/dists
-          key: gradle-validation-${{ runner.os }}-${{ env.CACHE_EPOCH }}-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties', 'gradle/libs.versions.toml', 'gradle.properties', 'settings.gradle*') }}
+          key: gradle-validation-${{ runner.os }}-${{ env.CACHE_EPOCH }}-${{ hashFiles('**/build.gradle', '**/build.gradle.kts', '**/settings.gradle', '**/settings.gradle.kts', 'gradle/libs.versions.toml', 'gradle.properties', 'gradle/wrapper/gradle-wrapper.properties', 'buildSrc/**') }}
