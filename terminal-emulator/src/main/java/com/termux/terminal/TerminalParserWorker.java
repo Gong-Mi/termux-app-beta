@@ -59,8 +59,16 @@ public final class TerminalParserWorker {
     }
 
     public void stop() {
-        mStopped = true;
-        enqueueControl(Command.stop());
+        // Enqueue the sentinel before changing the loop state.  Setting mStopped first
+        // would make enqueueControl() discard the only wake-up while the worker is
+        // blocked in BlockingQueue.take().
+        mCommandQueue.add(Command.stop());
+    }
+
+    /** Test/lifecycle hook: wait until the worker has consumed the stop sentinel. */
+    public boolean awaitStopped(long timeoutMs) throws InterruptedException {
+        mThread.join(timeoutMs);
+        return !mThread.isAlive();
     }
 
     public void requestAppend() {
@@ -210,13 +218,11 @@ public final class TerminalParserWorker {
 
     private void processFinish(int exitCode) {
         // Drain any input still queued before closing the PTY file descriptor.
-        int budgetRemaining = mMaxBytesPerBatch;
-        while (budgetRemaining > 0 && !mStopped) {
-            int toRead = Math.min(budgetRemaining, mReceiveBuffer.length);
+        while (!mStopped) {
+            int toRead = mReceiveBuffer.length;
             int read = mInputQueue.read(mReceiveBuffer, 0, toRead, false);
             if (read <= 0) break;
             mEmulator.append(mReceiveBuffer, read);
-            budgetRemaining -= read;
         }
 
         if (mSession != null) mSession.cleanupResources(exitCode);

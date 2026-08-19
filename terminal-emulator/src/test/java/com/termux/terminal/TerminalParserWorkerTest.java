@@ -220,10 +220,13 @@ public class TerminalParserWorkerTest extends TestCase {
     }
 
     public void testFinishDrainsRemainingInput() throws Exception {
-        WorkerHarness h = new WorkerHarness(MAX_BYTES_PER_BATCH);
+        WorkerHarness h = new WorkerHarness(64);
         h.worker.start();
         try {
-            writeString(h.inputQueue, "drain-me");
+            StringBuilder payload = new StringBuilder(4096);
+            for (int i = 0; i < 4096; i++) payload.append('x');
+            payload.append(" drain-me");
+            writeString(h.inputQueue, payload.toString());
             h.worker.requestFinish(0);
             waitForFinish(h.client);
 
@@ -244,8 +247,7 @@ public class TerminalParserWorkerTest extends TestCase {
             h.worker.requestAppend();
             h.worker.requestPaste("ignored");
             h.worker.stop();
-            Thread.sleep(300);
-            assertTrue("Worker should stop cleanly", true);
+            assertTrue("Worker should stop cleanly", h.worker.awaitStopped(5000));
         } finally {
             h.worker.stop();
         }

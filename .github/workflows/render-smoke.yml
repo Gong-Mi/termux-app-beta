@@ -123,7 +123,9 @@ jobs:
           adb install -r "$APK"
           # Grant storage permission so the bootstrap can write, then cold start
           adb shell pm grant com.termux android.permission.WRITE_EXTERNAL_STORAGE || true
-          adb shell am start -W -n com.termux/.app.TermuxActivity
+          # DEBUG_FRAME_INFO (debug builds only) makes TerminalView.logFrameInfo()
+          # emit one 'frame rev=' line per render, feeding the frame pipeline assertion.
+          adb shell am start -W -n com.termux/.app.TermuxActivity --ez com.termux.DEBUG_FRAME_INFO true
           sleep 20
           adb shell ps -A | grep com.termux
           # First screenshot right after boot-to-idle
@@ -134,6 +136,15 @@ jobs:
           sleep 3
           adb exec-out screencap -p > render_after_input.png
           adb logcat -d | grep -iE 'FATAL|AndroidRuntime.*com.termux' | tail -20 || true
+
+      - name: Frame pipeline smoke assertion
+        run: |
+          set -euo pipefail
+          adb logcat -d > logcat-smoke.txt
+          grep -E 'Termux:TerminalView.*frame rev=' logcat-smoke.txt > frame-info-lines.txt \
+            || { echo 'NO_FRAME_INFO_LINES'; tail -50 logcat-smoke.txt; exit 1; }
+          wc -l frame-info-lines.txt
+          python3 .github/workflows/verify_frame_metrics.py frame-info-lines.txt --min-lines 3
 
       - name: Pixel assertions
         run: |
@@ -149,6 +160,8 @@ jobs:
           path: |
             render_initial.png
             render_after_input.png
+            logcat-smoke.txt
+            frame-info-lines.txt
             /tmp/emu.log
           if-no-files-found: warn
 

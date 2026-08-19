@@ -166,26 +166,8 @@ jobs:
       - name: Verify frame metrics invariants
         run: |
           set -euo pipefail
-          echo '== frame metrics invariant check =='
-          last=$(grep -E 'frame rev=' terminal-log-summary.txt | tail -1)
-          if [ -z "$last" ]; then
-            echo 'ERROR: no frame diagnostic lines found' >&2
-            exit 1
-          fi
-          echo "$last"
-          # Extract counters with simple regex from the log line.
-          published=$(echo "$last" | grep -oE 'published=[0-9]+' | cut -d= -f2)
-          drawn=$(echo "$last" | grep -oE 'drawn=[0-9]+' | cut -d= -f2)
-          dropped=$(echo "$last" | grep -oE 'dropped=[0-9]+' | cut -d= -f2)
-          coalesced=$(echo "$last" | grep -oE 'coalesced=[0-9]+' | cut -d= -f2)
-          acked=$(echo "$last" | grep -oE 'acked=[0-9]+' | cut -d= -f2)
-          lastDrawnRev=$(echo "$last" | grep -oE 'lastDrawnRev=[0-9-]+' | cut -d= -f2)
-          lastPublishedRev=$(echo "$last" | grep -oE 'lastPublishedRev=[0-9-]+' | cut -d= -f2)
-          [ "$published" -ge 0 ] && [ "$drawn" -ge 0 ] && [ "$dropped" -ge 0 ] && [ "$coalesced" -ge 0 ] && [ "$acked" -ge -1 ]
-          [ "$((drawn + dropped))" -le "$published" ] || { echo "ERROR: drawn($drawn)+dropped($dropped) > published($published)" >&2; exit 1; }
-          [ "$acked" -eq "$lastDrawnRev" ] || { echo "ERROR: acked($acked) != lastDrawnRev($lastDrawnRev)" >&2; exit 1; }
-          [ "$acked" -le "$lastPublishedRev" ] || { echo "ERROR: acked($acked) > lastPublishedRev($lastPublishedRev)" >&2; exit 1; }
-          echo "PASS published=$published drawn=$drawn dropped=$dropped coalesced=$coalesced acked=$acked inFlight=$((published-drawn-dropped))"
+          echo '== frame metric invariant check (all lines) =='
+          python3 .github/workflows/verify_frame_metrics.py terminal-log-summary.txt --min-lines 1
 
       - name: Upload pixel-loop stress evidence
         if: always()
