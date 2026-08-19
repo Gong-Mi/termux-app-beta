@@ -27,7 +27,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        gpu: [swiftshader_indirect, off]
+        gpu: [swiftshader_indirect, "off"]
     steps:
       - name: Record runner spec
         run: |
