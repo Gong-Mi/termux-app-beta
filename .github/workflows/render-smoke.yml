@@ -79,6 +79,26 @@ jobs:
           distribution: temurin
           cache: gradle
 
+      - name: Verify restored Gradle cache files
+        run: |
+          set -euo pipefail
+          modules="$HOME/.gradle/caches/modules-2/files-2.1"
+          wrapper="$HOME/.gradle/wrapper/dists"
+          test -d "$modules"
+          test -d "$wrapper"
+          module_files=$(find "$modules" -type f | wc -l)
+          wrapper_files=$(find "$wrapper" -type f | wc -l)
+          test "$module_files" -gt 0
+          test "$wrapper_files" -gt 0
+          module_size=$(du -sh "$modules" | cut -f1)
+          wrapper_size=$(du -sh "$wrapper" | cut -f1)
+          {
+            echo "GRADLE_MODULE_CACHE_FILES=$module_files"
+            echo "GRADLE_MODULE_CACHE_SIZE=$module_size"
+            echo "GRADLE_WRAPPER_CACHE_FILES=$wrapper_files"
+            echo "GRADLE_WRAPPER_CACHE_SIZE=$wrapper_size"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
       - name: Install SDK pieces (timed)
         run: |
           set -x
