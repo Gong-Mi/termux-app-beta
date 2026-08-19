@@ -8,8 +8,12 @@ name: Pixel-loop prebuilt ELF integrity
 on:
   push:
     branches: [ master ]
+    paths:
+      - '.github/workflows/pixel-loop-prebuilt.yml'
   pull_request:
     branches: [ master ]
+    paths:
+      - '.github/workflows/pixel-loop-prebuilt.yml'
   workflow_dispatch:
 
 env:

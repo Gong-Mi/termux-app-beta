@@ -11,8 +11,36 @@ name: Render smoke (SwiftShader)
 on:
   push:
     branches: [ master ]
+    paths:
+      - 'app/**'
+      - 'support_ui/**'
+      - 'terminal-emulator/**'
+      - 'terminal-view/**'
+      - 'termux-shared/**'
+      - 'buildSrc/**'
+      - 'scripts/**'
+      - '*.gradle'
+      - '*.properties'
+      - 'gradle/**'
+      - 'gradlew'
+      - 'gradlew.bat'
+      - '.github/workflows/render-smoke.yml'
   pull_request:
     branches: [ master ]
+    paths:
+      - 'app/**'
+      - 'support_ui/**'
+      - 'terminal-emulator/**'
+      - 'terminal-view/**'
+      - 'termux-shared/**'
+      - 'buildSrc/**'
+      - 'scripts/**'
+      - '*.gradle'
+      - '*.properties'
+      - 'gradle/**'
+      - 'gradlew'
+      - 'gradlew.bat'
+      - '.github/workflows/render-smoke.yml'
   workflow_dispatch:
 
 env:

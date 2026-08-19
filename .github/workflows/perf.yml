@@ -3,6 +3,17 @@ name: Perf (terminal emulator, x86_64 + aarch64)
 on:
   pull_request:
     branches: [ master ]
+    paths:
+      - 'terminal-emulator/**'
+      - 'terminal-view/**'
+      - 'buildSrc/**'
+      - 'scripts/**'
+      - '*.gradle'
+      - '*.properties'
+      - 'gradle/**'
+      - 'gradlew'
+      - 'gradlew.bat'
+      - '.github/workflows/perf.yml'
   workflow_dispatch:
 
 env:

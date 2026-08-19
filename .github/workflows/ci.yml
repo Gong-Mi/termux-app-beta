@@ -3,8 +3,36 @@ name: CI (x86 + ARM Linux)
 on:
   push:
     branches: [ master ]
+    paths:
+      - 'app/**'
+      - 'support_ui/**'
+      - 'terminal-emulator/**'
+      - 'terminal-view/**'
+      - 'termux-shared/**'
+      - 'buildSrc/**'
+      - 'scripts/**'
+      - '*.gradle'
+      - '*.properties'
+      - 'gradle/**'
+      - 'gradlew'
+      - 'gradlew.bat'
+      - '.github/workflows/ci.yml'
   pull_request:
     branches: [ master ]
+    paths:
+      - 'app/**'
+      - 'support_ui/**'
+      - 'terminal-emulator/**'
+      - 'terminal-view/**'
+      - 'termux-shared/**'
+      - 'buildSrc/**'
+      - 'scripts/**'
+      - '*.gradle'
+      - '*.properties'
+      - 'gradle/**'
+      - 'gradlew'
+      - 'gradlew.bat'
+      - '.github/workflows/ci.yml'
   workflow_dispatch:
 
 env:
