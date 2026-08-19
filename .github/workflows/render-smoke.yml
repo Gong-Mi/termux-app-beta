@@ -129,7 +129,7 @@ jobs:
           # already-running task after APK installation.
           adb shell am force-stop com.termux
           adb shell am start -W -S -n com.termux/.app.TermuxActivity \
-            --activity-clear-task --activity-new-task --ez com.termux.DEBUG_FRAME_INFO true
+            --ez com.termux.DEBUG_FRAME_INFO true
           sleep 20
           adb shell ps -A | grep com.termux
           # First screenshot right after boot-to-idle
