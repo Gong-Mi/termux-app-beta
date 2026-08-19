@@ -87,6 +87,19 @@ public class RenderFrameMetricsTest {
     }
 
     @Test
+    public void redrawAndDropCountsAreNotAnExclusivePartition() {
+        RenderFrameMetrics m = new RenderFrameMetrics();
+        m.publish(1);
+        m.ack(1);
+        m.ack(1); // same frame may be drawn again on a later onDraw
+        m.drop();  // mailbox replacement or renderer failure is separately cumulative
+        assertEquals(1L, m.getPublishedFrameCount());
+        assertEquals(2L, m.getDrawnFrameCount());
+        assertEquals(1L, m.getDroppedFrameCount());
+        assertTrue(m.isConsistent());
+    }
+
+    @Test
     public void consistencyDetectsOverAck() {
         RenderFrameMetrics m = new RenderFrameMetrics();
         m.publish(1);

@@ -10,7 +10,7 @@ TerminalView.logFrameInfo() with DEBUG_FRAME_INFO enabled, e.g.
 Invariants checked (per log line, in order):
   1. revision is non-decreasing across draw log lines (a frame may be redrawn)
   2. lastPublishedRev monotonically non-decreasing
-  3. published >= drawn + dropped  (a frame is either drawn or dropped, never both)
+  3. all lifecycle counters are non-negative
   4. acked == lastDrawnRev        (ack records the last successfully drawn revision)
   5. acked <= lastPublishedRev    (never ack a revision that was not published)
   6. visible > 0                  (render always has a non-empty viewport)
@@ -55,8 +55,11 @@ def check_row(row):
 
     if None in (published, drawn, dropped, acked, last_drawn_rev, last_published_rev, visible):
         return f"missing field in row: {row}"
-    if published < drawn + dropped:
-        return f"published({published}) < drawn({drawn}) + dropped({dropped})"
+    for name, value in (("published", published), ("drawn", drawn), ("dropped", dropped),
+                        ("acked", acked), ("lastDrawnRev", last_drawn_rev),
+                        ("lastPublishedRev", last_published_rev)):
+        if value < 0:
+            return f"{name}({value}) < 0"
     if acked != last_drawn_rev:
         return f"acked({acked}) != lastDrawnRev({last_drawn_rev})"
     if acked > last_published_rev:
@@ -100,13 +103,12 @@ def main():
             sys.exit(1)
 
     last = rows[-1]
-    in_flight = last.get("published", 0) - last.get("drawn", 0) - last.get("dropped", 0)
     max_rev_gap = max((rows[i]["rev"] - rows[i - 1]["rev"]) for i in range(1, len(rows)))
     print("PASS frames={} firstRev={} lastRev={} published={} drawn={} dropped={} "
-          "coalesced={} acked={} inFlight={} maxRevGap={}"
+          "coalesced={} acked={} maxRevGap={}"
           .format(len(rows), rows[0]["rev"], last["rev"], last.get("published", 0),
                   last.get("drawn", 0), last.get("dropped", 0), last.get("coalesced", 0),
-                  last.get("acked", 0), in_flight, max_rev_gap))
+                  last.get("acked", 0), max_rev_gap))
 
 
 if __name__ == "__main__":
