@@ -125,7 +125,11 @@ jobs:
           adb shell pm grant com.termux android.permission.WRITE_EXTERNAL_STORAGE || true
           # DEBUG_FRAME_INFO (debug builds only) makes TerminalView.logFrameInfo()
           # emit one 'frame rev=' line per render, feeding the frame pipeline assertion.
-          adb shell am start -W -n com.termux/.app.TermuxActivity --ez com.termux.DEBUG_FRAME_INFO true
+          # Force a fresh Activity instance so the intent extra is not lost to an
+          # already-running task after APK installation.
+          adb shell am force-stop com.termux
+          adb shell am start -W -S -n com.termux/.app.TermuxActivity \
+            --activity-clear-task --activity-new-task --ez com.termux.DEBUG_FRAME_INFO true
           sleep 20
           adb shell ps -A | grep com.termux
           # First screenshot right after boot-to-idle
