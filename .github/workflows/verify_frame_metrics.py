@@ -14,6 +14,9 @@ Invariants checked (per log line, in order):
   4. acked == lastDrawnRev        (ack records the last successfully drawn revision)
   5. acked <= lastPublishedRev    (never ack a revision that was not published)
   6. visible > 0                  (render always has a non-empty viewport)
+  7. parser counters are present, non-negative and monotonic
+  8. parser and render counters are kept as separate snapshots (they may differ
+     by one or more events because the diagnostic line is not an atomic sample)
 
 Optional: --min-lines N requires at least N parsed lines (default 1).
 
@@ -24,7 +27,8 @@ import re
 import sys
 
 FIELD_RE = re.compile(r"(published|lastPublishedRev|drawn|lastDrawnRev|dropped|coalesced"
-                      r"|acked|visible|rev)=(-?\d+)")
+                      r"|acked|visible|rev|parserBytes|appendCommands|controlCommands"
+                      r"|parserFrames|finishCommands|stopCommands)=(-?\d+)")
 
 
 def parse_lines(path):
@@ -52,11 +56,17 @@ def check_row(row):
     last_drawn_rev = row.get("lastDrawnRev")
     last_published_rev = row.get("lastPublishedRev")
     visible = row.get("visible")
+    parser_fields = ("parserBytes", "appendCommands", "controlCommands", "parserFrames",
+                     "finishCommands", "stopCommands")
 
     if None in (published, drawn, dropped, acked, last_drawn_rev, last_published_rev, visible):
         return f"missing field in row: {row}"
+    missing_parser = [name for name in parser_fields if row.get(name) is None]
+    if missing_parser:
+        return f"missing parser field(s): {', '.join(missing_parser)}"
     for name, value in (("published", published), ("drawn", drawn), ("dropped", dropped),
-                        ("lastPublishedRev", last_published_rev)):
+                        ("lastPublishedRev", last_published_rev),
+                        *[(name, row[name]) for name in parser_fields]):
         if value < 0:
             return f"{name}({value}) < 0"
     if acked != last_drawn_rev:
@@ -84,6 +94,9 @@ def main():
 
     prev_rev = None
     prev_published_rev = None
+    parser_fields = ("parserBytes", "appendCommands", "controlCommands", "parserFrames",
+                     "finishCommands", "stopCommands")
+    prev_parser = {name: None for name in parser_fields}
     for i, row in enumerate(rows):
         rev = row["rev"]
         if prev_rev is not None and rev < prev_rev:
@@ -95,6 +108,13 @@ def main():
             print(f"FAIL: lastPublishedRev decreased at line {i + 1}: {lpr} < {prev_published_rev}")
             sys.exit(1)
         prev_published_rev = lpr
+        for name in parser_fields:
+            value = row[name]
+            previous = prev_parser[name]
+            if previous is not None and value < previous:
+                print(f"FAIL: {name} decreased at line {i + 1}: {value} < {previous}")
+                sys.exit(1)
+            prev_parser[name] = value
         err = check_row(row)
         if err:
             print(f"FAIL: line {i + 1}: {err}")
@@ -104,10 +124,11 @@ def main():
     last = rows[-1]
     max_rev_gap = max((rows[i]["rev"] - rows[i - 1]["rev"]) for i in range(1, len(rows)))
     print("PASS frames={} firstRev={} lastRev={} published={} drawn={} dropped={} "
-          "coalesced={} acked={} maxRevGap={}"
+          "coalesced={} acked={} parserBytes={} parserFrames={} maxRevGap={}"
           .format(len(rows), rows[0]["rev"], last["rev"], last.get("published", 0),
                   last.get("drawn", 0), last.get("dropped", 0), last.get("coalesced", 0),
-                  last.get("acked", 0), max_rev_gap))
+                  last.get("acked", 0), last.get("parserBytes", 0),
+                  last.get("parserFrames", 0), max_rev_gap))
 
 
 if __name__ == "__main__":
