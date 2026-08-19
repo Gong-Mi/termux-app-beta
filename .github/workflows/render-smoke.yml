@@ -136,7 +136,7 @@ jobs:
           # a false render failure; the later step still requires three valid lines.
           frame_seen=0
           for _ in $(seq 1 40); do
-            if adb logcat -d -s 'Termux:TerminalView:I' '*:S' | grep -q 'frame rev='; then
+            if adb logcat -d | grep -q 'Termux:TerminalView.*frame rev='; then
               frame_seen=1
               break
             fi
