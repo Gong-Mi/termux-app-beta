@@ -225,6 +225,24 @@ public class TerminalParserWorkerTest extends TestCase {
         }
     }
 
+    public void testVisibleControlMutationsPublishFrames() throws Exception {
+        WorkerHarness h = new WorkerHarness(MAX_BYTES_PER_BATCH);
+        h.worker.start();
+        try {
+            h.worker.requestSetCursorBlinkState(false);
+            h.worker.requestSetCursorBlinkingEnabled(false);
+            h.worker.requestResetColors();
+            long deadline = System.currentTimeMillis() + 5000;
+            while (h.sink.size() < 3 && System.currentTimeMillis() < deadline) {
+                Thread.sleep(10);
+            }
+            assertEquals("Each visible control mutation must publish a frame", 3, h.sink.size());
+        } finally {
+            h.worker.stop();
+            assertTrue(h.worker.awaitStopped(5000));
+        }
+    }
+
     public void testCommandOrderingResizeResetFinish() throws Exception {
         WorkerHarness h = new WorkerHarness(MAX_BYTES_PER_BATCH);
         h.worker.start();

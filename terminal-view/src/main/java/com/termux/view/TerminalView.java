@@ -66,6 +66,8 @@ public final class TerminalView extends View {
     private TerminalRenderFrame mLastRenderFrame;
     /** Latest-only mailbox from the parser worker to the render thread. */
     private TerminalRenderMailbox<TerminalModelFrame> mRenderMailbox;
+    /** Most recently acquired model frame, reused for View-only projection changes. */
+    private TerminalModelFrame mLastModelFrame;
     /** Immutable accounting object tracking publish/draw/ack lifecycle. */
     private final RenderFrameMetrics mFrameMetrics = new RenderFrameMetrics();
     /** 打开后每帧打印变更台账摘要（默认关闭，零开销）。 */
@@ -319,6 +321,7 @@ public final class TerminalView extends View {
         mCombiningAccent = 0;
         mTopRow = 0;
         mLastRenderFrame = null;
+        mLastModelFrame = null;
 
         final TerminalRenderMailbox<TerminalModelFrame> mailbox = new TerminalRenderMailbox<>(mFrameMetrics);
         mRenderMailbox = mailbox;
@@ -524,6 +527,7 @@ public final class TerminalView extends View {
         }
 
         mTermSession.clearScrollCounter();
+        mTermSession.setViewport(mTopRow);
 
         invalidate();
         if (mAccessibilityEnabled) setContentDescription(getText());
@@ -605,6 +609,7 @@ public final class TerminalView extends View {
 
     /** Perform a scroll, either from dragging the screen or by scrolling a mouse wheel. */
     void doScroll(MotionEvent event, int rowsDown) {
+        int previousTopRow = mTopRow;
         boolean up = rowsDown < 0;
         int amount = Math.abs(rowsDown);
         for (int i = 0; i < amount; i++) {
@@ -619,6 +624,7 @@ public final class TerminalView extends View {
                 if (!awakenScrollBars()) invalidate();
             }
         }
+        if (mTopRow != previousTopRow) mTermSession.setViewport(mTopRow);
     }
 
     /** Overriding {@link View#onGenericMotionEvent(MotionEvent)}. */
@@ -1052,14 +1058,16 @@ public final class TerminalView extends View {
             }
 
             TerminalModelFrame model = mRenderMailbox != null ? mRenderMailbox.acquireLatest() : null;
-            if (model != null) {
+            if (model != null) mLastModelFrame = model;
+            if (mLastModelFrame != null) {
                 // render the terminal view and highlight any selected text
                 int[] selectors = mDefaultSelectors;
                 if (mTextSelectionCursorController != null) {
                     mTextSelectionCursorController.getSelectors(selectors);
                 }
                 // 显式交接：一次性采集本帧渲染所需的一切，渲染器只读该帧对象。
-                mLastRenderFrame = new TerminalRenderFrame(model, mTopRow, selectors[0], selectors[1], selectors[2], selectors[3]);
+                mLastRenderFrame = new TerminalRenderFrame(mLastModelFrame, mLastModelFrame.topRow,
+                    selectors[0], selectors[1], selectors[2], selectors[3]);
             }
             TerminalRenderFrame frame = mLastRenderFrame;
             if (frame == null) {
@@ -1177,6 +1185,7 @@ public final class TerminalView extends View {
 
     public void setTopRow(int mTopRow) {
         this.mTopRow = mTopRow;
+        if (mTermSession != null) mTermSession.setViewport(mTopRow);
     }
 
 

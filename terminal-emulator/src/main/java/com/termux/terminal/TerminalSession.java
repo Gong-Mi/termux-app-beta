@@ -164,6 +164,13 @@ public final class TerminalSession extends TerminalOutput {
         }
     }
 
+    /** Request a new immutable model frame for a transcript viewport change. */
+    public void setViewport(int topRow) {
+        if (mParserWorker != null) {
+            mParserWorker.requestViewport(topRow);
+        }
+    }
+
     /** The terminal title as set through escape sequences or null if none set. */
     public String getTitle() {
         return (mEmulator == null) ? null : mEmulator.getTitle();

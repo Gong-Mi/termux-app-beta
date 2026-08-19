@@ -189,14 +189,17 @@ public final class TerminalParserWorker {
                 case MSG_SET_CURSOR_BLINK_STATE:
                     mMetrics.recordControlCommand();
                     mEmulator.setCursorBlinkState(cmd.enabled);
+                    publishFrame();
                     break;
                 case MSG_SET_CURSOR_BLINKING_ENABLED:
                     mMetrics.recordControlCommand();
                     mEmulator.setCursorBlinkingEnabled(cmd.enabled);
+                    publishFrame();
                     break;
                 case MSG_RESET_COLORS:
                     mMetrics.recordControlCommand();
                     mEmulator.mColors.reset();
+                    publishFrame();
                     break;
                 case MSG_FINISH:
                     mMetrics.recordControlCommand();
