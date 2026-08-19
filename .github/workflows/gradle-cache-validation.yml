@@ -1,6 +1,10 @@
 name: Gradle cache validation
 
 on:
+  push:
+    branches: [ refactor/parser-worker-mailbox ]
+    paths:
+      - '.github/workflows/gradle-cache-validation.yml'
   workflow_dispatch:
     inputs:
       cache_epoch:
@@ -14,10 +18,11 @@ permissions:
 
 env:
   JAVA_VERSION: 21
+  CACHE_EPOCH: ${{ inputs.cache_epoch || 'push-v1' }}
 
 jobs:
   validate:
-    name: Gradle cache ${{ inputs.cache_epoch }}
+    name: Gradle cache ${{ inputs.cache_epoch || 'push-v1' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -37,7 +42,7 @@ jobs:
           path: |
             ~/.gradle/caches
             ~/.gradle/wrapper/dists
-          key: gradle-validation-${{ runner.os }}-${{ inputs.cache_epoch }}-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties', 'gradle/libs.versions.toml', 'gradle.properties', 'settings.gradle*') }}
+          key: gradle-validation-${{ runner.os }}-${{ env.CACHE_EPOCH }}-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties', 'gradle/libs.versions.toml', 'gradle.properties', 'settings.gradle*') }}
 
       - name: Record cache state
         run: |
@@ -50,9 +55,9 @@ jobs:
           if [ -d "$modules" ]; then module_files=$(find "$modules" -type f | wc -l); fi
           if [ -d "$wrapper" ]; then wrapper_files=$(find "$wrapper" -type f | wc -l); fi
           {
-            echo "CACHE_EPOCH=${{ inputs.cache_epoch }}"
+            echo "CACHE_EPOCH=$CACHE_EPOCH"
             echo "CACHE_HIT=$hit"
-            echo "CACHE_KEY=gradle-validation-${{ runner.os }}-${{ inputs.cache_epoch }}-<gradle-files-hash>"
+            echo "CACHE_KEY=gradle-validation-${{ runner.os }}-$CACHE_EPOCH-<gradle-files-hash>"
             echo "MODULE_CACHE_FILES=$module_files"
             echo "WRAPPER_CACHE_FILES=$wrapper_files"
           } | tee -a "$GITHUB_STEP_SUMMARY"
@@ -82,4 +87,4 @@ jobs:
           path: |
             ~/.gradle/caches
             ~/.gradle/wrapper/dists
-          key: gradle-validation-${{ runner.os }}-${{ inputs.cache_epoch }}-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties', 'gradle/libs.versions.toml', 'gradle.properties', 'settings.gradle*') }}
+          key: gradle-validation-${{ runner.os }}-${{ env.CACHE_EPOCH }}-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties', 'gradle/libs.versions.toml', 'gradle.properties', 'settings.gradle*') }}
