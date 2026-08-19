@@ -42,17 +42,20 @@ public class TerminalParserWorkerTest extends TestCase {
     private static final class CapturingClient implements TerminalSessionClient {
         final AtomicInteger textChangedCount = new AtomicInteger(0);
         final AtomicInteger finishedCount = new AtomicInteger(0);
+        volatile String lastCallbackThread;
         volatile CountDownLatch textLatch = new CountDownLatch(1);
         volatile CountDownLatch finishLatch = new CountDownLatch(1);
 
         @Override
         public void onTextChanged(@NonNull TerminalSession changedSession) {
+            lastCallbackThread = Thread.currentThread().getName();
             textChangedCount.incrementAndGet();
             textLatch.countDown();
         }
 
         @Override
         public void onSessionFinished(@NonNull TerminalSession finishedSession) {
+            lastCallbackThread = Thread.currentThread().getName();
             finishedCount.incrementAndGet();
             finishLatch.countDown();
         }
@@ -138,6 +141,8 @@ public class TerminalParserWorkerTest extends TestCase {
             TerminalModelFrame first = h.sink.last();
             assertNotNull(first);
             assertTrue("Screen should contain 'hello'", first.screen.getTranscriptText().contains("hello"));
+            assertEquals("Raw worker callback must run on parser thread",
+                    "TermSessionParserWorker", h.client.lastCallbackThread);
             long firstRevision = first.screenRevision;
             assertTrue("Revision should be positive", firstRevision > 0);
 
@@ -151,6 +156,10 @@ public class TerminalParserWorkerTest extends TestCase {
             assertTrue(second.screen.getTranscriptText().contains("world"));
             assertTrue("Revision must increase monotonically",
                     second.screenRevision > firstRevision);
+            assertTrue("Earlier frame must remain an immutable snapshot",
+                    first.screen.getTranscriptText().contains("hello"));
+            assertFalse("Earlier frame must not observe later parser mutation",
+                    first.screen.getTranscriptText().contains("world"));
         } finally {
             h.worker.stop();
         }
