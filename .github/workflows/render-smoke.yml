@@ -127,10 +127,26 @@ jobs:
           # emit one 'frame rev=' line per render, feeding the frame pipeline assertion.
           # Force a fresh Activity instance so the intent extra is not lost to an
           # already-running task after APK installation.
+          adb logcat -c
           adb shell am force-stop com.termux
           adb shell am start -W -S -n com.termux/.app.TermuxActivity \
             --ez com.termux.DEBUG_FRAME_INFO true
-          sleep 20
+          # Boot and bootstrap time varies on GitHub-hosted emulator instances. Wait
+          # for the first real frame instead of turning that scheduling variance into
+          # a false render failure; the later step still requires three valid lines.
+          frame_seen=0
+          for _ in $(seq 1 40); do
+            if adb logcat -d -s 'Termux:TerminalView:I' '*:S' | grep -q 'frame rev='; then
+              frame_seen=1
+              break
+            fi
+            sleep 1
+          done
+          if [ "$frame_seen" -ne 1 ]; then
+            echo 'Timed out waiting for first frame diagnostic'
+            adb logcat -d | tail -100
+            exit 1
+          fi
           adb shell ps -A | grep com.termux
           # First screenshot right after boot-to-idle
           adb exec-out screencap -p > render_initial.png
