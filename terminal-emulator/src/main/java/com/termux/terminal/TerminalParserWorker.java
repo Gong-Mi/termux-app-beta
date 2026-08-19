@@ -39,6 +39,7 @@ public final class TerminalParserWorker {
     private final BlockingQueue<Command> mCommandQueue = new LinkedBlockingQueue<>();
     private final Thread mThread;
     private final AtomicBoolean mAppendScheduled = new AtomicBoolean(false);
+    private final AtomicBoolean mStopRequested = new AtomicBoolean(false);
 
     private volatile Viewport mViewport = new Viewport(0);
     private volatile boolean mStopped;
@@ -63,7 +64,9 @@ public final class TerminalParserWorker {
         // Enqueue the sentinel before changing the loop state.  Setting mStopped first
         // would make enqueueControl() discard the only wake-up while the worker is
         // blocked in BlockingQueue.take().
-        mCommandQueue.add(Command.stop());
+        if (mStopRequested.compareAndSet(false, true)) {
+            mCommandQueue.add(Command.stop());
+        }
     }
 
     /** Test/lifecycle hook: wait until the worker has consumed the stop sentinel. */
@@ -88,7 +91,7 @@ public final class TerminalParserWorker {
 
     public void requestAppend() {
         // Collapse multiple append notifications into at most one queued command.
-        if (mAppendScheduled.compareAndSet(false, true)) {
+        if (!mStopRequested.get() && mAppendScheduled.compareAndSet(false, true)) {
             mCommandQueue.add(Command.append());
         }
     }
@@ -134,7 +137,7 @@ public final class TerminalParserWorker {
     }
 
     private void enqueueControl(Command cmd) {
-        if (mStopped) return;
+        if (mStopped || mStopRequested.get()) return;
         // Control commands must not be silently dropped; LinkedBlockingQueue is unbounded,
         // so add() throws on failure instead of returning false.
         mCommandQueue.add(cmd);
@@ -237,14 +240,14 @@ public final class TerminalParserWorker {
             mAppendScheduled.set(false);
             // A concurrent requestAppend() may have been collapsed while we were processing.
             // If input still remains, ensure another append is scheduled.
-            if (!mStopped && mInputQueue.hasData()) {
+            if (!mStopped && !mStopRequested.get() && mInputQueue.hasData()) {
                 scheduleAppendIfNeeded();
             }
         }
     }
 
     private void scheduleAppendIfNeeded() {
-        if (mAppendScheduled.compareAndSet(false, true)) {
+        if (!mStopRequested.get() && mAppendScheduled.compareAndSet(false, true)) {
             mCommandQueue.add(Command.append());
         }
     }

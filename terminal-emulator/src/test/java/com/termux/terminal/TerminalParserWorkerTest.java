@@ -243,6 +243,18 @@ public class TerminalParserWorkerTest extends TestCase {
         }
     }
 
+    public void testStopRejectsFinishAndDuplicateStop() throws Exception {
+        WorkerHarness h = new WorkerHarness(MAX_BYTES_PER_BATCH);
+        h.worker.start();
+        h.worker.stop();
+        h.worker.requestFinish(7);
+        h.worker.stop();
+        assertTrue(h.worker.awaitStopped(5000));
+        assertEquals("Finish must not be queued after stop was requested", 0, h.client.finishedCount.get());
+        assertEquals("Only one stop sentinel should be processed", 1,
+                h.worker.getMetricsSnapshot().stopCommands);
+    }
+
     public void testCommandOrderingResizeResetFinish() throws Exception {
         WorkerHarness h = new WorkerHarness(MAX_BYTES_PER_BATCH);
         h.worker.start();
