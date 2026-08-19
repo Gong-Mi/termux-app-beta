@@ -121,6 +121,7 @@ public final class TerminalSession extends TerminalOutput {
         mClient = client;
         mEmulatorClient = wrapClient(client);
 
+        if (mParserWorker != null) mParserWorker.setClient(mEmulatorClient);
         if (mEmulator != null)
             mEmulator.updateTerminalSessionClient(mEmulatorClient);
     }
@@ -138,6 +139,13 @@ public final class TerminalSession extends TerminalOutput {
                 if (delegate != null) delegate.publishFrame(frame);
             }
         };
+        if (mParserWorker != null) mParserWorker.setFrameSink(mFrameSink);
+    }
+
+    /** Detach the current view route; future worker frames are not delivered to it. */
+    public synchronized void detachFrameSink() {
+        mFrameSink = frame -> mLatestFrame = frame;
+        if (mParserWorker != null) mParserWorker.setFrameSink(mFrameSink);
     }
 
     /** Return a point-in-time snapshot of parser-side pipeline counters. */

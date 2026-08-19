@@ -202,6 +202,29 @@ public class TerminalParserWorkerTest extends TestCase {
         }
     }
 
+    public void testRoutesCanBeReplacedAfterWorkerStart() throws Exception {
+        WorkerHarness h = new WorkerHarness(MAX_BYTES_PER_BATCH);
+        CapturingSink replacementSink = new CapturingSink();
+        CapturingClient replacementClient = new CapturingClient();
+        h.worker.start();
+        try {
+            h.worker.setFrameSink(replacementSink);
+            h.worker.setClient(replacementClient);
+            writeString(h.inputQueue, "reattach");
+            h.worker.requestAppend();
+            waitForText(replacementClient);
+
+            assertEquals("New sink must receive frames after replacement", 1, replacementSink.size());
+            assertEquals("Old sink must not receive frames after replacement", 0, h.sink.size());
+            assertEquals("New client must receive callbacks after replacement",
+                    "TermSessionParserWorker", replacementClient.lastCallbackThread);
+            assertEquals(0, h.client.textChangedCount.get());
+        } finally {
+            h.worker.stop();
+            assertTrue(h.worker.awaitStopped(5000));
+        }
+    }
+
     public void testCommandOrderingResizeResetFinish() throws Exception {
         WorkerHarness h = new WorkerHarness(MAX_BYTES_PER_BATCH);
         h.worker.start();

@@ -30,8 +30,8 @@ public final class TerminalParserWorker {
 
     private final TerminalEmulator mEmulator;
     private final ByteQueue mInputQueue;
-    private final TerminalFrameSink mFrameSink;
-    private final TerminalSessionClient mClient;
+    private volatile TerminalFrameSink mFrameSink;
+    private volatile TerminalSessionClient mClient;
     private final TerminalSession mSession;
     private final byte[] mReceiveBuffer;
     private final int mMaxBytesPerBatch;
@@ -74,6 +74,16 @@ public final class TerminalParserWorker {
 
     public TerminalParserMetrics.Snapshot getMetricsSnapshot() {
         return mMetrics.snapshot();
+    }
+
+    /** Replace the frame route for a reattached/recreated view. */
+    public void setFrameSink(TerminalFrameSink frameSink) {
+        mFrameSink = frameSink;
+    }
+
+    /** Replace the callback route for a reattached/recreated session client. */
+    public void setClient(TerminalSessionClient client) {
+        mClient = client;
     }
 
     public void requestAppend() {

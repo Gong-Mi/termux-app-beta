@@ -311,14 +311,18 @@ public final class TerminalView extends View {
     public boolean attachSession(TerminalSession session) {
         if (session == mTermSession) return false;
 
+        TerminalSession previousSession = mTermSession;
+        if (previousSession != null) previousSession.detachFrameSink();
+
         mTermSession = session;
         mEmulator = null;
         mCombiningAccent = 0;
         mTopRow = 0;
         mLastRenderFrame = null;
 
-        mRenderMailbox = new TerminalRenderMailbox<>(mFrameMetrics);
-        session.setFrameSink(frame -> { mRenderMailbox.publish(frame); });
+        final TerminalRenderMailbox<TerminalModelFrame> mailbox = new TerminalRenderMailbox<>(mFrameMetrics);
+        mRenderMailbox = mailbox;
+        session.setFrameSink(mailbox::publish);
 
         updateSize();
 
