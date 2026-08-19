@@ -26,6 +26,9 @@ jobs:
       - name: Validate device smoke scripts
         run: bash -n scripts/android_compat_log_smoke.sh
 
+      - name: Validate Android version-sensitive manifest permissions
+        run: python3 scripts/verify_manifest_compat.py
+
       - name: Set up JDK
         uses: actions/setup-java@v5
         with:
