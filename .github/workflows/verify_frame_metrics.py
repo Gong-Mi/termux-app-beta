@@ -56,7 +56,6 @@ def check_row(row):
     if None in (published, drawn, dropped, acked, last_drawn_rev, last_published_rev, visible):
         return f"missing field in row: {row}"
     for name, value in (("published", published), ("drawn", drawn), ("dropped", dropped),
-                        ("acked", acked), ("lastDrawnRev", last_drawn_rev),
                         ("lastPublishedRev", last_published_rev)):
         if value < 0:
             return f"{name}({value}) < 0"
