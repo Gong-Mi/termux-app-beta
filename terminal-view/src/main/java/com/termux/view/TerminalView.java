@@ -70,6 +70,11 @@ public final class TerminalView extends View {
     private TerminalModelFrame mLastModelFrame;
     /** Immutable accounting object tracking publish/draw/ack lifecycle. */
     private final RenderFrameMetrics mFrameMetrics = new RenderFrameMetrics();
+    /** Last selection rectangle used to build mLastRenderFrame. */
+    private int mLastRenderSelectionX1 = Integer.MIN_VALUE;
+    private int mLastRenderSelectionY1 = Integer.MIN_VALUE;
+    private int mLastRenderSelectionX2 = Integer.MIN_VALUE;
+    private int mLastRenderSelectionY2 = Integer.MIN_VALUE;
     public TerminalViewClient mClient;
 
     private boolean mRenderingStateReported;
@@ -1062,9 +1067,20 @@ public final class TerminalView extends View {
                 if (mTextSelectionCursorController != null) {
                     mTextSelectionCursorController.getSelectors(selectors);
                 }
-                // 显式交接：一次性采集本帧渲染所需的一切，渲染器只读该帧对象。
-                mLastRenderFrame = new TerminalRenderFrame(mLastModelFrame, mLastModelFrame.topRow,
-                    selectors[0], selectors[1], selectors[2], selectors[3]);
+                boolean selectionChanged = selectors[0] != mLastRenderSelectionX1
+                    || selectors[1] != mLastRenderSelectionY1
+                    || selectors[2] != mLastRenderSelectionX2
+                    || selectors[3] != mLastRenderSelectionY2;
+                if (model != null || mLastRenderFrame == null || selectionChanged) {
+                    // Explicit handoff: collect all render inputs once and reuse it while the
+                    // immutable model frame and view-only selection projection are unchanged.
+                    mLastRenderFrame = new TerminalRenderFrame(mLastModelFrame, mLastModelFrame.topRow,
+                        selectors[0], selectors[1], selectors[2], selectors[3]);
+                    mLastRenderSelectionX1 = selectors[0];
+                    mLastRenderSelectionY1 = selectors[1];
+                    mLastRenderSelectionX2 = selectors[2];
+                    mLastRenderSelectionY2 = selectors[3];
+                }
             }
             TerminalRenderFrame frame = mLastRenderFrame;
             if (frame == null) {
