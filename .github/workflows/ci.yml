@@ -118,10 +118,41 @@ jobs:
           cache: gradle
 
       - name: Build debug APK
-        run: ./gradlew assembleDebug
+        run: |
+          # Build both the universal APK and the per-ABI split APKs in one
+          # pass, then stage each target into its own artifact below.
+          export TERMUX_SPLIT_APKS_FOR_DEBUG_BUILDS=1
+          ./gradlew assembleDebug
 
-      - name: Upload APK
+      # Upload each installable target as its own artifact so consumers can
+      # pull exactly what they need instead of unpacking one mixed bundle.
+      - name: Stage universal and split APKs
+        run: |
+          set -eu
+          SRCDIR=app/build/outputs/apk/debug
+          test -d "$SRCDIR"
+          mkdir -p "$RUNNER_TEMP/universal" "$RUNNER_TEMP/splits"
+          for f in "$SRCDIR"/*.apk; do
+            case "$(basename "$f")" in
+              *_universal.apk) cp "$f" "$RUNNER_TEMP/universal/" ;;
+              *)               cp "$f" "$RUNNER_TEMP/splits/" ;;
+            esac
+          done
+          # Both targets must be present to fail loudly instead of silently
+          # uploading an empty artifact.
+          test "$(ls -1 "$RUNNER_TEMP/universal")" != ""
+          test "$(ls -1 "$RUNNER_TEMP/splits")" != ""
+
+      - name: Upload universal debug APK
         uses: actions/upload-artifact@v6
         with:
-          name: termux-app-debug
-          path: app/build/outputs/apk/debug/*.apk
+          name: termux-app-debug-universal
+          if-no-files-found: error
+          path: ${{ runner.temp }}/universal/
+
+      - name: Upload split debug APKs (per-ABI)
+        uses: actions/upload-artifact@v6
+        with:
+          name: termux-app-debug-splits
+          if-no-files-found: error
+          path: ${{ runner.temp }}/splits/
