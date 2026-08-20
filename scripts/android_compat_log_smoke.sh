@@ -63,8 +63,18 @@ echo "compatOverridesMutated=false"
 
 # Bound the evidence window to this cold start.
 "${adb_cmd[@]}" logcat -c
+
+# A dozing/locked display does not run onDraw, so no frame diagnostics are
+# emitted. Wake + dismiss keyguard before the cold start so the render
+# pipeline actually produces frames.
+"${adb_cmd[@]}" shell input keyevent 224 2>/dev/null || true   # KEYCODE_WAKEUP
+"${adb_cmd[@]}" shell wm dismiss-keyguard 2>/dev/null || true
+"${adb_cmd[@]}" shell input keyevent 82 2>/dev/null || true    # KEYCODE_MENU
+sleep 1
+
 "${adb_cmd[@]}" shell am force-stop "$package"
 "${adb_cmd[@]}" shell am start -W -n "$component" >/dev/null
+sleep 2
 
 pid=$("${adb_cmd[@]}" shell pidof -s "$package" | tr -d '\r' || true)
 if [[ -z "$pid" ]]; then
@@ -78,20 +88,22 @@ fi
 echo "pid=$pid"
 
 echo "--- parser-worker frame pipeline (debug diagnostics) ---"
-frame_lines=$("${adb_cmd[@]}" logcat -d -v threadtime -s 'Termux:TerminalView:I' '*:S' | grep 'frame rev=' || true)
-if [[ -z "$frame_lines" ]]; then
+# The tag Termux:TerminalView contains a colon, which adb logcat's
+# 'Tag:priority' filter grammar cannot parse; filter by pid instead.
+frame_logs=$("${adb_cmd[@]}" logcat -d --pid="$pid" 2>/dev/null | grep 'Termux:TerminalView:.*frame rev=' || true)
+if [[ -z "$frame_logs" ]]; then
     echo "(no frame diagnostics; release builds skip this check)"
 else
-    first_rev=$(sed -n 's/.*frame rev=\([0-9]*\).*/\1/p' <<<"$frame_lines" | head -1)
-    last_rev=$(sed -n 's/.*frame rev=\([0-9]*\).*/\1/p' <<<"$frame_lines" | tail -1)
-    echo "frame samples: $(wc -l <<<"$frame_lines")"
-    echo "screenRevision: $first_rev -> $last_rev"
+    first_rev=$(sed -n 's/.*frame rev=\([0-9]*\).*/\1/p' <<<"$frame_logs" | head -1)
+    last_rev=$(sed -n 's/.*frame rev=\([0-9]*\).*/\1/p' <<<"$frame_logs" | tail -1)
+    echo "frame samples: $(wc -l <<<"$frame_logs")"
+    echo "screenRevision: ${first_rev:-none} -> ${last_rev:-none}"
     if [[ -z "$last_rev" || "$last_rev" -lt 1 ]]; then
         echo "FAIL: frame diagnostics present but screen revision did not advance" >&2
         exit 1
     fi
     # Keep the evidence visible for the caller.
-    tail -5 <<<"$frame_lines"
+    tail -5 <<<"$frame_logs"
 fi
 
 echo "--- compatibility changes reported for uid $uid ---"
