@@ -7,23 +7,24 @@ import java.util.Random;
 /**
  * Differential equivalence test for the TerminalRow scan caches.
  *
- * findStartOfColumn() and wideDisplayCharacterStartingAt() were changed to
- * warm-start from a per-row boundary cache. This test mutates a row with a
- * random mix of narrow/wide/supplementary/combining writes, clears and
- * interval copies, and after every mutation compares the cached
- * implementations against verbatim copies of the ORIGINAL from-scratch scans
- * (the pre-cache algorithms) for every column of the row.
+ * findStartOfColumn() and wideDisplayCharacterStartingAt() warm-start from a
+ * per-row boundary cache. This test mutates rows with a random mix of
+ * narrow/wide/supplementary/combining writes, clears and interval copies
+ * across several column widths and random seeds, and after every mutation
+ * compares the cached implementations against verbatim copies of the ORIGINAL
+ * from-scratch scans (the pre-cache algorithms) for every column of the row.
  */
 public class TerminalRowScanEquivalenceTest extends TestCase {
 
-    private static final int COLUMNS = 13;
+    private static final int[] WIDTHS = {8, 13, 24, 40, 80};
+    private static final long[] SEEDS = {20260820L, 0x5EEDL, 12345L, 0xDEADBEEFL};
+    private static final int OPS_PER_RUN = 2000;
 
     /** Original findStartOfColumn algorithm (pre-cache), operating on raw row state. */
-    static int refFindStartOfColumn(TerminalRow row, int column) {
+    static int refFindStartOfColumn(TerminalRow row, int columns, int column) {
         char[] mText = row.mText;
         int mSpaceUsed = row.getSpaceUsed();
-        int mColumns = COLUMNS;
-        if (column == mColumns) return mSpaceUsed;
+        if (column == columns) return mSpaceUsed;
         int currentColumn = 0;
         int currentCharIndex = 0;
         while (true) {
@@ -75,14 +76,14 @@ public class TerminalRowScanEquivalenceTest extends TestCase {
     }
 
     /** Verify the cached implementation equals the reference for every column. */
-    static void assertRowMatches(TerminalRow row, String context) {
-        for (int c = 0; c <= COLUMNS; c++) {
-            int expected = refFindStartOfColumn(row, c);
+    static void assertRowMatches(TerminalRow row, int columns, String context) {
+        for (int c = 0; c <= columns; c++) {
+            int expected = refFindStartOfColumn(row, columns, c);
             int actual = row.findStartOfColumn(c);
             assertEquals("findStartOfColumn(" + c + ") " + context
                     + " row=" + rowDump(row), expected, actual);
         }
-        for (int c = 0; c < COLUMNS; c++) {
+        for (int c = 0; c < columns; c++) {
             boolean expected = refWideDisplayCharacterStartingAt(row, c);
             boolean actual = row.wideDisplayCharacterStartingAt(c);
             assertEquals("wideDisplayCharacterStartingAt(" + c + ") " + context
@@ -100,13 +101,14 @@ public class TerminalRowScanEquivalenceTest extends TestCase {
         return sb.toString();
     }
 
-    public void testRandomMutationsMatchOriginalScans() {
-        Random rnd = new Random(20260820L);
-        TerminalRow row = new TerminalRow(COLUMNS, 0);
-        TerminalRow other = new TerminalRow(COLUMNS, 0);
+    private static void runFuzz(int columns, long seed) {
+        Random rnd = new Random(seed);
+        TerminalRow row = new TerminalRow(columns, 0);
+        TerminalRow other = new TerminalRow(columns, 0);
+        String[] history = new String[64];
 
-        // Wide variety of code points: narrow, CJK wide, supplementary wide,
-        // combining, and plain space.
+        // Wide variety of code points: narrow, CJK wide, box drawing,
+        // supplementary wide, multiple combining, and zero-width space.
         int[] pool = {
             0x20, 'a', 'Z', '0',
             0x4E2D, 0x6587, 0xFF21,          // CJK wide
@@ -121,38 +123,41 @@ public class TerminalRowScanEquivalenceTest extends TestCase {
             // equivalence domain.
         };
 
-        String[] history = new String[64];
-
-        for (int op = 0; op < 3000; op++) {
+        for (int op = 0; op < OPS_PER_RUN; op++) {
             int codePoint = pool[rnd.nextInt(pool.length)];
-            int column = rnd.nextInt(COLUMNS);
+            int column = rnd.nextInt(columns);
             String desc = "op" + op;
             if (rnd.nextInt(20) == 0) {
                 row.clear(rnd.nextInt());
                 desc += " clear";
             } else if (rnd.nextInt(25) == 0) {
-                int dst = rnd.nextInt(COLUMNS - 1);
-                int len = 1 + rnd.nextInt(COLUMNS - dst);
-                int x1 = rnd.nextInt(COLUMNS - len + 1);
+                // Copy a random interval from the other row into this one,
+                // keeping dst + interval length inside the row.
+                int dst = rnd.nextInt(Math.max(1, columns - 1));
+                int len = 1 + rnd.nextInt(columns - dst);
+                int x1 = rnd.nextInt(columns - len + 1);
                 int x2 = x1 + len;
                 desc += " copy(" + x1 + "," + x2 + ")->" + dst;
                 row.copyInterval(other, x1, x2, dst);
             } else {
+                // Exercise the same call order setChar uses: previous-column
+                // wide probe, next-column wide probe, own start, next start.
                 desc += " setChar(" + column + "," + Integer.toHexString(codePoint) + ")";
                 if (column > 0) row.wideDisplayCharacterStartingAt(column - 1);
-                if (column + 1 < COLUMNS) row.wideDisplayCharacterStartingAt(column + 1);
+                if (column + 1 < columns) row.wideDisplayCharacterStartingAt(column + 1);
                 row.findStartOfColumn(column);
                 try {
                     row.setChar(column, codePoint, rnd.nextInt(7));
                 } catch (IllegalArgumentException ignored) {
+                    // Wide char in the last column is rejected by design.
                     desc += " THREW";
                 }
             }
             try {
-                assertRowMatches(row, "after " + desc);
+                assertRowMatches(row, columns, "after " + desc);
             } catch (Throwable e) {
-                System.err.println("FAILURE at " + desc + " state=" + rowDump(row)
-                        + " spaceUsed=" + row.getSpaceUsed());
+                System.err.println("FAILURE width=" + columns + " seed=" + seed + " at " + desc
+                        + " state=" + rowDump(row) + " spaceUsed=" + row.getSpaceUsed());
                 for (int i = Math.max(0, op - 5); i < op; i++) System.err.println("  prev: " + history[i % history.length]);
                 throw e;
             }
@@ -160,15 +165,24 @@ public class TerminalRowScanEquivalenceTest extends TestCase {
         }
     }
 
+    public void testRandomMutationsMatchOriginalScans() {
+        for (int width : WIDTHS) {
+            for (long seed : SEEDS) {
+                runFuzz(width, seed);
+            }
+        }
+    }
+
     /** Same-width CJK overwrite must keep the cache hot and still be exact. */
     public void testFullLineOverwriteMatchesOriginalScans() {
-        TerminalRow row = new TerminalRow(COLUMNS, 0);
-        // Sequential overwrite, the benchmark's hot pattern.
-        for (int round = 0; round < 50; round++) {
-            for (int c = 0; c < COLUMNS - 1; c++) {
-                row.setChar(c, (c % 2 == 0) ? 0x4E2D : 0x6587, 3);
+        for (int width : WIDTHS) {
+            TerminalRow row = new TerminalRow(width, 0);
+            for (int round = 0; round < 50; round++) {
+                for (int c = 0; c < width - 1; c++) {
+                    row.setChar(c, (c % 2 == 0) ? 0x4E2D : 0x6587, 3);
+                }
+                assertRowMatches(row, width, "width=" + width + " round " + round);
             }
-            assertRowMatches(row, "round " + round);
         }
     }
 }
