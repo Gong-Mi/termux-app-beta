@@ -171,8 +171,11 @@ public final class TerminalParserWorker {
                     break;
                 case MSG_VIEWPORT:
                     mMetrics.recordControlCommand();
-                    mViewport = new Viewport(clampViewportTopRow(cmd.topRow));
-                    publishFrame();
+                    int clampedTopRow = clampViewportTopRow(cmd.topRow);
+                    if (clampedTopRow != mViewport.topRow) {
+                        mViewport = new Viewport(clampedTopRow);
+                        publishFrame();
+                    }
                     break;
                 case MSG_RESET:
                     mMetrics.recordControlCommand();
@@ -191,8 +194,10 @@ public final class TerminalParserWorker {
                     break;
                 case MSG_CLEAR_SCROLL_COUNTER:
                     mMetrics.recordControlCommand();
-                    mEmulator.clearScrollCounter();
-                    publishFrame();
+                    if (mEmulator.getScrollCounter() != 0) {
+                        mEmulator.clearScrollCounter();
+                        publishFrame();
+                    }
                     break;
                 case MSG_SET_CURSOR_BLINK_STATE:
                     mMetrics.recordControlCommand();

@@ -164,9 +164,20 @@ public final class TerminalSession extends TerminalOutput {
         }
     }
 
+    /** Last viewport top row handed to the parser worker, for main-thread dedupe. */
+    private int mLastViewportTopRow = Integer.MIN_VALUE;
+
     /** Request a new immutable model frame for a transcript viewport change. */
     public void setViewport(int topRow) {
         if (mParserWorker != null) {
+            // The view calls setViewport() on every onScreenUpdated() notification.
+            // Without dedupe, an idle app re-enqueues a viewport command per
+            // published frame, which publishes another frame, which notifies the
+            // view again: an exponential publish loop. Skipping an unchanged
+            // request is safe because the worker already holds that viewport and
+            // the view invalidates itself when it actually changes mTopRow.
+            if (topRow == mLastViewportTopRow) return;
+            mLastViewportTopRow = topRow;
             mParserWorker.requestViewport(topRow);
         }
     }
@@ -379,6 +390,11 @@ public final class TerminalSession extends TerminalOutput {
     /** Clear the scroll counter, serialized with parser worker updates. */
     public void clearScrollCounter() {
         if (mParserWorker != null) {
+            // The view calls clearScrollCounter() on every onScreenUpdated()
+            // notification; when nothing scrolled the reset is a semantic no-op.
+            // Skipping it also breaks the publish -> notify -> clear -> publish
+            // feedback loop for idle sessions.
+            if (getScrollCounter() == 0) return;
             mParserWorker.requestClearScrollCounter();
         } else if (mEmulator != null) {
             synchronized (mEmulator) {

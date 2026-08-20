@@ -233,22 +233,21 @@ public class TerminalParserWorkerTest extends TestCase {
         WorkerHarness h = new WorkerHarness(MAX_BYTES_PER_BATCH);
         h.worker.start();
         try {
+            // Out-of-range viewport on an empty transcript clamps to the current
+            // viewport (0); the dedupe guard collapses it into the next append
+            // frame instead of publishing a redundant identical snapshot.
             h.worker.requestViewport(-100);
-            assertTrue("Out-of-range viewport must still publish a frame",
-                    h.client.textLatch.await(5, TimeUnit.SECONDS));
-            TerminalModelFrame initial = h.sink.last();
-            assertNotNull(initial);
-            assertEquals("Empty transcript must clamp viewport to the screen",
-                    0, initial.topRow);
-            assertTrue(initial.topRow >= -initial.activeTranscriptRows);
-
-            h.client.textLatch = new CountDownLatch(1);
             StringBuilder lines = new StringBuilder();
             for (int i = 0; i < ROWS * 3; i++) lines.append("line-").append(i).append('\n');
             writeString(h.inputQueue, lines.toString());
             h.worker.requestAppend();
             assertTrue("Transcript input should publish a frame",
                     h.client.textLatch.await(5, TimeUnit.SECONDS));
+            TerminalModelFrame initial = h.sink.last();
+            assertNotNull(initial);
+            assertEquals("Empty transcript must clamp viewport to the screen",
+                    0, initial.topRow);
+            assertTrue(initial.topRow >= -initial.activeTranscriptRows);
 
             h.client.textLatch = new CountDownLatch(1);
             h.worker.requestViewport(-10000);
@@ -260,6 +259,16 @@ public class TerminalParserWorkerTest extends TestCase {
                     scrolled.topRow >= -scrolled.activeTranscriptRows);
             assertTrue("Viewport must never move below the transcript start",
                     scrolled.topRow <= 0);
+            assertTrue("A real viewport change must actually move the frame",
+                    scrolled.topRow < initial.topRow);
+
+            // Moving back to the original viewport is a real change and publishes.
+            h.client.textLatch = new CountDownLatch(1);
+            h.worker.requestViewport(0);
+            assertTrue("Returning to the original viewport should publish a frame",
+                    h.client.textLatch.await(5, TimeUnit.SECONDS));
+            assertEquals("Frame at restored viewport must be at the screen top", 0,
+                    h.sink.last().topRow);
         } finally {
             h.worker.stop();
             assertTrue(h.worker.awaitStopped(5000));
@@ -291,20 +300,55 @@ public class TerminalParserWorkerTest extends TestCase {
             h.worker.requestPaste("paste-me");
             assertTrue("Paste must publish a post-mutation frame",
                     h.client.textLatch.await(5, TimeUnit.SECONDS));
+            assertEquals(1, h.sink.size());
 
             h.client.textLatch = new CountDownLatch(1);
             h.worker.requestSendMouseEvent(TerminalEmulator.MOUSE_LEFT_BUTTON, 3, 4, true);
             assertTrue("Mouse input must publish a post-mutation frame",
                     h.client.textLatch.await(5, TimeUnit.SECONDS));
+            assertEquals(2, h.sink.size());
 
-            h.client.textLatch = new CountDownLatch(1);
+            // A scroll-counter reset is only a mutation when the emulator has
+            // an unread scroll amount; with no scrolling since the paste this
+            // request is a semantic no-op and must NOT publish a frame (this
+            // is the guard that breaks the view -> worker publish feedback
+            // loop on idle sessions).
             h.worker.requestClearScrollCounter();
-            assertTrue("Scroll-counter control must publish a post-mutation frame",
-                    h.client.textLatch.await(5, TimeUnit.SECONDS));
+            Thread.sleep(200);
+            assertEquals("Idle scroll-counter reset must not publish a frame", 2, h.sink.size());
 
-            assertEquals("Each input control must publish exactly one frame", 3, h.sink.size());
             assertEquals("All input controls must be accounted for", 3,
                     h.worker.getMetricsSnapshot().controlCommands);
+        } finally {
+            h.worker.stop();
+            assertTrue(h.worker.awaitStopped(5000));
+        }
+    }
+
+    /** Regression: an idle session must not re-publish frames in response to the
+     * view's repeated no-op viewport/scroll-counter sync calls (observed on-device
+     * as publishedFrames doubling into the thousands with zero new input). */
+    public void testIdleViewSyncDoesNotRunawayPublish() throws Exception {
+        WorkerHarness h = new WorkerHarness(MAX_BYTES_PER_BATCH);
+        h.worker.start();
+        try {
+            writeString(h.inputQueue, "seed");
+            h.worker.requestAppend();
+            waitForText(h.client);
+            long before = h.worker.getMetricsSnapshot().publishedFrames;
+            assertTrue(before >= 1);
+
+            // Mimic onScreenUpdated()'s per-notification sync: the view calls
+            // these for every published frame even when nothing changed.
+            for (int i = 0; i < 1000; i++) {
+                h.worker.requestViewport(0);
+                h.worker.requestClearScrollCounter();
+            }
+            Thread.sleep(300);
+
+            long after = h.worker.getMetricsSnapshot().publishedFrames;
+            assertTrue("No-op view sync must not publish frames (before=" + before
+                    + " after=" + after + ")", after - before <= 2);
         } finally {
             h.worker.stop();
             assertTrue(h.worker.awaitStopped(5000));
