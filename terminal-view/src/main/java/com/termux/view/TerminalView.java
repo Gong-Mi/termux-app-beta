@@ -70,9 +70,6 @@ public final class TerminalView extends View {
     private TerminalModelFrame mLastModelFrame;
     /** Immutable accounting object tracking publish/draw/ack lifecycle. */
     private final RenderFrameMetrics mFrameMetrics = new RenderFrameMetrics();
-    /** 打开后每帧打印变更台账摘要（默认关闭，零开销）。 */
-    private static volatile boolean sDebugFrameInfo = false;
-
     public TerminalViewClient mClient;
 
     private boolean mRenderingStateReported;
@@ -1073,7 +1070,7 @@ public final class TerminalView extends View {
             if (frame == null) {
                 canvas.drawColor(0XFF000000);
             } else {
-                if (sDebugFrameInfo) logFrameInfo(frame);
+                TerminalFrameDiagnostics.logIfEnabled(mTermSession, mFrameMetrics, frame);
                 Trace.beginSection("Termux:TerminalRenderer.render");
                 try {
                     mRenderer.render(frame, canvas);
@@ -1097,12 +1094,12 @@ public final class TerminalView extends View {
         return mTermSession;
     }
 
-    /** 打开/关闭每帧变更台账摘要日志。打开后每帧一行：解析/模型改了哪几行、本帧画了多少行。 */
+    /** Enable the debug-only per-frame diagnostic implementation for this build variant. */
     public static void setDebugFrameInfoEnabled(boolean enabled) {
-        sDebugFrameInfo = enabled;
+        TerminalFrameDiagnostics.setEnabled(enabled);
     }
 
-    /** 上一帧的渲染交接快照，供行级归属调试（解析改了 vs 渲染画了）。 */
+    /** Previous render handoff snapshot, exposed for diagnostics and tests. */
     public TerminalRenderFrame getLastRenderFrame() {
         return mLastRenderFrame;
     }
@@ -1133,25 +1130,6 @@ public final class TerminalView extends View {
 
     public long getLastAckedScreenRevision() {
         return mFrameMetrics.getLastAckedScreenRevision();
-    }
-
-    private void logFrameInfo(TerminalRenderFrame f) {
-        com.termux.terminal.TerminalParserMetrics.Snapshot parser = mTermSession.getParserMetricsSnapshot();
-        int dirtyInView = 0;
-        for (int row = f.topRow; row < f.endRow; row++) {
-            if (f.rowNeedsRedraw(row)) dirtyInView++;
-        }
-        android.util.Log.i("Termux:TerminalView", "frame rev=" + f.screenRevision
-            + " published=" + mFrameMetrics.getPublishedFrameCount() + " lastPublishedRev=" + mFrameMetrics.getLastPublishedScreenRevision()
-            + " drawn=" + mFrameMetrics.getDrawnFrameCount() + " lastDrawnRev=" + mFrameMetrics.getLastDrawnScreenRevision()
-            + " dropped=" + mFrameMetrics.getDroppedFrameCount() + " coalesced=" + mFrameMetrics.getCoalescedRevisionCount() + " acked=" + mFrameMetrics.getLastAckedScreenRevision()
-            + " parserBytes=" + parser.inputBytes + " appendCommands=" + parser.appendCommands
-            + " controlCommands=" + parser.controlCommands + " parserFrames=" + parser.publishedFrames
-            + " finishCommands=" + parser.finishCommands + " stopCommands=" + parser.stopCommands
-            + " mutations=" + f.dirtyMutationCount
-            + " visible=" + (f.endRow - f.topRow) + " redrawWorthies=" + dirtyInView
-            + " cursor=" + (f.cursorVisible ? f.cursorRow : "hidden")
-            + " sel=" + f.selectionY1 + ".." + f.selectionY2);
     }
 
     private CharSequence getText() {

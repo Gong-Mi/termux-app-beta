@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Verify terminal frame-metric log lines against the parser/render contract.
 
-Input: a text file containing lines of the form emitted by
-TerminalView.logFrameInfo() with DEBUG_FRAME_INFO enabled, e.g.
+Input: a text file containing lines emitted by the debug-only
+TerminalFrameDiagnostics implementation, e.g.
 
     frame rev=123 published=45 lastPublishedRev=123 drawn=44 lastDrawnRev=122
         dropped=0 coalesced=12 acked=122 mutations=5 visible=24 ...

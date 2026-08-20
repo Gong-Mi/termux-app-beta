@@ -183,14 +183,11 @@ jobs:
           adb install -r render-apk/universal.apk
           # Grant storage permission so the bootstrap can write, then cold start
           adb shell pm grant com.termux android.permission.WRITE_EXTERNAL_STORAGE || true
-          # DEBUG_FRAME_INFO (debug builds only) makes TerminalView.logFrameInfo()
-          # emit one 'frame rev=' line per render, feeding the frame pipeline assertion.
-          # Force a fresh Activity instance so the intent extra is not lost to an
-          # already-running task after APK installation.
+          # Debug builds include the compile-time frame diagnostic implementation.
+          # Release builds use the empty source-set implementation and cannot enable it via Intent.
           adb logcat -c
           adb shell am force-stop com.termux
-          adb shell am start -W -S -n com.termux/.app.TermuxActivity \
-            --ez com.termux.DEBUG_FRAME_INFO true
+          adb shell am start -W -S -n com.termux/.app.TermuxActivity
           # Boot and bootstrap time varies on GitHub-hosted emulator instances. Wait
           # for the first real frame instead of turning that scheduling variance into
           # a false render failure; the later step still requires three valid lines.

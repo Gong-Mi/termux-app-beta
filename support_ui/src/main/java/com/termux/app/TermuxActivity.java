@@ -243,9 +243,9 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
 
         setTermuxTerminalViewAndClients();
 
-        // Keep frame diagnostics available for the debug-only emulator gate. Release builds
-        // never emit this per-draw log; the intent remains an explicit opt-in for callers.
-        if (BuildConfig.DEBUG || getIntent().getBooleanExtra("com.termux.DEBUG_FRAME_INFO", false)) {
+        // This is a compile-time variant boundary: the debug implementation is present only
+        // in debug builds, while release builds cannot enable frame diagnostics through an Intent.
+        if (BuildConfig.DEBUG) {
             TerminalView.setDebugFrameInfoEnabled(true);
         }
 

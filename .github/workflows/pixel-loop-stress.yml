@@ -104,7 +104,7 @@ jobs:
           APK=$(ls app/build/outputs/apk/debug/termux-app_*universal*.apk 2>/dev/null \
                 || ls app/build/outputs/apk/debug/termux-app_*x86_64*.apk)
           adb install -r "$APK"
-          adb shell am start -W -n com.termux/.app.TermuxActivity --ez com.termux.DEBUG_FRAME_INFO true
+          adb shell am start -W -n com.termux/.app.TermuxActivity
           for i in $(seq 1 24); do
             if adb shell run-as com.termux test -x /data/data/com.termux/files/usr/bin/sh; then
               echo "TERMUX_PREFIX_READY_AFTER_${i}0_SECONDS=1"
