@@ -66,11 +66,17 @@ echo "compatOverridesMutated=false"
 
 # A dozing/locked display does not run onDraw, so no frame diagnostics are
 # emitted. Wake + dismiss keyguard before the cold start so the render
-# pipeline actually produces frames.
+# pipeline actually produces frames; retry until the device is really awake.
 "${adb_cmd[@]}" shell input keyevent 224 2>/dev/null || true   # KEYCODE_WAKEUP
 "${adb_cmd[@]}" shell wm dismiss-keyguard 2>/dev/null || true
 "${adb_cmd[@]}" shell input keyevent 82 2>/dev/null || true    # KEYCODE_MENU
-sleep 1
+for _ in $(seq 1 10); do
+    wake=$("${adb_cmd[@]}" shell dumpsys power 2>/dev/null | grep -m1 mWakefulness | tr -d '\r ')
+    case "$wake" in
+        *Awake*) break ;;
+        *) "${adb_cmd[@]}" shell input keyevent 224 2>/dev/null || true; sleep 1 ;;
+    esac
+done
 
 "${adb_cmd[@]}" shell am force-stop "$package"
 "${adb_cmd[@]}" shell am start -W -n "$component" >/dev/null
@@ -87,11 +93,29 @@ if [[ -z "$pid" ]]; then
 fi
 echo "pid=$pid"
 
+# Frame diagnostics only fire from onDraw, which requires an actually visible
+# window. If a keyguard we cannot dismiss keeps the app in the background,
+# SKIP the frame check (device state, not an app regression).
+frame_status=run
+resumed=$("${adb_cmd[@]}" shell dumpsys activity activities 2>/dev/null | grep -m1 'ResumedActivity' | grep -F "$package" || true)
+if [[ -z "$resumed" ]]; then
+    frame_status=skipped
+    echo "frame_status=skipped (ResumedActivity is not $package; keyguard/launcher in front)"
+    echo "ResumedActivity: $("${adb_cmd[@]}" shell dumpsys activity activities 2>/dev/null | grep -m1 'ResumedActivity' | tr -d '\r')" >&2
+fi
+
 echo "--- parser-worker frame pipeline (debug diagnostics) ---"
 # The tag Termux:TerminalView contains a colon, which adb logcat's
 # 'Tag:priority' filter grammar cannot parse; filter by pid instead.
 frame_logs=$("${adb_cmd[@]}" logcat -d --pid="$pid" 2>/dev/null | grep 'Termux:TerminalView:.*frame rev=' || true)
-if [[ -z "$frame_logs" ]]; then
+if [[ $frame_status == skipped ]]; then
+    echo "(frame check skipped: no resumed app window - unlock the device to exercise onDraw)"
+elif [[ -z "$frame_logs" ]]; then
+    if [[ "$debuggable" == true ]]; then
+        echo "FAIL: no Termux:TerminalView diagnostics while $package is resumed" >&2
+        echo "and debuggable; the parser-worker render handoff is not producing frames." >&2
+        exit 1
+    fi
     echo "(no frame diagnostics; release builds skip this check)"
 else
     first_rev=$(sed -n 's/.*frame rev=\([0-9]*\).*/\1/p' <<<"$frame_logs" | head -1)
