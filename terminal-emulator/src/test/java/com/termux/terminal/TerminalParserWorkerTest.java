@@ -160,6 +160,10 @@ public class TerminalParserWorkerTest extends TestCase {
                     first.screen.getTranscriptText().contains("hello"));
             assertFalse("Earlier frame must not observe later parser mutation",
                     first.screen.getTranscriptText().contains("world"));
+            assertNotSame("Changed row must be copied into the new snapshot",
+                    first.screen.rowAtExternal(0), second.screen.rowAtExternal(0));
+            assertSame("Unchanged rows should be shared between immutable snapshots",
+                    first.screen.rowAtExternal(10), second.screen.rowAtExternal(10));
             TerminalParserMetrics.Snapshot metrics = h.worker.getMetricsSnapshot();
             assertEquals(10, metrics.inputBytes);
             assertEquals(2, metrics.appendCommands);

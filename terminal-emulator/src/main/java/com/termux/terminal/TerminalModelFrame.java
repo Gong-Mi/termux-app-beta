@@ -73,6 +73,11 @@ public final class TerminalModelFrame implements FrameRevision {
     public final int dirtyMutationCount;
 
     public TerminalModelFrame(TerminalEmulator emulator, int topRow, long[] dirtyRowBits, int dirtyMutationCount) {
+        this(emulator, topRow, dirtyRowBits, dirtyMutationCount, null);
+    }
+
+    public TerminalModelFrame(TerminalEmulator emulator, int topRow, long[] dirtyRowBits, int dirtyMutationCount,
+                              TerminalScreenSnapshot previousScreen) {
         this.topRow = topRow;
         this.rows = emulator.mRows;
         this.columns = emulator.mColumns;
@@ -92,7 +97,8 @@ public final class TerminalModelFrame implements FrameRevision {
         this.scrollCounter = emulator.getScrollCounter();
         this.activeTranscriptRows = emulator.getScreen().getActiveTranscriptRows();
         this.palette = Arrays.copyOf(emulator.mColors.mCurrentColors, emulator.mColors.mCurrentColors.length);
-        this.screen = TerminalScreenSnapshot.capture(emulator.getScreen(), this.topRow, this.endRow, this.columns);
+        this.screen = TerminalScreenSnapshot.capture(emulator.getScreen(), this.topRow, this.endRow, this.columns,
+            previousScreen, dirtyRowBits);
         this.screenRevision = emulator.getScreenRevision();
         this.dirtyRowBits = dirtyRowBits == null ? null : Arrays.copyOf(dirtyRowBits, dirtyRowBits.length);
         this.dirtyMutationCount = dirtyMutationCount;

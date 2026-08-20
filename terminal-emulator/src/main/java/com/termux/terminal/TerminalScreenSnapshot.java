@@ -6,11 +6,13 @@ package com.termux.terminal;
  */
 public final class TerminalScreenSnapshot {
     private final int firstExternalRow;
+    private final int columns;
     private final int[] internalRows;
     private final TerminalRenderRow[] rows;
 
-    private TerminalScreenSnapshot(int firstExternalRow, int[] internalRows, TerminalRenderRow[] rows) {
+    private TerminalScreenSnapshot(int firstExternalRow, int columns, int[] internalRows, TerminalRenderRow[] rows) {
         this.firstExternalRow = firstExternalRow;
+        this.columns = columns;
         this.internalRows = internalRows;
         this.rows = rows;
     }
@@ -18,17 +20,45 @@ public final class TerminalScreenSnapshot {
     /** Capture the inclusive/exclusive external row range used by a renderer frame. */
     public static TerminalScreenSnapshot capture(TerminalBuffer screen, int firstExternalRow, int endExternalRow,
                                                   int columns) {
+        return capture(screen, firstExternalRow, endExternalRow, columns, null, null);
+    }
+
+    /**
+     * Capture a frame while reusing immutable rows from the previous capture when
+     * the buffer mapping and dirty journal prove that the row did not change.
+     */
+    static TerminalScreenSnapshot capture(TerminalBuffer screen, int firstExternalRow, int endExternalRow,
+                                          int columns, TerminalScreenSnapshot previous, long[] dirtyRowBits) {
         if (endExternalRow < firstExternalRow) {
             throw new IllegalArgumentException("endExternalRow < firstExternalRow");
         }
         TerminalRenderRow[] rows = new TerminalRenderRow[endExternalRow - firstExternalRow];
         int[] internalRows = new int[rows.length];
         for (int i = 0; i < rows.length; i++) {
-            internalRows[i] = screen.externalToInternalRow(firstExternalRow + i);
-            TerminalRow source = screen.allocateFullLineIfNecessary(internalRows[i]);
-            rows[i] = new TerminalRenderRow(source, columns);
+            int externalRow = firstExternalRow + i;
+            int internalRow = screen.externalToInternalRow(externalRow);
+            internalRows[i] = internalRow;
+            if (canReuseRow(previous, externalRow, internalRow, columns, dirtyRowBits)) {
+                rows[i] = previous.rowAtExternal(externalRow);
+            } else {
+                TerminalRow source = screen.allocateFullLineIfNecessary(internalRow);
+                rows[i] = new TerminalRenderRow(source, columns);
+            }
         }
-        return new TerminalScreenSnapshot(firstExternalRow, internalRows, rows);
+        return new TerminalScreenSnapshot(firstExternalRow, columns, internalRows, rows);
+    }
+
+    private static boolean canReuseRow(TerminalScreenSnapshot previous, int externalRow, int internalRow,
+                                       int columns, long[] dirtyRowBits) {
+        if (previous == null || previous.columns != columns
+                || externalRow < previous.firstExternalRow || externalRow >= previous.endExternalRow()) {
+            return false;
+        }
+        if (dirtyRowBits != null && (internalRow >> 6) < dirtyRowBits.length
+                && (dirtyRowBits[internalRow >> 6] & (1L << (internalRow & 63))) != 0) {
+            return false;
+        }
+        return previous.internalRowAtExternal(externalRow) == internalRow;
     }
 
     public TerminalRenderRow rowAtExternal(int externalRow) {

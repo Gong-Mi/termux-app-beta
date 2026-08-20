@@ -42,6 +42,8 @@ public final class TerminalParserWorker {
     private final AtomicBoolean mStopRequested = new AtomicBoolean(false);
 
     private volatile Viewport mViewport = new Viewport(0);
+    /** Parser-thread-only previous immutable screen for row sharing. */
+    private TerminalScreenSnapshot mPreviousScreenSnapshot;
     private volatile boolean mStopped;
 
     public TerminalParserWorker(TerminalEmulator emulator, ByteQueue inputQueue, TerminalFrameSink frameSink,
@@ -290,7 +292,9 @@ public final class TerminalParserWorker {
         TerminalBuffer screen = mEmulator.getScreen();
         int dirtyCount = screen.getDirtyMutationCount();
         long[] dirtyBits = dirtyCount == 0 ? null : screen.getAndClearDirtyRowBits();
-        TerminalModelFrame frame = new TerminalModelFrame(mEmulator, safeTopRow, dirtyBits, dirtyCount);
+        TerminalModelFrame frame = new TerminalModelFrame(mEmulator, safeTopRow, dirtyBits, dirtyCount,
+            mPreviousScreenSnapshot);
+        mPreviousScreenSnapshot = frame.screen;
         mMetrics.recordPublishedFrame();
         if (mFrameSink != null) mFrameSink.publishFrame(frame);
         mClient.onTextChanged(mSession); // posted to main thread; triggers UI invalidate
