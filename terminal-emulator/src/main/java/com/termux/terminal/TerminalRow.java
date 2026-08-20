@@ -57,32 +57,51 @@ public final class TerminalRow {
      * scan. Queries warm-start from the largest cached boundary not past the
      * target column, which makes the per-setChar query sequence
      * (c-1, c+1, c, c+2) amortized O(1) for sequential full-line writes.
-     * Both entries invalid when -1 (the row mutated in a way that moved chars).
+     * Four slots cover the whole per-cell query window; -1 means invalid
+     * (the row mutated in a way that moved chars).
      */
-    private int mCacheCol0 = -1;
-    private int mCacheIdx0 = 0;
-    private int mCacheCol1 = -1;
-    private int mCacheIdx1 = 0;
+    private int[] mCacheCols = new int[]{-1, -1, -1, -1};
+    private int[] mCacheIdxs = new int[]{0, 0, 0, 0};
+    private int mCacheRing;
 
     private void invalidateScanCaches() {
-        mCacheCol0 = -1;
-        mCacheCol1 = -1;
+        mCacheCols[0] = -1;
+        mCacheCols[1] = -1;
+        mCacheCols[2] = -1;
+        mCacheCols[3] = -1;
     }
 
-    /** Record a true column boundary, keeping the two most recent distinct columns. */
+    /** Record a true column boundary, keeping the most recent distinct columns. */
     private void recordBoundary(int column, int charIndex) {
-        if (mCacheCol0 == column) {
-            mCacheIdx0 = charIndex;
-            return;
+        int[] cols = mCacheCols;
+        for (int i = 0; i < 4; i++) {
+            if (cols[i] == column) {
+                mCacheIdxs[i] = charIndex;
+                return;
+            }
         }
-        if (mCacheCol1 == column) {
-            mCacheIdx1 = charIndex;
-            return;
-        }
-        mCacheCol1 = mCacheCol0;
-        mCacheIdx1 = mCacheIdx0;
-        mCacheCol0 = column;
-        mCacheIdx0 = charIndex;
+        cols[mCacheRing] = column;
+        mCacheIdxs[mCacheRing] = charIndex;
+        mCacheRing = (mCacheRing + 1) & 3;
+    }
+
+    /** Largest cached boundary column at or before {@code target}, or -1. */
+    private int bestCachedColumnFor(int target) {
+        int[] cols = mCacheCols;
+        int best = -1;
+        if (cols[0] != -1 && cols[0] <= target && cols[0] > best) best = cols[0];
+        if (cols[1] != -1 && cols[1] <= target && cols[1] > best) best = cols[1];
+        if (cols[2] != -1 && cols[2] <= target && cols[2] > best) best = cols[2];
+        if (cols[3] != -1 && cols[3] <= target && cols[3] > best) best = cols[3];
+        return best;
+    }
+
+    private int cachedIndexFor(int column) {
+        int[] cols = mCacheCols;
+        if (cols[0] == column) return mCacheIdxs[0];
+        if (cols[1] == column) return mCacheIdxs[1];
+        if (cols[2] == column) return mCacheIdxs[2];
+        return mCacheIdxs[3];
     }
 
     /** Construct a blank row (containing only whitespace, ' ') with a specified style. */
@@ -129,19 +148,18 @@ public final class TerminalRow {
         if (column == mColumns) return getSpaceUsed();
 
         // Warm start from the largest cached true boundary at or before the
-        // target column; fall back to scanning from column 0.
+        // target column; fall back to scanning from column 0. A boundary whose
+        // char index sits at the end of the used text cannot be rescanned
+        // (no char to read), so it warms nothing.
         int currentColumn = 0;
         int currentCharIndex = 0;
-        int col0 = mCacheCol0;
-        int col1 = mCacheCol1;
-        if (col0 > column) col0 = -1;
-        if (col1 > column) col1 = -1;
-        if (col0 >= col1 && col0 >= 0) {
-            currentColumn = col0;
-            currentCharIndex = mCacheIdx0;
-        } else if (col1 > col0 && col1 >= 0) {
-            currentColumn = col1;
-            currentCharIndex = mCacheIdx1;
+        int best = bestCachedColumnFor(column);
+        if (best >= 0) {
+            int bestIndex = cachedIndexFor(best);
+            if (bestIndex < mSpaceUsed) {
+                currentColumn = best;
+                currentCharIndex = bestIndex;
+            }
         }
         int lastBoundaryColumn = currentColumn;
         int lastBoundaryIndex = currentCharIndex;
@@ -186,16 +204,13 @@ public final class TerminalRow {
     boolean wideDisplayCharacterStartingAt(int column) {
         int currentColumn = 0;
         int currentCharIndex = 0;
-        int col0 = mCacheCol0;
-        int col1 = mCacheCol1;
-        if (col0 > column) col0 = -1;
-        if (col1 > column) col1 = -1;
-        if (col0 >= col1 && col0 >= 0) {
-            currentColumn = col0;
-            currentCharIndex = mCacheIdx0;
-        } else if (col1 > col0 && col1 >= 0) {
-            currentColumn = col1;
-            currentCharIndex = mCacheIdx1;
+        int best = bestCachedColumnFor(column);
+        if (best >= 0) {
+            int bestIndex = cachedIndexFor(best);
+            if (bestIndex < mSpaceUsed) {
+                currentColumn = best;
+                currentCharIndex = bestIndex;
+            }
         }
         int lastBoundaryColumn = currentColumn;
         int lastBoundaryIndex = currentCharIndex;
@@ -243,7 +258,15 @@ public final class TerminalRow {
             if (codePoint >= Character.MIN_SUPPLEMENTARY_CODE_POINT || newCodePointDisplayWidth != 1) {
                 mHasNonOneWidthOrSurrogateChars = true;
             } else {
+                boolean oldWasHighSurrogate = Character.isHighSurrogate(mText[columnToSet]);
                 mText[columnToSet] = (char) codePoint;
+                // A surrogate in or written to a column changes how the scan
+                // consumes chars (high surrogates pair with the next char), so
+                // cached column->char-index boundaries for later columns go stale.
+                if (oldWasHighSurrogate
+                        || (codePoint >= Character.MIN_SURROGATE && codePoint <= Character.MAX_SURROGATE)) {
+                    invalidateScanCaches();
+                }
                 return;
             }
         }
@@ -315,9 +338,17 @@ public final class TerminalRow {
         }
         mSpaceUsed += javaCharDifference;
 
-        // Store char. A combining character is stored at the end of the existing contents so that it modifies them:
+        // Store char. A combining character is stored at the end of the existing contents so that it modifies them.
+        final int storeIndex = oldStartOfColumnIndex + (newIsCombining ? oldCharactersUsedForColumn : 0);
+        final boolean oldWasHighSurrogate = Character.isHighSurrogate(text[oldStartOfColumnIndex]);
         //noinspection ResultOfMethodCallIgnored - since we already now how many java chars is used.
-        Character.toChars(codePoint, text, oldStartOfColumnIndex + (newIsCombining ? oldCharactersUsedForColumn : 0));
+        if (newCharactersUsedForColumn == 1) {
+            // BMP code point (includes combining): single-char write, no
+            // Character.toChars() dispatch overhead.
+            text[storeIndex] = (char) codePoint;
+        } else {
+            Character.toChars(codePoint, text, storeIndex);
+        }
 
         if (oldCodePointDisplayWidth == 2 && newCodePointDisplayWidth == 1) {
             // Replace second half of wide char with a space. Which mean that we actually add a ' ' java character.
@@ -354,7 +385,12 @@ public final class TerminalRow {
         // scan caches (a combining add is also a width change: 0 != base width).
         // Same-width replacement (e.g. a CJK char over another CJK char) does not
         // move any chars, so the caches survive and the next setChar warm-starts.
-        if (javaCharDifference != 0 || oldCodePointDisplayWidth != newCodePointDisplayWidth) {
+        // A surrogate write also invalidates: the scan pairs a high surrogate
+        // with the next char, so the column->char-index mapping changes even
+        // when the display width does not.
+        if (javaCharDifference != 0 || oldCodePointDisplayWidth != newCodePointDisplayWidth
+                || oldWasHighSurrogate
+                || (codePoint >= Character.MIN_SURROGATE && codePoint <= Character.MAX_SURROGATE)) {
             invalidateScanCaches();
         }
     }

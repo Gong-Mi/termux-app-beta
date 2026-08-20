@@ -79,13 +79,25 @@ public class TerminalRowScanEquivalenceTest extends TestCase {
         for (int c = 0; c <= COLUMNS; c++) {
             int expected = refFindStartOfColumn(row, c);
             int actual = row.findStartOfColumn(c);
-            assertEquals("findStartOfColumn(" + c + ") " + context, expected, actual);
+            assertEquals("findStartOfColumn(" + c + ") " + context
+                    + " row=" + rowDump(row), expected, actual);
         }
         for (int c = 0; c < COLUMNS; c++) {
             boolean expected = refWideDisplayCharacterStartingAt(row, c);
             boolean actual = row.wideDisplayCharacterStartingAt(c);
-            assertEquals("wideDisplayCharacterStartingAt(" + c + ") " + context, expected, actual);
+            assertEquals("wideDisplayCharacterStartingAt(" + c + ") " + context
+                    + " row=" + rowDump(row), expected, actual);
         }
+    }
+
+    static String rowDump(TerminalRow row) {
+        StringBuilder sb = new StringBuilder();
+        char[] text = row.mText;
+        for (int i = 0; i < row.getSpaceUsed(); i++) {
+            char ch = text[i];
+            sb.append(Character.isHighSurrogate(ch) ? "\\u" + Integer.toHexString(ch) + ";" : String.valueOf(ch));
+        }
+        return sb.toString();
     }
 
     public void testRandomMutationsMatchOriginalScans() {
@@ -98,37 +110,53 @@ public class TerminalRowScanEquivalenceTest extends TestCase {
         int[] pool = {
             0x20, 'a', 'Z', '0',
             0x4E2D, 0x6587, 0xFF21,          // CJK wide
+            0x2500,                            // box drawing, width 1
             0x1F600, 0x1F680,                 // supplementary wide (surrogate pair)
-            0x0301, 0x0308, 0x20D0,           // combining (width 0)
+            0x0300, 0x0301, 0x0308, 0x20D0,  // combining (width 0)
             0x200B,                            // zero-width space
+            // NOTE: lone surrogates (0xD800-0xDFFF) are deliberately absent:
+            // the UTF-8 decoder can never produce them, and the ORIGINAL
+            // from-scratch scans overrun mSpaceUsed (ArrayIndexOutOfBounds)
+            // on rows containing them, so they cannot be part of a valid
+            // equivalence domain.
         };
+
+        String[] history = new String[64];
 
         for (int op = 0; op < 3000; op++) {
             int codePoint = pool[rnd.nextInt(pool.length)];
             int column = rnd.nextInt(COLUMNS);
+            String desc = "op" + op;
             if (rnd.nextInt(20) == 0) {
                 row.clear(rnd.nextInt());
+                desc += " clear";
             } else if (rnd.nextInt(25) == 0) {
-                // Copy a random interval from the other row into this one,
-                // keeping dst + interval length inside the row.
                 int dst = rnd.nextInt(COLUMNS - 1);
                 int len = 1 + rnd.nextInt(COLUMNS - dst);
                 int x1 = rnd.nextInt(COLUMNS - len + 1);
                 int x2 = x1 + len;
+                desc += " copy(" + x1 + "," + x2 + ")->" + dst;
                 row.copyInterval(other, x1, x2, dst);
             } else {
-                // Exercise the same call order setChar uses: previous-column
-                // wide probe, next-column wide probe, own start, next start.
+                desc += " setChar(" + column + "," + Integer.toHexString(codePoint) + ")";
                 if (column > 0) row.wideDisplayCharacterStartingAt(column - 1);
                 if (column + 1 < COLUMNS) row.wideDisplayCharacterStartingAt(column + 1);
                 row.findStartOfColumn(column);
                 try {
                     row.setChar(column, codePoint, rnd.nextInt(7));
                 } catch (IllegalArgumentException ignored) {
-                    // Wide char in the last column is rejected by design.
+                    desc += " THREW";
                 }
             }
-            assertRowMatches(row, "after op " + op);
+            try {
+                assertRowMatches(row, "after " + desc);
+            } catch (Throwable e) {
+                System.err.println("FAILURE at " + desc + " state=" + rowDump(row)
+                        + " spaceUsed=" + row.getSpaceUsed());
+                for (int i = Math.max(0, op - 5); i < op; i++) System.err.println("  prev: " + history[i % history.length]);
+                throw e;
+            }
+            history[op % history.length] = desc;
         }
     }
 
