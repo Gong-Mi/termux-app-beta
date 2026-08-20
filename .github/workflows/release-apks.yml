@@ -1,4 +1,5 @@
-# Build a release Android App Bundle and materialize a signed universal APK.
+# Build a release AAB once, then package and upload the installable target
+# separately. The AAB and universal APKS are never mixed in one artifact.
 name: Release APKS
 
 on:
@@ -14,8 +15,8 @@ env:
   BUNDLETOOL_VERSION: 1.18.2
 
 jobs:
-  build-release-apks:
-    name: bundleRelease -> signed universal .apks
+  build-release-aab:
+    name: bundleRelease -> AAB
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -34,6 +35,28 @@ jobs:
           ./gradlew bundleRelease --no-daemon
           test -s app/build/outputs/bundle/release/app-release.aab
 
+      - name: Upload release AAB only
+        uses: actions/upload-artifact@v6
+        with:
+          name: termux-app-release-aab
+          if-no-files-found: error
+          path: app/build/outputs/bundle/release/app-release.aab
+
+  package-release-universal:
+    name: AAB -> signed universal .apks
+    needs: build-release-aab
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout signing fixture
+        uses: actions/checkout@v6
+
+      - name: Download release AAB
+        uses: actions/download-artifact@v6
+        with:
+          name: termux-app-release-aab
+          path: input
+
       - name: Download bundletool
         run: |
           curl --fail --location --retry 3 \
@@ -42,42 +65,39 @@ jobs:
           test -s bundletool.jar
           sha256sum bundletool.jar | tee bundletool.sha256
 
-      - name: Build signed universal release APK set
+      - name: Build and verify signed universal release APKS
         env:
           KS_PASSWORD: xrj45yWGLbsO7W0v
         run: |
+          set -eu
           java -jar bundletool.jar build-apks \
-            --bundle=app/build/outputs/bundle/release/app-release.aab \
+            --bundle=input/app-release.aab \
             --output=termux-app-release-universal.apks \
             --mode=universal \
             --ks=app/testkey_untrusted.jks \
             --ks-key-alias=alias \
             --ks-pass=pass:${KS_PASSWORD} \
             --key-pass=pass:${KS_PASSWORD}
-
-      - name: Verify signed release APKS contents
-        run: |
-          set -eu
           unzip -t termux-app-release-universal.apks
           unzip -l termux-app-release-universal.apks | tee termux-app-release-universal.apks.listing
           unzip -p termux-app-release-universal.apks toc.pb > termux-app-release-universal.apks.toc.pb
           test -s termux-app-release-universal.apks.toc.pb
-          unzip -l termux-app-release-universal.apks | grep 'universal.apk'
+          grep -q 'universal.apk' termux-app-release-universal.apks.listing
           {
-            echo '## Release APKS'
+            echo '## Release universal APKS'
             echo
-            echo '### Artifacts'
-            sha256sum app/build/outputs/bundle/release/app-release.aab \
-              termux-app-release-universal.apks
+            sha256sum input/app-release.aab termux-app-release-universal.apks
+            echo
+            java -jar bundletool.jar version
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Upload release AAB and signed APKS
+      - name: Upload universal APKS only
         uses: actions/upload-artifact@v6
         with:
-          name: termux-app-release-apks
+          name: termux-app-release-universal-apks
           if-no-files-found: error
           path: |
-            app/build/outputs/bundle/release/app-release.aab
             termux-app-release-universal.apks
-            *.listing
-            *.sha256
+            termux-app-release-universal.apks.listing
+            termux-app-release-universal.apks.toc.pb
+            bundletool.sha256

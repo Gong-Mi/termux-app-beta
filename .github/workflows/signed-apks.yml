@@ -1,6 +1,6 @@
-# Build a signed Android App Bundle and materialize its split APK set.
-# This is an experiment for measuring whether packaging modularity changes
-# runtime behavior/performance; it is not a release workflow.
+# Build one debug AAB, then materialize each delivery target independently.
+# The default split set and fused universal set are deliberately separate jobs
+# and separate Actions artifacts so a download never mixes install targets.
 name: Signed APKS experiment
 
 on:
@@ -16,8 +16,8 @@ env:
   BUNDLETOOL_VERSION: 1.18.2
 
 jobs:
-  build-signed-apks:
-    name: bundleDebug -> signed .apks
+  build-debug-aab:
+    name: bundleDebug -> AAB
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -36,6 +36,28 @@ jobs:
           ./gradlew bundleDebug --no-daemon
           test -s app/build/outputs/bundle/debug/app-debug.aab
 
+      - name: Upload debug AAB
+        uses: actions/upload-artifact@v6
+        with:
+          name: termux-app-debug-aab
+          if-no-files-found: error
+          path: app/build/outputs/bundle/debug/app-debug.aab
+
+  package-debug-default:
+    name: AAB -> signed default split .apks
+    needs: build-debug-aab
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout signing fixture
+        uses: actions/checkout@v6
+
+      - name: Download debug AAB
+        uses: actions/download-artifact@v6
+        with:
+          name: termux-app-debug-aab
+          path: input
+
       - name: Download bundletool
         run: |
           curl --fail --location --retry 3 \
@@ -44,67 +66,106 @@ jobs:
           test -s bundletool.jar
           sha256sum bundletool.jar | tee bundletool.sha256
 
-      - name: Build signed split APK set
+      - name: Build and verify default split APKS
         env:
           KS_PASSWORD: xrj45yWGLbsO7W0v
         run: |
+          set -eu
           java -jar bundletool.jar build-apks \
-            --bundle=app/build/outputs/bundle/debug/app-debug.aab \
+            --bundle=input/app-debug.aab \
             --output=termux-app-debug-default.apks \
             --mode=default \
             --ks=app/testkey_untrusted.jks \
             --ks-key-alias=alias \
             --ks-pass=pass:${KS_PASSWORD} \
             --key-pass=pass:${KS_PASSWORD}
+          unzip -t termux-app-debug-default.apks
+          unzip -l termux-app-debug-default.apks | tee termux-app-debug-default.apks.listing
+          unzip -p termux-app-debug-default.apks toc.pb > termux-app-debug-default.apks.toc.pb
+          test -s termux-app-debug-default.apks.toc.pb
+          grep -Eq 'base-master.apk|base-arm64_v8a.apk|base-x86_64.apk' termux-app-debug-default.apks.listing
+          {
+            echo '## Debug default split APKS'
+            echo
+            sha256sum input/app-debug.aab termux-app-debug-default.apks
+            echo
+            java -jar bundletool.jar version
+          } >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Upload default split APKS only
+        uses: actions/upload-artifact@v6
+        with:
+          name: termux-app-debug-default-apks
+          if-no-files-found: error
+          path: |
+            termux-app-debug-default.apks
+            termux-app-debug-default.apks.listing
+            termux-app-debug-default.apks.toc.pb
+            bundletool.sha256
+
+  package-debug-universal:
+    name: AAB -> signed fused universal .apks
+    needs: build-debug-aab
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout signing fixture
+        uses: actions/checkout@v6
+
+      - name: Download debug AAB
+        uses: actions/download-artifact@v6
+        with:
+          name: termux-app-debug-aab
+          path: input
+
+      - name: Download bundletool
+        run: |
+          curl --fail --location --retry 3 \
+            -o bundletool.jar \
+            "https://github.com/google/bundletool/releases/download/${BUNDLETOOL_VERSION}/bundletool-all-${BUNDLETOOL_VERSION}.jar"
+          test -s bundletool.jar
+          sha256sum bundletool.jar | tee bundletool.sha256
+
+      - name: Build and verify fused universal APKS
+        env:
+          KS_PASSWORD: xrj45yWGLbsO7W0v
+        run: |
+          set -eu
           java -jar bundletool.jar build-apks \
-            --bundle=app/build/outputs/bundle/debug/app-debug.aab \
+            --bundle=input/app-debug.aab \
             --output=termux-app-debug-universal.apks \
             --mode=universal \
             --ks=app/testkey_untrusted.jks \
             --ks-key-alias=alias \
             --ks-pass=pass:${KS_PASSWORD} \
             --key-pass=pass:${KS_PASSWORD}
-
-      - name: Verify signed APKS contents
-        run: |
-          set -eu
-          for file in termux-app-debug-default.apks termux-app-debug-universal.apks; do
-            unzip -t "$file"
-            unzip -l "$file" | tee "${file}.listing"
-            unzip -p "$file" toc.pb > "${file}.toc.pb"
-            test -s "${file}.toc.pb"
-          done
-          unzip -l termux-app-debug-default.apks | grep -E 'base-master.apk|base-arm64_v8a.apk|base-x86_64.apk'
-          unzip -l termux-app-debug-universal.apks | grep 'universal.apk'
+          unzip -t termux-app-debug-universal.apks
+          unzip -l termux-app-debug-universal.apks | tee termux-app-debug-universal.apks.listing
+          unzip -p termux-app-debug-universal.apks toc.pb > termux-app-debug-universal.apks.toc.pb
+          test -s termux-app-debug-universal.apks.toc.pb
+          grep -q 'universal.apk' termux-app-debug-universal.apks.listing
           {
-            echo '## Signed APKS experiment'
+            echo '## Debug fused universal APKS'
             echo
-            echo '### Artifacts'
-            sha256sum app/build/outputs/bundle/debug/app-debug.aab \
-              termux-app-debug-default.apks termux-app-debug-universal.apks
+            sha256sum input/app-debug.aab termux-app-debug-universal.apks
             echo
-            echo '### Split APK entries'
-            unzip -l termux-app-debug-default.apks
-            echo
-            echo '### Bundletool'
             java -jar bundletool.jar version
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Upload AAB and signed APKS
+      - name: Upload universal APKS only
         uses: actions/upload-artifact@v6
         with:
-          name: termux-app-signed-apks
+          name: termux-app-debug-universal-apks
           if-no-files-found: error
           path: |
-            app/build/outputs/bundle/debug/app-debug.aab
-            termux-app-debug-default.apks
             termux-app-debug-universal.apks
-            *.listing
-            *.sha256
+            termux-app-debug-universal.apks.listing
+            termux-app-debug-universal.apks.toc.pb
+            bundletool.sha256
 
   emulator-split-smoke:
-    name: Install split APKS on SwiftShader emulator
+    name: Install exact default and universal targets on SwiftShader emulator
+    needs: [package-debug-default, package-debug-universal]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -129,32 +190,34 @@ jobs:
       - name: Install Android emulator and x86_64 system image
         run: |
           SDK="$ANDROID_HOME"
-          yes | "$SDK/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null
+          yes | "$SDK/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
           "$SDK/cmdline-tools/latest/bin/sdkmanager" \
             "platforms;android-36" "build-tools;34.0.0" "platform-tools" \
             "emulator" "system-images;android-36;google_apis;x86_64" >/dev/null
           echo "$SDK/platform-tools" >> "$GITHUB_PATH"
           echo "$SDK/emulator" >> "$GITHUB_PATH"
 
-      - name: Checkout
+      - name: Checkout render verifier
         uses: actions/checkout@v6
 
-      - name: Build AAB and signed default APKS
-        env:
-          KS_PASSWORD: xrj45yWGLbsO7W0v
+      - name: Download exact default target
+        uses: actions/download-artifact@v6
+        with:
+          name: termux-app-debug-default-apks
+          path: default-target
+
+      - name: Download exact universal target
+        uses: actions/download-artifact@v6
+        with:
+          name: termux-app-debug-universal-apks
+          path: universal-target
+
+      - name: Download bundletool
         run: |
-          ./gradlew bundleDebug --no-daemon
           curl --fail --location --retry 3 \
             -o bundletool.jar \
             "https://github.com/google/bundletool/releases/download/${BUNDLETOOL_VERSION}/bundletool-all-${BUNDLETOOL_VERSION}.jar"
-          java -jar bundletool.jar build-apks \
-            --bundle=app/build/outputs/bundle/debug/app-debug.aab \
-            --output=termux-app-debug-emulator.apks \
-            --mode=default \
-            --ks=app/testkey_untrusted.jks \
-            --ks-key-alias=alias \
-            --ks-pass=pass:${KS_PASSWORD} \
-            --key-pass=pass:${KS_PASSWORD}
+          test -s bundletool.jar
 
       - name: Boot x86_64 emulator with SwiftShader
         env:
@@ -177,10 +240,10 @@ jobs:
           done
           test "$(adb shell getprop sys.boot_completed | tr -d '\r')" = "1"
 
-      - name: Install split APKS and launch
+      - name: Install exact default split target and launch
         run: |
           java -jar bundletool.jar install-apks \
-            --apks=termux-app-debug-emulator.apks \
+            --apks=default-target/termux-app-debug-default.apks \
             --adb="$ANDROID_HOME/platform-tools/adb"
           adb shell pm path com.termux | tee installed-splits.txt
           test "$(grep -c '^package:' installed-splits.txt)" -gt 1
@@ -190,37 +253,19 @@ jobs:
           adb exec-out screencap -p > split-render.png
           adb logcat -d | grep -iE 'FATAL|AndroidRuntime.*com.termux' | tail -20 || true
 
-      - name: Assert split render and upload evidence
+      - name: Assert split render
         run: |
           python3 -m pip install --quiet Pillow
           python3 .github/workflows/assert_render.py split-render.png
 
-      - name: Build fused universal APKS
-        env:
-          KS_PASSWORD: xrj45yWGLbsO7W0v
-        run: |
-          java -jar bundletool.jar build-apks \
-            --bundle=app/build/outputs/bundle/debug/app-debug.aab \
-            --output=termux-app-debug-universal.apks \
-            --mode=universal \
-            --ks=app/testkey_untrusted.jks \
-            --ks-key-alias=alias \
-            --ks-pass=pass:${KS_PASSWORD} \
-            --key-pass=pass:${KS_PASSWORD}
-          unzip -l termux-app-debug-universal.apks | tee fused-apks-listing.txt
-          # fused form must be exactly one universal.apk (base + install-time feature fused)
-          test "$(grep -c 'universal.apk' fused-apks-listing.txt)" -ge 1
-
-      - name: Install fused APK and verify feature routing
+      - name: Install exact fused universal target and verify feature routing
         run: |
           mkdir -p fused
-          unzip -o termux-app-debug-universal.apks universal.apk -d fused
+          unzip -o universal-target/termux-app-debug-universal.apks universal.apk -d fused
           adb uninstall com.termux >/dev/null 2>&1 || true
           adb install -r fused/universal.apk
-          # single-APK form: package resolves to exactly one apk path
           adb shell pm path com.termux | tee fused-pm-path.txt
           test "$(grep -c '^package:' fused-pm-path.txt)" -eq 1
-          # external routing to SettingsActivity (feature component, exported=true)
           adb shell am start -W -n com.termux/.app.TermuxActivity
           sleep 15
           adb shell am start -W -a com.termux.action.OPEN_SETTINGS
@@ -228,18 +273,8 @@ jobs:
           adb shell dumpsys window | grep -E 'mCurrentFocus|mFocusedApp' | tee fused-focus.txt
           grep -q SettingsActivity fused-focus.txt
           adb exec-out screencap -p > fused-settings.png
-          # HelpActivity is exported=false: resolve proves the feature manifest
-          # survived the fuse, and an external start must be DENIED (the fuse must
-          # not have widened the activity to exported). In-app launch is exercised
-          # by SettingsActivity above; am-as-app (run-as) is blocked by ATMS
-          # package/uid matching on modern Android.
           adb shell cmd package resolve-activity -a com.termux.action.OPEN_HELP | tee fused-resolve.txt
           grep -q 'HelpActivity' fused-resolve.txt
-          # external start must be DENIED. On API 36 the resolver filters
-          # non-exported components at resolution ("unable to resolve"); older
-          # platforms may surface SecurityException at start instead. Both prove
-          # exported=false survived the fuse (a component widened by the fuse
-          # would be blindly startable).
           if adb shell am start -W -a com.termux.action.OPEN_HELP 2>&1 | tee fused-help-denied.txt | grep -qE 'SecurityException|unable to resolve|Activity not started'; then
             echo "HELP_EXPORTED_FALSE_ENFORCED_POST_FUSE"
           else
@@ -248,20 +283,6 @@ jobs:
             exit 1
           fi
           adb logcat -d | grep -iE 'FATAL|AndroidRuntime.*com.termux' | tail -20 || true
-
-      - name: Upload fused APK evidence
-        if: always()
-        uses: actions/upload-artifact@v6
-        with:
-          name: fused-apk-evidence
-          path: |
-            fused-apks-listing.txt
-            fused-pm-path.txt
-            fused-focus.txt
-            fused-resolve.txt
-            fused-help-denied.txt
-            fused-settings.png
-          if-no-files-found: warn
 
       - name: Upload split emulator evidence
         if: always()
@@ -272,6 +293,12 @@ jobs:
             split-render.png
             installed-splits.txt
             /tmp/split-emu.log
+            fused-pm-path.txt
+            fused-focus.txt
+            fused-resolve.txt
+            fused-help-denied.txt
+            fused-settings.png
+          if-no-files-found: warn
 
       - name: Kill emulator
         if: always()
