@@ -85,7 +85,8 @@ public final class TerminalRenderer {
             }
 
             TerminalRenderRow lineObject = screen.rowAtExternal(row);
-            final char[] line = lineObject.copyText();
+            // TerminalRenderRow is immutable; avoid copying the complete row on every draw.
+            final char[] line = lineObject.textForRenderer();
             final int charsUsedInLine = lineObject.getSpaceUsed();
 
             long lastRunStyle = 0;

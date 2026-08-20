@@ -26,6 +26,16 @@ public final class TerminalRenderRow {
         return Arrays.copyOf(text, text.length);
     }
 
+    /**
+     * Return the immutable snapshot storage for the renderer hot path.
+     *
+     * The returned array must be treated as read-only. This is safe for renderer use because
+     * TerminalRenderRow is immutable after construction and the snapshot is never mutated.
+     */
+    public char[] textForRenderer() {
+        return text;
+    }
+
     public int getSpaceUsed() {
         return spaceUsed;
     }
