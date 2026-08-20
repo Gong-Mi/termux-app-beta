@@ -50,6 +50,41 @@ public final class TerminalRow {
     /** If this row might contain chars with width != 1, used for deactivating fast path */
     boolean mHasNonOneWidthOrSurrogateChars;
 
+    /**
+     * Shared boundary cache for the column->char-index scans. Each entry is a
+     * true column boundary (column, char index of that column's first char)
+     * observed by a previous findStartOfColumn() or wideDisplayCharacterStartingAt()
+     * scan. Queries warm-start from the largest cached boundary not past the
+     * target column, which makes the per-setChar query sequence
+     * (c-1, c+1, c, c+2) amortized O(1) for sequential full-line writes.
+     * Both entries invalid when -1 (the row mutated in a way that moved chars).
+     */
+    private int mCacheCol0 = -1;
+    private int mCacheIdx0 = 0;
+    private int mCacheCol1 = -1;
+    private int mCacheIdx1 = 0;
+
+    private void invalidateScanCaches() {
+        mCacheCol0 = -1;
+        mCacheCol1 = -1;
+    }
+
+    /** Record a true column boundary, keeping the two most recent distinct columns. */
+    private void recordBoundary(int column, int charIndex) {
+        if (mCacheCol0 == column) {
+            mCacheIdx0 = charIndex;
+            return;
+        }
+        if (mCacheCol1 == column) {
+            mCacheIdx1 = charIndex;
+            return;
+        }
+        mCacheCol1 = mCacheCol0;
+        mCacheIdx1 = mCacheIdx0;
+        mCacheCol0 = column;
+        mCacheIdx0 = charIndex;
+    }
+
     /** Construct a blank row (containing only whitespace, ' ') with a specified style. */
     public TerminalRow(int columns, long style) {
         mColumns = columns;
@@ -60,6 +95,7 @@ public final class TerminalRow {
 
     /** NOTE: The sourceX2 is exclusive. */
     public void copyInterval(TerminalRow line, int sourceX1, int sourceX2, int destinationX) {
+        invalidateScanCaches();
         mHasNonOneWidthOrSurrogateChars |= line.mHasNonOneWidthOrSurrogateChars;
         final int x1 = line.findStartOfColumn(sourceX1);
         final int x2 = line.findStartOfColumn(sourceX2);
@@ -92,8 +128,23 @@ public final class TerminalRow {
     public int findStartOfColumn(int column) {
         if (column == mColumns) return getSpaceUsed();
 
+        // Warm start from the largest cached true boundary at or before the
+        // target column; fall back to scanning from column 0.
         int currentColumn = 0;
         int currentCharIndex = 0;
+        int col0 = mCacheCol0;
+        int col1 = mCacheCol1;
+        if (col0 > column) col0 = -1;
+        if (col1 > column) col1 = -1;
+        if (col0 >= col1 && col0 >= 0) {
+            currentColumn = col0;
+            currentCharIndex = mCacheIdx0;
+        } else if (col1 > col0 && col1 >= 0) {
+            currentColumn = col1;
+            currentCharIndex = mCacheIdx1;
+        }
+        int lastBoundaryColumn = currentColumn;
+        int lastBoundaryIndex = currentCharIndex;
         while (true) { // 0<2 1 < 2
             int newCharIndex = currentCharIndex;
             char c = mText[newCharIndex++]; // cci=1, cci=2
@@ -117,25 +168,54 @@ public final class TerminalRow {
                             break;
                         }
                     }
+                    recordBoundary(currentColumn, newCharIndex);
                     return newCharIndex;
                 } else if (currentColumn > column) {
-                    // Wide column going past end.
+                    // Wide column going past end. Cache the last true boundary
+                    // (guaranteed <= column) so the next scan warm-starts there.
+                    recordBoundary(lastBoundaryColumn, lastBoundaryIndex);
                     return currentCharIndex;
                 }
+                lastBoundaryColumn = currentColumn;
+                lastBoundaryIndex = newCharIndex;
             }
             currentCharIndex = newCharIndex;
         }
     }
 
-    private boolean wideDisplayCharacterStartingAt(int column) {
-        for (int currentCharIndex = 0, currentColumn = 0; currentCharIndex < mSpaceUsed; ) {
+    boolean wideDisplayCharacterStartingAt(int column) {
+        int currentColumn = 0;
+        int currentCharIndex = 0;
+        int col0 = mCacheCol0;
+        int col1 = mCacheCol1;
+        if (col0 > column) col0 = -1;
+        if (col1 > column) col1 = -1;
+        if (col0 >= col1 && col0 >= 0) {
+            currentColumn = col0;
+            currentCharIndex = mCacheIdx0;
+        } else if (col1 > col0 && col1 >= 0) {
+            currentColumn = col1;
+            currentCharIndex = mCacheIdx1;
+        }
+        int lastBoundaryColumn = currentColumn;
+        int lastBoundaryIndex = currentCharIndex;
+        for (; currentCharIndex < mSpaceUsed; ) {
             char c = mText[currentCharIndex++];
-            int codePoint = Character.isHighSurrogate(c) ? Character.toCodePoint(c, mText[currentCharIndex++]) : c;
+            boolean isHigh = Character.isHighSurrogate(c);
+            int codePoint = isHigh ? Character.toCodePoint(c, mText[currentCharIndex++]) : c;
             int wcwidth = WcWidth.width(codePoint);
             if (wcwidth > 0) {
-                if (currentColumn == column && wcwidth == 2) return true;
+                if (currentColumn == column && wcwidth == 2) {
+                    recordBoundary(currentColumn, currentCharIndex - (isHigh ? 2 : 1));
+                    return true;
+                }
                 currentColumn += wcwidth;
-                if (currentColumn > column) return false;
+                if (currentColumn > column) {
+                    recordBoundary(lastBoundaryColumn, lastBoundaryIndex);
+                    return false;
+                }
+                lastBoundaryColumn = currentColumn;
+                lastBoundaryIndex = currentCharIndex;
             }
         }
         return false;
@@ -146,6 +226,7 @@ public final class TerminalRow {
         Arrays.fill(mStyle, style);
         mSpaceUsed = (short) mColumns;
         mHasNonOneWidthOrSurrogateChars = false;
+        invalidateScanCaches();
     }
 
     // https://github.com/steven676/Android-Terminal-Emulator/commit/9a47042620bec87617f0b4f5d50568535668fe26
@@ -267,6 +348,14 @@ public final class TerminalRow {
                 System.arraycopy(text, newNextNextColumnIndex, text, newNextColumnIndex, mSpaceUsed - newNextNextColumnIndex);
                 mSpaceUsed -= nextLen;
             }
+        }
+
+        // Any width change shifts the char array and therefore invalidates the
+        // scan caches (a combining add is also a width change: 0 != base width).
+        // Same-width replacement (e.g. a CJK char over another CJK char) does not
+        // move any chars, so the caches survive and the next setChar warm-starts.
+        if (javaCharDifference != 0 || oldCodePointDisplayWidth != newCodePointDisplayWidth) {
+            invalidateScanCaches();
         }
     }
 
