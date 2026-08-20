@@ -103,6 +103,17 @@ public final class TerminalModelFrame implements FrameRevision {
         return screenRevision;
     }
 
+    public int colorAt(int index) {
+        return palette[index];
+    }
+
+    public boolean isDirtyInternalRow(int internalRow) {
+        return dirtyRowBits != null
+            && internalRow >= 0
+            && (internalRow >> 6) < dirtyRowBits.length
+            && (dirtyRowBits[internalRow >> 6] & (1L << (internalRow & 63))) != 0;
+    }
+
     public int[] copyPalette() {
         return Arrays.copyOf(palette, palette.length);
     }

@@ -30,8 +30,10 @@ public final class TerminalRenderFrame implements FrameRevision {
     public final boolean cursorVisible;
     /** 反相显示标志。 */
     public final boolean reverseVideo;
-    /** 当前调色板的不可变副本。 */
+    /** Immutable palette storage for emulator-owned frames; model-owned frames keep it in modelFrame. */
     private final int[] palette;
+    private final TerminalModelFrame modelFrame;
+    private int[] rendererPalette;
     /** 活动屏幕缓冲（主屏或备用屏，渲染前快照）。 */
     public final TerminalScreenSnapshot screen;
     /** 文本选择的矩形（外部坐标）。 */
@@ -50,6 +52,7 @@ public final class TerminalRenderFrame implements FrameRevision {
         this.topRow = topRow;
         this.endRow = topRow + emulator.mRows;
         this.columns = emulator.mColumns;
+        this.modelFrame = null;
         this.cursorCol = emulator.getCursorCol();
         this.cursorRow = emulator.getCursorRow();
         this.cursorStyle = emulator.getCursorStyle();
@@ -74,15 +77,16 @@ public final class TerminalRenderFrame implements FrameRevision {
         this.topRow = topRow;
         this.endRow = topRow + model.rows;
         this.columns = model.columns;
+        this.modelFrame = model;
         this.cursorCol = model.cursorCol;
         this.cursorRow = model.cursorRow;
         this.cursorStyle = model.cursorStyle;
         this.cursorVisible = model.cursorVisible;
         this.reverseVideo = model.reverseVideo;
-        this.palette = model.copyPalette();
+        this.palette = null;
         this.screen = model.screen;
         this.screenRevision = model.screenRevision;
-        this.dirtyRowBits = model.copyDirtyRowBits();
+        this.dirtyRowBits = null;
         this.dirtyMutationCount = model.dirtyMutationCount;
         this.selectionX1 = selectionX1;
         this.selectionY1 = selectionY1;
@@ -90,8 +94,20 @@ public final class TerminalRenderFrame implements FrameRevision {
         this.selectionY2 = selectionY2;
     }
 
+    int[] paletteForRenderer() {
+        if (rendererPalette == null) {
+            rendererPalette = modelFrame != null ? modelFrame.copyPalette() : palette;
+        }
+        return rendererPalette;
+    }
+
+    public int colorAt(int index) {
+        return modelFrame != null ? modelFrame.colorAt(index) : palette[index];
+    }
+
     public int[] copyPalette() {
-        return Arrays.copyOf(palette, palette.length);
+        int[] source = paletteForRenderer();
+        return Arrays.copyOf(source, source.length);
     }
 
     @Override
@@ -104,7 +120,10 @@ public final class TerminalRenderFrame implements FrameRevision {
      * 供审计/测试用；渲染器当前仍然是全量重绘，本方法只回答“哪行有正当的重绘理由”。
      */
     public final boolean rowNeedsRedraw(int externalRow) {
-        if (dirtyRowBits != null) {
+        if (modelFrame != null) {
+            int internal = screen.internalRowAtExternal(externalRow);
+            if (modelFrame.isDirtyInternalRow(internal)) return true;
+        } else if (dirtyRowBits != null) {
             int internal = screen.internalRowAtExternal(externalRow);
             if ((dirtyRowBits[internal >> 6] & (1L << (internal & 63))) != 0) return true;
         }

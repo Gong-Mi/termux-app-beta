@@ -62,7 +62,7 @@ public final class TerminalRenderer {
         final int cursorRow = frame.cursorRow;
         final boolean cursorVisible = frame.cursorVisible;
         final TerminalScreenSnapshot screen = frame.screen;
-        final int[] palette = frame.copyPalette();
+        final int[] palette = frame.paletteForRenderer();
         final int cursorShape = frame.cursorStyle;
         final int selectionX1 = frame.selectionX1;
         final int selectionY1 = frame.selectionY1;

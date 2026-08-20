@@ -5,6 +5,7 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 import com.termux.terminal.TerminalEmulator;
+import com.termux.terminal.TerminalModelFrame;
 import com.termux.terminal.TerminalOutput;
 
 import org.junit.Test;
@@ -39,6 +40,21 @@ public class TerminalRenderFrameTest {
         assertEquals(1L, frame.screenRevision);
         assertTrue(frame.rowNeedsRedraw(0));
         assertFalse(frame.rowNeedsRedraw(2));
+    }
+
+    @Test
+    public void modelFrameKeepsImmutablePaletteAndDirtyRows() {
+        TerminalEmulator emulator = emulator();
+        emulator.getScreen().getAndClearDirtyRowBits();
+        emulator.append("A".getBytes(StandardCharsets.UTF_8), 1);
+        long[] dirty = emulator.getScreen().getAndClearDirtyRowBits();
+        TerminalModelFrame model = new TerminalModelFrame(emulator, 0, dirty, 1);
+        TerminalRenderFrame frame = new TerminalRenderFrame(model, 0, 0, -1, -1);
+
+        assertTrue(frame.rowNeedsRedraw(0));
+        int[] palette = frame.copyPalette();
+        palette[0] = 0x12345678;
+        assertFalse(frame.copyPalette()[0] == 0x12345678);
     }
 
     @Test
