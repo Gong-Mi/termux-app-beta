@@ -225,6 +225,43 @@ public class TerminalParserWorkerTest extends TestCase {
         }
     }
 
+    public void testViewportIsClampedToCurrentTranscriptRange() throws Exception {
+        WorkerHarness h = new WorkerHarness(MAX_BYTES_PER_BATCH);
+        h.worker.start();
+        try {
+            h.worker.requestViewport(-100);
+            assertTrue("Out-of-range viewport must still publish a frame",
+                    h.client.textLatch.await(5, TimeUnit.SECONDS));
+            TerminalModelFrame initial = h.sink.last();
+            assertNotNull(initial);
+            assertEquals("Empty transcript must clamp viewport to the screen",
+                    0, initial.topRow);
+            assertTrue(initial.topRow >= -initial.activeTranscriptRows);
+
+            h.client.textLatch = new CountDownLatch(1);
+            StringBuilder lines = new StringBuilder();
+            for (int i = 0; i < ROWS * 3; i++) lines.append("line-").append(i).append('\n');
+            writeString(h.inputQueue, lines.toString());
+            h.worker.requestAppend();
+            assertTrue("Transcript input should publish a frame",
+                    h.client.textLatch.await(5, TimeUnit.SECONDS));
+
+            h.client.textLatch = new CountDownLatch(1);
+            h.worker.requestViewport(-10000);
+            assertTrue("Clamped transcript viewport should publish a frame",
+                    h.client.textLatch.await(5, TimeUnit.SECONDS));
+            TerminalModelFrame scrolled = h.sink.last();
+            assertNotNull(scrolled);
+            assertTrue("Published viewport must be valid for its captured transcript",
+                    scrolled.topRow >= -scrolled.activeTranscriptRows);
+            assertTrue("Viewport must never move below the transcript start",
+                    scrolled.topRow <= 0);
+        } finally {
+            h.worker.stop();
+            assertTrue(h.worker.awaitStopped(5000));
+        }
+    }
+
     public void testVisibleControlMutationsPublishFrames() throws Exception {
         WorkerHarness h = new WorkerHarness(MAX_BYTES_PER_BATCH);
         h.worker.start();

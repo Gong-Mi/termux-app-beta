@@ -169,7 +169,7 @@ public final class TerminalParserWorker {
                     break;
                 case MSG_VIEWPORT:
                     mMetrics.recordControlCommand();
-                    mViewport = new Viewport(cmd.topRow);
+                    mViewport = new Viewport(clampViewportTopRow(cmd.topRow));
                     publishFrame();
                     break;
                 case MSG_RESET:
@@ -283,13 +283,28 @@ public final class TerminalParserWorker {
     }
 
     private void publishFrame() {
+        int safeTopRow = clampViewportTopRow(mViewport.topRow);
+        if (safeTopRow != mViewport.topRow) {
+            mViewport = new Viewport(safeTopRow);
+        }
         TerminalBuffer screen = mEmulator.getScreen();
         int dirtyCount = screen.getDirtyMutationCount();
         long[] dirtyBits = dirtyCount == 0 ? null : screen.getAndClearDirtyRowBits();
-        TerminalModelFrame frame = new TerminalModelFrame(mEmulator, mViewport.topRow, dirtyBits, dirtyCount);
+        TerminalModelFrame frame = new TerminalModelFrame(mEmulator, safeTopRow, dirtyBits, dirtyCount);
         mMetrics.recordPublishedFrame();
         if (mFrameSink != null) mFrameSink.publishFrame(frame);
         mClient.onTextChanged(mSession); // posted to main thread; triggers UI invalidate
+    }
+
+    /**
+     * Keep the worker-owned viewport in the emulator's current external row space.
+     * Transcript length can shrink after a viewport command was queued, so this
+     * check must also run immediately before every snapshot capture.
+     */
+    private int clampViewportTopRow(int requestedTopRow) {
+        int activeTranscriptRows = mEmulator.getScreen().getActiveTranscriptRows();
+        int minimumTopRow = -activeTranscriptRows;
+        return Math.max(minimumTopRow, Math.min(0, requestedTopRow));
     }
 
     private static final class Viewport {
