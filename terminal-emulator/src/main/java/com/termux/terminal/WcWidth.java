@@ -1,5 +1,7 @@
 package com.termux.terminal;
 
+import java.util.Arrays;
+
 /**
  * Implementation of wcwidth(3) for Unicode 15.
  *
@@ -510,30 +512,56 @@ public final class WcWidth {
         return false;
     }
 
-    private static final int[] WIDTH_CACHE = new int[256];
+    /**
+     * Direct width lookup for the Basic Multilingual Plane (U+0000..U+FFFF).
+     * Values: 0 = zero width, 1 = narrow, 2 = wide.
+     *
+     * Pre-computing the BMP eliminates the per-code-point binary search over
+     * the Unicode interval tables, which dominates CJK/Dingbats input paths.
+     * Supplementary-plane code points still fall back to the interval tables.
+     */
+    private static final byte[] BMP_WIDTH = new byte[65536];
     static {
-        for (int i = 0; i < 256; i++) WIDTH_CACHE[i] = -1;
+        // Default width is 1 (narrow) for all BMP code points.
+        Arrays.fill(BMP_WIDTH, (byte) 1);
+
+        // Wide East Asian ranges in the BMP. Ranges that extend past U+FFFF
+        // are capped to the BMP; the supplementary portion is handled by the
+        // fallback path in width(int).
+        for (int[] range : WIDE_EASTASIAN) {
+            int start = range[0];
+            int end = range[1];
+            if (start > 0xFFFF) continue;
+            if (end > 0xFFFF) end = 0xFFFF;
+            Arrays.fill(BMP_WIDTH, start, end + 1, (byte) 2);
+        }
+
+        // Zero-width ranges (overrides wide where the tables would overlap).
+        for (int[] range : ZERO_WIDTH) {
+            int start = range[0];
+            int end = range[1];
+            if (start > 0xFFFF) continue;
+            if (end > 0xFFFF) end = 0xFFFF;
+            Arrays.fill(BMP_WIDTH, start, end + 1, (byte) 0);
+        }
+
+        // Special zero-width code points and C0/C1 control characters.
+        Arrays.fill(BMP_WIDTH, 0x0000, 0x0020, (byte) 0);          // C0 controls
+        BMP_WIDTH[0x034F] = 0;
+        Arrays.fill(BMP_WIDTH, 0x200B, 0x2010, (byte) 0);          // 0x200B..0x200F
+        BMP_WIDTH[0x2028] = 0;
+        BMP_WIDTH[0x2029] = 0;
+        Arrays.fill(BMP_WIDTH, 0x202A, 0x202F, (byte) 0);          // 0x202A..0x202E
+        Arrays.fill(BMP_WIDTH, 0x2060, 0x2064, (byte) 0);          // 0x2060..0x2063
+        Arrays.fill(BMP_WIDTH, 0x007F, 0x00A0, (byte) 0);          // C1 controls
     }
 
     /** Return the terminal display width of a code point: 0, 1 || 2. */
     public static int width(int ucs) {
-        // Single-method layout: the U+0000-U+00FF cache is a prologue and
-        // epilogue around the ORIGINAL body, kept inline in this method —
-        // no extracted helper. The wrapper+helper shape (#13 first cut)
-        // measured +14% on a 4MB CJK burst on aarch64 CI (ubuntu-24.04-arm,
-        // reproduced twice) while x86_64 was unaffected; paths that never
-        // hit the cache paid for the extra layer per code point. Whether
-        // the mechanism is JIT inlining is only confirmed by the aarch64
-        // number recovering (perf.yml PerfBenchmarkTest); if it does not,
-        // the next suspect is the cache prologue itself.
-        // Lower bound matters: negative code points must reach the C0
-        // branch below (returns 0), not index the cache.
-        if (ucs >= 0 && ucs < 256) {
-            int cached = WIDTH_CACHE[ucs];
-            if (cached != -1) return cached;
+        if (ucs >= 0 && ucs < 65536) {
+            return BMP_WIDTH[ucs];
         }
 
-        int w;
         if (ucs == 0 ||
             ucs == 0x034F ||
             (0x200B <= ucs && ucs <= 0x200F) ||
@@ -541,20 +569,17 @@ public final class WcWidth {
             ucs == 0x2029 ||
             (0x202A <= ucs && ucs <= 0x202E) ||
             (0x2060 <= ucs && ucs <= 0x2063)) {
-            w = 0;
+            return 0;
         } else if (ucs < 32 || (0x07F <= ucs && ucs < 0x0A0)) {
             // C0/C1 control characters
             // Termux change: Return 0 instead of -1.
-            w = 0;
+            return 0;
         } else if (intable(ZERO_WIDTH, ucs)) {
             // combining characters with zero width
-            w = 0;
+            return 0;
         } else {
-            w = intable(WIDE_EASTASIAN, ucs) ? 2 : 1;
+            return intable(WIDE_EASTASIAN, ucs) ? 2 : 1;
         }
-
-        if (ucs >= 0 && ucs < 256) WIDTH_CACHE[ucs] = w;
-        return w;
     }
 
     /** The width at an index position in a java char array. */
