@@ -29,8 +29,8 @@ jobs:
       matrix:
         include:
           - asset: pixel-loop
-            sha256: 9f23eec05e7eae28cd1278b194b41890afae037b0c32654b51de950ce38f5591
-            size: 1112336
+            sha256: 3c9620a8e339df860fa34772e08fb64840781a21bde35a2576b7fa4413476387
+            size: 1137624
             abi_name: arm64
             file_grep: 'ARM aarch64'
             abi_contract: aarch64-linux-android
