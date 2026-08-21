@@ -38,6 +38,10 @@ public final class TerminalRenderFrame implements FrameRevision {
     public final TerminalScreenSnapshot screen;
     /** 文本选择的矩形（外部坐标）。 */
     public final int selectionX1, selectionY1, selectionX2, selectionY2;
+    /** Alternate buffer state captured at snapshot time. */
+    public final boolean alternateBufferActive;
+    /** Number of active transcript rows captured at snapshot time. */
+    public final int activeTranscriptRows;
     /**
      * 渲染前采集的变更台账：自上一帧清除以来被解析/模型修改过的行（内部坐标系位图）与批次计数。
      * 用于把渲染问题归属到“解析改了哪些行” vs “渲染画了什么”。
@@ -67,6 +71,8 @@ public final class TerminalRenderFrame implements FrameRevision {
         this.selectionY1 = selectionY1;
         this.selectionX2 = selectionX2;
         this.selectionY2 = selectionY2;
+        this.alternateBufferActive = emulator.isAlternateBufferActive();
+        this.activeTranscriptRows = emulator.getScreen().getActiveTranscriptRows();
     }
 
     public TerminalRenderFrame(TerminalModelFrame model, int selectionX1, int selectionY1, int selectionX2, int selectionY2) {
@@ -92,6 +98,8 @@ public final class TerminalRenderFrame implements FrameRevision {
         this.selectionY1 = selectionY1;
         this.selectionX2 = selectionX2;
         this.selectionY2 = selectionY2;
+        this.alternateBufferActive = model.alternateBufferActive;
+        this.activeTranscriptRows = model.activeTranscriptRows;
     }
 
     /**

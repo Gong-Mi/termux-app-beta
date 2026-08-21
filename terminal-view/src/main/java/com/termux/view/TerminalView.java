@@ -1148,6 +1148,11 @@ public final class TerminalView extends View {
         return mLastRenderFrame;
     }
 
+    /** Current render frame used by the latest onDraw. May be null before first draw. */
+    public TerminalRenderFrame getCurrentRenderFrame() {
+        return mLastRenderFrame;
+    }
+
     public long getPublishedFrameCount() {
         return mFrameMetrics.getPublishedFrameCount();
     }
