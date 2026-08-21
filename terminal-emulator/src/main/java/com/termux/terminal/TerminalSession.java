@@ -86,8 +86,10 @@ public final class TerminalSession extends TerminalOutput {
     private volatile boolean mProcessReaderStopRequested;
 
     /** Java-side owners for the duplicated PTY descriptors. */
+    private final Object mPtyStreamLock = new Object();
     private volatile InputStream mTerminalInputStream;
     private volatile FileOutputStream mTerminalOutputStream;
+    private boolean mPtyStreamsCloseRequested;
 
     /**
      * Set as soon as waitFor() reports process exit.  Reader draining and parser
@@ -236,6 +238,11 @@ public final class TerminalSession extends TerminalOutput {
      */
     public void initializeEmulator(int columns, int rows, int cellWidthPixels, int cellHeightPixels) {
         mProcessExited = false;
+        synchronized (mPtyStreamLock) {
+            mPtyStreamsCloseRequested = false;
+            mTerminalInputStream = null;
+            mTerminalOutputStream = null;
+        }
         mEmulator = new TerminalEmulator(this, columns, rows, cellWidthPixels, cellHeightPixels, mTranscriptRows, mEmulatorClient);
         mParserWorker = new TerminalParserWorker(mEmulator, mProcessToTerminalIOQueue, mFrameSink, mEmulatorClient, this, 64 * 1024, 32 * 1024);
         mParserWorker.start();
@@ -265,7 +272,10 @@ public final class TerminalSession extends TerminalOutput {
             @Override
             public void run() {
                 try (InputStream termIn = new FileInputStream(inputFileDescriptor)) {
-                    mTerminalInputStream = termIn;
+                    synchronized (mPtyStreamLock) {
+                        if (mPtyStreamsCloseRequested) return;
+                        mTerminalInputStream = termIn;
+                    }
                     final byte[] buffer = new byte[4096];
                     while (true) {
                         if (mProcessReaderStopRequested) return;
@@ -278,7 +288,9 @@ public final class TerminalSession extends TerminalOutput {
                 } catch (Exception e) {
                     // Ignore, just shutting down.
                 } finally {
-                    mTerminalInputStream = null;
+                    synchronized (mPtyStreamLock) {
+                        if (mTerminalInputStream == termIn) mTerminalInputStream = null;
+                    }
                     mMainThreadHandler.sendEmptyMessage(MSG_PROCESS_READER_FINISHED);
                 }
             }
@@ -289,7 +301,10 @@ public final class TerminalSession extends TerminalOutput {
             public void run() {
                 final byte[] buffer = new byte[4096];
                 try (FileOutputStream termOut = new FileOutputStream(outputFileDescriptor)) {
-                    mTerminalOutputStream = termOut;
+                    synchronized (mPtyStreamLock) {
+                        if (mPtyStreamsCloseRequested) return;
+                        mTerminalOutputStream = termOut;
+                    }
                     while (true) {
                         int bytesToWrite = mTerminalToProcessIOQueue.read(buffer, true);
                         if (bytesToWrite == -1) return;
@@ -298,7 +313,9 @@ public final class TerminalSession extends TerminalOutput {
                 } catch (IOException e) {
                     // Ignore.
                 } finally {
-                    mTerminalOutputStream = null;
+                    synchronized (mPtyStreamLock) {
+                        if (mTerminalOutputStream == termOut) mTerminalOutputStream = null;
+                    }
                 }
             }
         }.start();
@@ -652,7 +669,15 @@ public final class TerminalSession extends TerminalOutput {
 
     /** Close Java-owned duplicate descriptors; stream close remains idempotent. */
     private void closePtyStreams() {
-        InputStream input = mTerminalInputStream;
+        final InputStream input;
+        final FileOutputStream output;
+        synchronized (mPtyStreamLock) {
+            mPtyStreamsCloseRequested = true;
+            input = mTerminalInputStream;
+            output = mTerminalOutputStream;
+            mTerminalInputStream = null;
+            mTerminalOutputStream = null;
+        }
         if (input != null) {
             try {
                 input.close();
@@ -660,7 +685,6 @@ public final class TerminalSession extends TerminalOutput {
                 // The reader is already being stopped.
             }
         }
-        FileOutputStream output = mTerminalOutputStream;
         if (output != null) {
             try {
                 output.close();
