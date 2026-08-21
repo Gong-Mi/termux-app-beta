@@ -21,11 +21,8 @@ final class TerminalTextChangeCoalescer {
         boolean posted;
         try {
             posted = mPoster.post(() -> {
-                try {
-                    callback.run();
-                } finally {
-                    mPosted.set(false);
-                }
+                mPosted.set(false);
+                callback.run();
             });
         } catch (RuntimeException | Error e) {
             mPosted.set(false);

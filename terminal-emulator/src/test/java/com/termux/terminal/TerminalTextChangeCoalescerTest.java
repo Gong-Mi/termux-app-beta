@@ -53,6 +53,23 @@ public class TerminalTextChangeCoalescerTest extends TestCase {
         assertEquals(2, callbacks[0]);
     }
 
+    public void testNotificationCanQueueAgainDuringCallback() {
+        QueuePoster poster = new QueuePoster();
+        TerminalTextChangeCoalescer coalescer = new TerminalTextChangeCoalescer(poster);
+        int[] callbacks = {0};
+
+        coalescer.notify(() -> {
+            callbacks[0]++;
+            coalescer.notify(() -> callbacks[0]++);
+        });
+        poster.runOne();
+
+        assertEquals("A notification raised by the callback must not lose its runnable",
+                1, poster.queue.size());
+        poster.runOne();
+        assertEquals(2, callbacks[0]);
+    }
+
     public void testRejectedPostDoesNotPoisonGate() {
         QueuePoster poster = new QueuePoster();
         TerminalTextChangeCoalescer coalescer = new TerminalTextChangeCoalescer(poster);
