@@ -271,7 +271,9 @@ public final class TerminalSession extends TerminalOutput {
         new Thread("TermSessionInputReader[pid=" + mShellPid + "]") {
             @Override
             public void run() {
-                try (InputStream termIn = new FileInputStream(inputFileDescriptor)) {
+                InputStream termIn = null;
+                try {
+                    termIn = new FileInputStream(inputFileDescriptor);
                     synchronized (mPtyStreamLock) {
                         if (mPtyStreamsCloseRequested) return;
                         mTerminalInputStream = termIn;
@@ -291,6 +293,13 @@ public final class TerminalSession extends TerminalOutput {
                     synchronized (mPtyStreamLock) {
                         if (mTerminalInputStream == termIn) mTerminalInputStream = null;
                     }
+                    if (termIn != null) {
+                        try {
+                            termIn.close();
+                        } catch (IOException ignored) {
+                            // The reader is already being stopped.
+                        }
+                    }
                     mMainThreadHandler.sendEmptyMessage(MSG_PROCESS_READER_FINISHED);
                 }
             }
@@ -300,7 +309,9 @@ public final class TerminalSession extends TerminalOutput {
             @Override
             public void run() {
                 final byte[] buffer = new byte[4096];
-                try (FileOutputStream termOut = new FileOutputStream(outputFileDescriptor)) {
+                FileOutputStream termOut = null;
+                try {
+                    termOut = new FileOutputStream(outputFileDescriptor);
                     synchronized (mPtyStreamLock) {
                         if (mPtyStreamsCloseRequested) return;
                         mTerminalOutputStream = termOut;
@@ -315,6 +326,13 @@ public final class TerminalSession extends TerminalOutput {
                 } finally {
                     synchronized (mPtyStreamLock) {
                         if (mTerminalOutputStream == termOut) mTerminalOutputStream = null;
+                    }
+                    if (termOut != null) {
+                        try {
+                            termOut.close();
+                        } catch (IOException ignored) {
+                            // The writer is already being stopped.
+                        }
                     }
                 }
             }
