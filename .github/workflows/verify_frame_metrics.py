@@ -18,7 +18,13 @@ Invariants checked (per log line, in order):
   8. parser and render counters are kept as separate snapshots (they may differ
      by one or more events because the diagnostic line is not an atomic sample)
 
-Optional: --min-lines N requires at least N parsed lines (default 1).
+Optional:
+  --min-lines N requires at least N parsed lines (default 1).
+  --max-rev-gap N caps the largest revision jump between consecutive lines.
+  --max-dropped-ratio R caps dropped / published (default 1.0, disabled at 1.0).
+  --max-coalesced-ratio R caps coalesced / published.
+  --max-parser-bytes-per-frame N caps parserBytes / parserFrames.
+  --min-drawn-ratio R requires drawn / published >= R.
 
 Exits 0 on success, 1 on any violation. Prints a one-line summary on success.
 """
@@ -82,6 +88,17 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("logfile", help="file containing 'frame rev=' log lines")
     ap.add_argument("--min-lines", type=int, default=1, help="minimum required line count")
+    ap.add_argument("--max-rev-gap", type=int, default=0,
+                    help="maximum allowed revision jump between consecutive frame lines "
+                         "(0 disables, default 0)")
+    ap.add_argument("--max-dropped-ratio", type=float, default=1.0,
+                    help="maximum allowed dropped / published ratio (1.0 disables)")
+    ap.add_argument("--max-coalesced-ratio", type=float, default=1.0,
+                    help="maximum allowed coalesced / published ratio (1.0 disables)")
+    ap.add_argument("--max-parser-bytes-per-frame", type=int, default=0,
+                    help="maximum allowed parserBytes / parserFrames (0 disables)")
+    ap.add_argument("--min-drawn-ratio", type=float, default=0.0,
+                    help="minimum required drawn / published ratio (0.0 disables)")
     ap.add_argument("--require-skipped", action="store_true",
                     help="require at least one frame line with skipped > 0 (proves the "
                          "clean-row redraw skip path actually ran)")
@@ -136,9 +153,45 @@ def main():
               "(clean-row skip path never ran; check layer type/hwui mode)")
         sys.exit(1)
 
+    # Threshold checks against aggregate counters from the last sample.
     last = rows[-1]
     first = rows[0]
     max_rev_gap = max((rows[i]["rev"] - rows[i - 1]["rev"]) for i in range(1, len(rows)))
+    total_published = last.get("published", 0)
+    total_drawn = last.get("drawn", 0)
+    total_dropped = last.get("dropped", 0)
+    total_coalesced = last.get("coalesced", 0)
+    total_parser_bytes = last.get("parserBytes", 0)
+    total_parser_frames = last.get("parserFrames", 0)
+
+    if args.max_rev_gap > 0 and max_rev_gap > args.max_rev_gap:
+        print(f"FAIL: maxRevGap({max_rev_gap}) > --max-rev-gap({args.max_rev_gap})")
+        sys.exit(1)
+    if args.max_dropped_ratio < 1.0 and total_published > 0:
+        dropped_ratio = total_dropped / total_published
+        if dropped_ratio > args.max_dropped_ratio:
+            print(f"FAIL: dropped/published({dropped_ratio:.3f}) > "
+                  f"--max-dropped-ratio({args.max_dropped_ratio})")
+            sys.exit(1)
+    if args.max_coalesced_ratio < 1.0 and total_published > 0:
+        coalesced_ratio = total_coalesced / total_published
+        if coalesced_ratio > args.max_coalesced_ratio:
+            print(f"FAIL: coalesced/published({coalesced_ratio:.3f}) > "
+                  f"--max-coalesced-ratio({args.max_coalesced_ratio})")
+            sys.exit(1)
+    if args.min_drawn_ratio > 0.0 and total_published > 0:
+        drawn_ratio = total_drawn / total_published
+        if drawn_ratio < args.min_drawn_ratio:
+            print(f"FAIL: drawn/published({drawn_ratio:.3f}) < "
+                  f"--min-drawn-ratio({args.min_drawn_ratio})")
+            sys.exit(1)
+    if args.max_parser_bytes_per_frame > 0 and total_parser_frames > 0:
+        bytes_per_frame = total_parser_bytes / total_parser_frames
+        if bytes_per_frame > args.max_parser_bytes_per_frame:
+            print(f"FAIL: parserBytes/parserFrames({bytes_per_frame:.1f}) > "
+                  f"--max-parser-bytes-per-frame({args.max_parser_bytes_per_frame})")
+            sys.exit(1)
+
     print("PASS frames={} firstRev={} lastRev={} published={} drawn={} dropped={} "
           "coalesced={} acked={} appendCommands={}(+{}) controlCommands={}(+{}) "
           "parserBytes={}(+{}) parserFrames={}(+{}) finishCommands={} stopCommands={} "

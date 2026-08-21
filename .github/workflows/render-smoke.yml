@@ -221,7 +221,7 @@ jobs:
           grep -E 'Termux:TerminalView.*frame rev=' logcat-smoke.txt > frame-info-lines.txt \
             || { echo 'NO_FRAME_INFO_LINES'; tail -50 logcat-smoke.txt; exit 1; }
           wc -l frame-info-lines.txt
-          python3 .github/workflows/verify_frame_metrics.py frame-info-lines.txt --min-lines 3
+          python3 .github/workflows/verify_frame_metrics.py frame-info-lines.txt --min-lines 3 --max-rev-gap 10 --min-drawn-ratio 0.3
 
       - name: Pixel assertions
         if: matrix.gpu == 'swiftshader_indirect'
@@ -277,7 +277,7 @@ jobs:
           adb logcat -d > logcat-hwui.txt
           grep -E 'Termux:TerminalView.*frame rev=' logcat-hwui.txt > frame-info-hwui.txt \
             || { echo 'NO_FRAME_INFO_LINES under hwui_gpu'; tail -50 logcat-hwui.txt; exit 1; }
-          python3 .github/workflows/verify_frame_metrics.py frame-info-hwui.txt --min-lines 3 --require-skipped
+          python3 .github/workflows/verify_frame_metrics.py frame-info-hwui.txt --min-lines 3 --require-skipped --max-rev-gap 10 --min-drawn-ratio 0.3
           python3 .github/workflows/assert_render.py render_hwui.png
           adb logcat -d | grep -iE 'FATAL|AndroidRuntime.*com.termux' | tail -20 || true
 
