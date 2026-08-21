@@ -98,6 +98,32 @@ public class TerminalParserWorkerTest extends TestCase {
         }
     }
 
+    /** Sink that can refuse snapshots, used to test latest-only coalescing in the worker. */
+    private static final class GatedSink implements TerminalFrameSink {
+        final List<TerminalModelFrame> frames = new ArrayList<>();
+        volatile boolean allowSnapshot = true;
+
+        @Override
+        public void publishFrame(TerminalModelFrame frame) {
+            synchronized (frames) {
+                frames.add(frame);
+            }
+        }
+
+        @Override
+        public boolean shouldCaptureSnapshot() {
+            return allowSnapshot;
+        }
+
+        int size() {
+            synchronized (frames) { return frames.size(); }
+        }
+
+        TerminalModelFrame get(int index) {
+            synchronized (frames) { return frames.get(index); }
+        }
+    }
+
     private static class WorkerHarness {
         final TerminalParserWorker worker;
         final ByteQueue inputQueue;
@@ -433,6 +459,48 @@ public class TerminalParserWorkerTest extends TestCase {
             assertEquals(1, h.worker.getMetricsSnapshot().stopCommands);
         } finally {
             h.worker.stop();
+        }
+    }
+
+    public void testSnapshotSkippedWhenSinkCannotAcceptAndRepublishesOnConsumed() throws Exception {
+        GatedSink sink = new GatedSink();
+        CapturingClient client = new CapturingClient();
+        ByteQueue queue = new ByteQueue(64 * 1024);
+        TerminalEmulator emulator = new TerminalEmulator(
+                new NoopOutput(), COLUMNS, ROWS, CELL_WIDTH, CELL_HEIGHT, null, client);
+        TerminalParserWorker worker = new TerminalParserWorker(
+                emulator, queue, sink, client, null, RECEIVE_BUFFER_SIZE, MAX_BYTES_PER_BATCH);
+        worker.start();
+        try {
+            writeString(queue, "a");
+            worker.requestAppend();
+            for (int i = 0; i < 100 && sink.size() == 0; i++) {
+                Thread.sleep(50);
+            }
+            assertEquals("first append should publish immediately", 1, sink.size());
+            TerminalModelFrame first = sink.get(0);
+
+            // Block snapshots. A second append should parse but not publish.
+            sink.allowSnapshot = false;
+            writeString(queue, "b");
+            worker.requestAppend();
+            for (int i = 0; i < 50 && sink.size() == 1; i++) {
+                Thread.sleep(50);
+            }
+            assertEquals("worker should skip snapshot while sink cannot accept", 1, sink.size());
+
+            // Notify worker that the previous frame was consumed. It should
+            // republish with the latest state containing both characters.
+            worker.onFrameConsumed(first);
+            for (int i = 0; i < 100 && sink.size() == 1; i++) {
+                Thread.sleep(50);
+            }
+            assertEquals("republish should produce a second frame", 2, sink.size());
+            assertTrue("republished frame should contain merged state",
+                    sink.get(1).screen.getTranscriptText().contains("ab"));
+        } finally {
+            worker.stop();
+            assertTrue(worker.awaitStopped(5000));
         }
     }
 }

@@ -138,13 +138,43 @@ public final class TerminalSession extends TerminalOutput {
                 mLatestFrame = frame;
                 if (delegate != null) delegate.publishFrame(frame);
             }
+
+            @Override
+            public boolean shouldCaptureSnapshot() {
+                return delegate == null || delegate.shouldCaptureSnapshot();
+            }
+
+            @Override
+            public void onFrameConsumed(TerminalModelFrame frame) {
+                if (delegate != null) delegate.onFrameConsumed(frame);
+            }
         };
         if (mParserWorker != null) mParserWorker.setFrameSink(mFrameSink);
     }
 
+    /**
+     * Notify the parser worker that a previously published frame has been consumed by
+     * the renderer. This allows the worker to republish if it skipped snapshots while
+     * a frame was pending.
+     */
+    public void onFrameConsumed(TerminalModelFrame frame) {
+        TerminalParserWorker worker = mParserWorker;
+        if (worker != null) worker.onFrameConsumed(frame);
+    }
+
     /** Detach the current view route; future worker frames are not delivered to it. */
     public synchronized void detachFrameSink() {
-        mFrameSink = frame -> mLatestFrame = frame;
+        mFrameSink = new TerminalFrameSink() {
+            @Override
+            public void publishFrame(TerminalModelFrame frame) {
+                mLatestFrame = frame;
+            }
+
+            @Override
+            public boolean shouldCaptureSnapshot() {
+                return true;
+            }
+        };
         if (mParserWorker != null) mParserWorker.setFrameSink(mFrameSink);
     }
 

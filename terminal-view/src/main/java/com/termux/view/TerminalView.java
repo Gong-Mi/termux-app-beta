@@ -41,6 +41,7 @@ import androidx.annotation.RequiresApi;
 import com.termux.terminal.KeyHandler;
 import com.termux.terminal.TerminalBuffer;
 import com.termux.terminal.TerminalEmulator;
+import com.termux.terminal.TerminalFrameSink;
 import com.termux.terminal.TerminalModelFrame;
 import com.termux.terminal.TerminalSession;
 import com.termux.view.textselection.TextSelectionCursorController;
@@ -330,7 +331,24 @@ public final class TerminalView extends View {
 
         final TerminalRenderMailbox<TerminalModelFrame> mailbox = new TerminalRenderMailbox<>(mFrameMetrics);
         mRenderMailbox = mailbox;
-        session.setFrameSink(mailbox::publish);
+        session.setFrameSink(new TerminalFrameSink() {
+            @Override
+            public void publishFrame(TerminalModelFrame frame) {
+                boolean hadPending = mailbox.peek() != null;
+                mailbox.publish(frame);
+                if (!hadPending) invalidate();
+            }
+
+            @Override
+            public boolean shouldCaptureSnapshot() {
+                return mailbox.peek() == null;
+            }
+
+            @Override
+            public void onFrameConsumed(TerminalModelFrame frame) {
+                session.onFrameConsumed(frame);
+            }
+        });
 
         updateSize();
 
@@ -1118,6 +1136,9 @@ public final class TerminalView extends View {
                     mRenderer.render(frame, canvas, skipCleanRows, mLastRenderedFrame);
                     mLastRenderedFrame = frame;
                     mFrameMetrics.ack(frame.screenRevision);
+                    if (model != null) {
+                        mTermSession.onFrameConsumed(model);
+                    }
                 } catch (RuntimeException e) {
                     mFrameMetrics.drop();
                     throw e;

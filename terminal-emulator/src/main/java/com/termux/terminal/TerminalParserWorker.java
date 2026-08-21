@@ -28,6 +28,7 @@ public final class TerminalParserWorker {
     private static final int MSG_SET_CURSOR_BLINKING_ENABLED = 11;
     private static final int MSG_RESET_COLORS = 12;
     private static final int MSG_TOGGLE_AUTO_SCROLL_DISABLED = 13;
+    private static final int MSG_REPUBLISH = 14;
 
     private final TerminalEmulator mEmulator;
     private final ByteQueue mInputQueue;
@@ -41,11 +42,18 @@ public final class TerminalParserWorker {
     private final Thread mThread;
     private final AtomicBoolean mAppendScheduled = new AtomicBoolean(false);
     private final AtomicBoolean mStopRequested = new AtomicBoolean(false);
+    private final AtomicBoolean mRepublishScheduled = new AtomicBoolean(false);
 
     private volatile Viewport mViewport = new Viewport(0);
     /** Parser-thread-only previous immutable screen for row sharing. */
     private TerminalScreenSnapshot mPreviousScreenSnapshot;
     private volatile boolean mStopped;
+    /** Set when parser state changed but the sink asked us to skip snapshot. */
+    private volatile boolean mDirty;
+    /** Set by the consumer thread to indicate a previously published frame has been drawn,
+     * allowing the worker to publish immediately even if the sink reports it cannot accept
+     * (because the old frame is no longer blocking the slot). */
+    private volatile boolean mConsumedPending;
 
     public TerminalParserWorker(TerminalEmulator emulator, ByteQueue inputQueue, TerminalFrameSink frameSink,
                                 TerminalSessionClient client, TerminalSession session, int receiveBufferSize, int maxBytesPerBatch) {
@@ -90,6 +98,17 @@ public final class TerminalParserWorker {
     /** Replace the callback route for a reattached/recreated session client. */
     public void setClient(TerminalSessionClient client) {
         mClient = client;
+    }
+
+    /**
+     * Called from the consumer/render thread when a previously published frame has been drawn.
+     * If the worker skipped snapshots while a frame was pending, this schedules a republish.
+     */
+    public void onFrameConsumed(TerminalModelFrame frame) {
+        mConsumedPending = true;
+        if (mDirty && mRepublishScheduled.compareAndSet(false, true)) {
+            mCommandQueue.add(Command.republish());
+        }
     }
 
     public void requestAppend() {
@@ -234,6 +253,13 @@ public final class TerminalParserWorker {
                     mMetrics.recordStopCommand();
                     mStopped = true;
                     break;
+                case MSG_REPUBLISH:
+                    mRepublishScheduled.set(false);
+                    if (mDirty) {
+                        mDirty = false;
+                        publishFrame();
+                    }
+                    break;
             }
         }
     }
@@ -300,6 +326,15 @@ public final class TerminalParserWorker {
     }
 
     private void publishFrame() {
+        TerminalFrameSink sink = mFrameSink;
+        if (sink != null && !sink.shouldCaptureSnapshot()) {
+            // The render side already has a frame that has not been consumed.
+            // Skip the expensive snapshot unless the consumer has already drawn
+            // the previous frame, in which case we can publish the latest state now.
+            mDirty = true;
+            if (!mConsumedPending) return;
+        }
+
         int safeTopRow = clampViewportTopRow(mViewport.topRow);
         if (safeTopRow != mViewport.topRow) {
             mViewport = new Viewport(safeTopRow);
@@ -311,8 +346,10 @@ public final class TerminalParserWorker {
             mPreviousScreenSnapshot);
         mPreviousScreenSnapshot = frame.screen;
         mMetrics.recordPublishedFrame();
-        if (mFrameSink != null) mFrameSink.publishFrame(frame);
+        if (sink != null) sink.publishFrame(frame);
         mClient.onTextChanged(mSession); // posted to main thread; triggers UI invalidate
+        mDirty = false;
+        mConsumedPending = false;
     }
 
     /**
@@ -375,5 +412,6 @@ public final class TerminalParserWorker {
         static Command setCursorBlinkingEnabled(boolean enabled) { return new Command(MSG_SET_CURSOR_BLINKING_ENABLED, 0, 0, 0, 0, 0, 0, null, 0, 0, 0, false, enabled); }
         static Command resetColors() { return new Command(MSG_RESET_COLORS, 0, 0, 0, 0, 0, 0, null, 0, 0, 0, false, false); }
         static Command toggleAutoScrollDisabled() { return new Command(MSG_TOGGLE_AUTO_SCROLL_DISABLED, 0, 0, 0, 0, 0, 0, null, 0, 0, 0, false, false); }
+        static Command republish() { return new Command(MSG_REPUBLISH, 0, 0, 0, 0, 0, 0, null, 0, 0, 0, false, false); }
     }
 }
