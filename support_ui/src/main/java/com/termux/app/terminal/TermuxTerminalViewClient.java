@@ -121,9 +121,9 @@ public class TermuxTerminalViewClient extends TermuxTerminalViewClientBase {
 
         mTerminalCursorBlinkerStateAlreadySet = false;
 
-        if (mActivity.getTerminalView().mEmulator != null) {
+        if (mActivity.getTerminalView().isSessionAttached()) {
             // Start terminal cursor blinking if enabled
-            // If emulator is already set, then start blinker now, otherwise wait for onEmulatorSet()
+            // If a session is already attached, then start blinker now, otherwise wait for onEmulatorSet()
             // event to start it. This is needed since onEmulatorSet() may not be called after
             // TermuxActivity is started after device display timeout with double tap and not power button.
             setTerminalCursorBlinkerState(true);
@@ -299,7 +299,7 @@ public class TermuxTerminalViewClient extends TermuxTerminalViewClientBase {
     public boolean onKeyUp(int keyCode, KeyEvent e) {
         // If emulator is not set, like if bootstrap installation failed and user dismissed the error
         // dialog, then just exit the activity, otherwise they will be stuck in a broken state.
-        if (keyCode == KeyEvent.KEYCODE_BACK && mActivity.getTerminalView().mEmulator == null) {
+        if (keyCode == KeyEvent.KEYCODE_BACK && !mActivity.getTerminalView().isSessionAttached()) {
             mActivity.finishActivityIfNotFinishing();
             return true;
         }

@@ -329,6 +329,17 @@ public final class TerminalSession extends TerminalOutput {
         }
     }
 
+    /** Toggle whether auto-scroll is disabled, serialized with parser worker updates. */
+    public void requestToggleAutoScrollDisabled() {
+        if (mParserWorker != null) {
+            mParserWorker.requestToggleAutoScrollDisabled();
+        } else if (mEmulator != null) {
+            synchronized (mEmulator) {
+                mEmulator.toggleAutoScrollDisabled();
+            }
+        }
+    }
+
     /** @return number of visible screen rows. */
     public int getScreenRows() {
         TerminalModelFrame frame = mLatestFrame;

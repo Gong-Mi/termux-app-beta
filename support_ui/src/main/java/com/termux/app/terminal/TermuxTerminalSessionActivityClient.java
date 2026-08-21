@@ -208,8 +208,8 @@ public class TermuxTerminalSessionActivityClient extends TermuxTerminalSessionCl
 
         mActivity.runOnUiThread(() -> {
             String text = ShareUtils.getTextStringFromClipboardIfSet(mActivity, true);
-            if (text != null)
-                mActivity.getTerminalView().mEmulator.paste(text);
+            if (text != null && session != null)
+                session.paste(text);
         });
     }
 

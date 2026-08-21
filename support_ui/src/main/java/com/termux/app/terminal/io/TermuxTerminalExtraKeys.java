@@ -98,8 +98,9 @@ public class TermuxTerminalExtraKeys extends TerminalExtraKeys {
                 mTermuxTerminalSessionActivityClient.onPasteTextFromClipboard(null);
         }  else if ("SCROLL".equals(key)) {
             TerminalView terminalView = mTermuxTerminalViewClient.getActivity().getTerminalView();
-            if (terminalView != null && terminalView.mEmulator != null)
-                terminalView.mEmulator.toggleAutoScrollDisabled();
+            TerminalSession session = terminalView != null ? terminalView.getTermSession() : null;
+            if (session != null)
+                session.requestToggleAutoScrollDisabled();
         } else {
             super.onTerminalExtraKeyButtonClick(view, key, ctrlDown, altDown, shiftDown, fnDown);
         }

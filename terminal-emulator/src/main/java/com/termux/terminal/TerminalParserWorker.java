@@ -27,6 +27,7 @@ public final class TerminalParserWorker {
     private static final int MSG_SET_CURSOR_BLINK_STATE = 10;
     private static final int MSG_SET_CURSOR_BLINKING_ENABLED = 11;
     private static final int MSG_RESET_COLORS = 12;
+    private static final int MSG_TOGGLE_AUTO_SCROLL_DISABLED = 13;
 
     private final TerminalEmulator mEmulator;
     private final ByteQueue mInputQueue;
@@ -134,6 +135,10 @@ public final class TerminalParserWorker {
         enqueueControl(Command.resetColors());
     }
 
+    public void requestToggleAutoScrollDisabled() {
+        enqueueControl(Command.toggleAutoScrollDisabled());
+    }
+
     public void requestFinish(int exitCode) {
         enqueueControl(Command.finish(exitCode));
     }
@@ -212,6 +217,11 @@ public final class TerminalParserWorker {
                 case MSG_RESET_COLORS:
                     mMetrics.recordControlCommand();
                     mEmulator.mColors.reset();
+                    publishFrame();
+                    break;
+                case MSG_TOGGLE_AUTO_SCROLL_DISABLED:
+                    mMetrics.recordControlCommand();
+                    mEmulator.toggleAutoScrollDisabled();
                     publishFrame();
                     break;
                 case MSG_FINISH:
@@ -364,5 +374,6 @@ public final class TerminalParserWorker {
         static Command setCursorBlinkState(boolean visible) { return new Command(MSG_SET_CURSOR_BLINK_STATE, 0, 0, 0, 0, 0, 0, null, 0, 0, 0, false, visible); }
         static Command setCursorBlinkingEnabled(boolean enabled) { return new Command(MSG_SET_CURSOR_BLINKING_ENABLED, 0, 0, 0, 0, 0, 0, null, 0, 0, 0, false, enabled); }
         static Command resetColors() { return new Command(MSG_RESET_COLORS, 0, 0, 0, 0, 0, 0, null, 0, 0, 0, false, false); }
+        static Command toggleAutoScrollDisabled() { return new Command(MSG_TOGGLE_AUTO_SCROLL_DISABLED, 0, 0, 0, 0, 0, 0, null, 0, 0, 0, false, false); }
     }
 }

@@ -55,8 +55,8 @@ public final class TerminalView extends View {
     public TerminalSession mTermSession;
     /**
      * Our terminal emulator whose session is {@link #mTermSession}.
-     * @deprecated Kept for source compatibility only. Internal code should use {@link #mTermSession}
-     *             snapshot methods; after attachSession this field is always null.
+     * @deprecated Kept for source compatibility only. External code should use {@link #isSessionAttached()}
+     *             and snapshot methods on {@link #mTermSession}; after attachSession this field is null.
      */
     @Deprecated
     public TerminalEmulator mEmulator;
@@ -338,6 +338,19 @@ public final class TerminalView extends View {
         setVerticalScrollBarEnabled(true);
 
         return true;
+    }
+
+    /**
+     * Returns true if a terminal session is currently attached to this view.
+     * Use this instead of inspecting the deprecated {@link #mEmulator} field.
+     */
+    public boolean isSessionAttached() {
+        return mTermSession != null;
+    }
+
+    /** Returns the currently attached terminal session, or null if none. */
+    public TerminalSession getTermSession() {
+        return mTermSession;
     }
 
     @Override
