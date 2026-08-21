@@ -109,4 +109,45 @@ public class TerminalRenderFrameTest {
         assertTrue(frame.rowNeedsRedraw(2));
         assertFalse(frame.rowNeedsRedraw(3));
     }
+
+    @Test
+    public void unchangedRowIsIdentitySharedWithPreviousFrame() {
+        TerminalEmulator emulator = emulator();
+        // Both frames capture the same untouched screen: the snapshot machinery
+        // must hand back the same immutable row object for row 1 while row 0 is
+        // rebuilt after a mutation. The parser worker passes the previous frame's
+        // screen as previousScreen, which is what enables row reuse.
+        byte[] input = "AB".getBytes(StandardCharsets.UTF_8);
+        emulator.append(input, input.length);
+        emulator.getScreen().getAndClearDirtyRowBits();
+        TerminalModelFrame previous = new TerminalModelFrame(emulator, 0, null, 0);
+        TerminalRenderFrame prevRender = new TerminalRenderFrame(previous, 0, -1, -1, -1, -1);
+
+        emulator.append("C".getBytes(StandardCharsets.UTF_8), 1);
+        long[] dirty = emulator.getScreen().getAndClearDirtyRowBits();
+        TerminalModelFrame next = new TerminalModelFrame(emulator, 0, dirty, 1, previous.screen);
+        TerminalRenderFrame nextRender = new TerminalRenderFrame(next, 0, -1, -1, -1, -1);
+
+        // Row 0 was mutated: rebuilt, therefore not identity-shared.
+        assertFalse(nextRender.rowUnchangedFrom(prevRender, 0));
+        // Row 1 was untouched: the unchanged row object is reused, so it may be skipped.
+        assertTrue(nextRender.rowUnchangedFrom(prevRender, 1));
+    }
+
+    @Test
+    public void fullRedrawRequiredOnGeometryPaletteOrReverseVideoChange() {
+        TerminalEmulator emulator = emulator();
+        byte[] input = "A".getBytes(StandardCharsets.UTF_8);
+        emulator.append(input, input.length);
+        TerminalRenderFrame first = new TerminalRenderFrame(emulator, 0, null, 0, 0, 0, -1, -1);
+        TerminalRenderFrame second = new TerminalRenderFrame(emulator, 0, null, 0, 0, 0, -1, -1);
+
+        assertFalse(first.needsFullRedraw(second));
+
+        emulator.mColors.mCurrentColors[1] = 0x12345678;
+        TerminalRenderFrame third = new TerminalRenderFrame(emulator, 0, null, 0, 0, 0, -1, -1);
+        assertTrue(second.needsFullRedraw(third));
+
+        assertTrue(first.needsFullRedraw(null));
+    }
 }

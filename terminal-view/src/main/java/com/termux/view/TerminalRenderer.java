@@ -85,6 +85,22 @@ public final class TerminalRenderer {
 
     /** Render the terminal to a canvas with at a specified row scroll, and an optional rectangular selection. */
     public final void render(TerminalRenderFrame frame, Canvas canvas) {
+        render(frame, canvas, false, null);
+    }
+
+    /**
+     * Render the terminal to a canvas.
+     *
+     * @param skipCleanRows when true, rows whose content provably did not change
+     *                      since the previous rendering of the same viewport are
+     *                      skipped. The caller must only pass true when the view is
+     *                      layered (hardware/software layer) so that skipped rows
+     *                      retain their previous pixels, when
+     *                      {@link TerminalRenderFrame#needsFullRedraw(TerminalRenderFrame)}
+     *                      is false for the previous frame, and when that previous
+     *                      frame is supplied as {@code previousRenderedFrame}.
+     */
+    public final void render(TerminalRenderFrame frame, Canvas canvas, boolean skipCleanRows, TerminalRenderFrame previousRenderedFrame) {
         final boolean reverseVideo = frame.reverseVideo;
         final int endRow = frame.endRow;
         final int columns = frame.columns;
@@ -106,6 +122,19 @@ public final class TerminalRenderer {
         float heightOffset = mFontLineSpacingAndAscent;
         for (int row = topRow; row < endRow; row++) {
             heightOffset += mFontLineSpacing;
+
+            if (skipCleanRows
+                    && frame.rowUnchangedFrom(previousRenderedFrame, row)
+                    && !(cursorVisible && row == cursorRow)
+                    && !needsRedrawForProjection(previousRenderedFrame, row,
+                        selectionY1, selectionY2)) {
+                // The layered canvas keeps the pixels produced by the previous frame
+                // for this row; nothing changed in the buffer here, so skip measuring
+                // and drawing it entirely. Cursor and selection rows are view
+                // projections, not buffer content, so they always redraw - including
+                // rows that held the cursor/selection in the previous frame.
+                continue;
+            }
 
             final int cursorX = (row == cursorRow && cursorVisible) ? cursorCol : -1;
             int selx1 = -1, selx2 = -1;
@@ -189,6 +218,21 @@ public final class TerminalRenderer {
             drawTextRun(canvas, line, palette, heightOffset, lastRunStartColumn, columnWidthSinceLastRun, lastRunStartIndex, charsSinceLastRun,
                 measuredWidthForRun, cursorColor, cursorShape, lastRunStyle, reverseVideo || invertCursorTextColor || lastRunInsideSelection);
         }
+    }
+
+    /**
+     * Whether {@code row} intersects a view projection that is not part of the buffer
+     * content: the selection rectangle of the current or previous frame, or the cursor
+     * row of the previous frame (the current frame's cursor row is checked by the
+     * caller). Such rows must redraw even when their buffer content is unchanged,
+     * because the projection pixels are not stored in the snapshot.
+     */
+    private static boolean needsRedrawForProjection(TerminalRenderFrame previousRenderedFrame, int row,
+                                                    int selectionY1, int selectionY2) {
+        if (row >= selectionY1 && row <= selectionY2) return true;
+        if (previousRenderedFrame == null) return true;
+        if (previousRenderedFrame.cursorVisible && row == previousRenderedFrame.cursorRow) return true;
+        return row >= previousRenderedFrame.selectionY1 && row <= previousRenderedFrame.selectionY2;
     }
 
     private void drawTextRun(Canvas canvas, char[] text, int[] palette, float y, int startColumn, int runWidthColumns,

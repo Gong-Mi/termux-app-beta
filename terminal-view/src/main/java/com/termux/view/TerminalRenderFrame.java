@@ -94,6 +94,37 @@ public final class TerminalRenderFrame implements FrameRevision {
         this.selectionY2 = selectionY2;
     }
 
+    /**
+     * Whether the content of {@code externalRow} is provably identical in this frame
+     * and {@code previous}: the snapshot row-reuse machinery hands back the same
+     * immutable {@link TerminalRenderRow} object for untouched rows, so object
+     * identity is the authoritative unchanged signal. This works across mailbox
+     * frame drops, where per-publish dirty bits would be lost.
+     */
+    public final boolean rowUnchangedFrom(TerminalRenderFrame previous, int externalRow) {
+        if (previous == null) return false;
+        return screen.rowAtExternal(externalRow) == previous.screen.rowAtExternal(externalRow);
+    }
+
+    /**
+     * Whether this frame requires a full redraw even though every row reports
+     * clean: the previous rendering of the same viewport is provably stale when
+     * the row ordering, the color map, or the reverse-video mode changed.
+     * Returns true also when {@code previous} is null (first frame).
+     */
+    public final boolean needsFullRedraw(TerminalRenderFrame previous) {
+        if (previous == null) return true;
+        if (topRow != previous.topRow || endRow != previous.endRow || columns != previous.columns) return true;
+        if (reverseVideo != previous.reverseVideo) return true;
+        int[] a = paletteForRenderer();
+        int[] b = previous.paletteForRenderer();
+        if (a.length != b.length) return true;
+        for (int i = 0; i < a.length; i++) {
+            if (a[i] != b[i]) return true;
+        }
+        return false;
+    }
+
     int[] paletteForRenderer() {
         if (rendererPalette == null) {
             rendererPalette = modelFrame != null ? modelFrame.copyPalette() : palette;

@@ -64,6 +64,8 @@ public final class TerminalView extends View {
     public TerminalRenderer mRenderer;
     /** 上一帧的渲染交接快照（供调试/审计：行级变更归属）。渲染本身不依赖它。 */
     private TerminalRenderFrame mLastRenderFrame;
+    /** The frame that was actually drawn in the previous onDraw, used to decide whether clean rows can be skipped. */
+    private TerminalRenderFrame mLastRenderedFrame;
     /** Latest-only mailbox from the parser worker to the render thread. */
     private TerminalRenderMailbox<TerminalModelFrame> mRenderMailbox;
     /** Most recently acquired model frame, reused for View-only projection changes. */
@@ -323,6 +325,7 @@ public final class TerminalView extends View {
         mCombiningAccent = 0;
         mTopRow = 0;
         mLastRenderFrame = null;
+        mLastRenderedFrame = null;
         mLastModelFrame = null;
 
         final TerminalRenderMailbox<TerminalModelFrame> mailbox = new TerminalRenderMailbox<>(mFrameMetrics);
@@ -550,11 +553,15 @@ public final class TerminalView extends View {
      */
     public void setTextSize(int textSize) {
         mRenderer = new TerminalRenderer(textSize, mRenderer == null ? Typeface.MONOSPACE : mRenderer.mTypeface);
+        // New font metrics invalidate every pixel of the previous layer rendering.
+        mLastRenderedFrame = null;
         updateSize();
     }
 
     public void setTypeface(Typeface newTypeface) {
         mRenderer = new TerminalRenderer(mRenderer.mTextSize, newTypeface);
+        // New font metrics invalidate every pixel of the previous layer rendering.
+        mLastRenderedFrame = null;
         updateSize();
         invalidate();
     }
@@ -1089,7 +1096,15 @@ public final class TerminalView extends View {
                 TerminalFrameDiagnostics.logIfEnabled(mTermSession, mFrameMetrics, frame);
                 Trace.beginSection("Termux:TerminalRenderer.render");
                 try {
-                    mRenderer.render(frame, canvas);
+                    // Only skip rows whose pixels are guaranteed to survive on the canvas
+                    // from the previous draw: a hardware/software view layer retains them,
+                    // and reverseVideo clears the whole canvas before rows are drawn.
+                    boolean skipCleanRows = !frame.reverseVideo
+                        && mLastRenderedFrame != null
+                        && !frame.needsFullRedraw(mLastRenderedFrame)
+                        && (getLayerType() == View.LAYER_TYPE_HARDWARE || getLayerType() == View.LAYER_TYPE_SOFTWARE);
+                    mRenderer.render(frame, canvas, skipCleanRows, mLastRenderedFrame);
+                    mLastRenderedFrame = frame;
                     mFrameMetrics.ack(frame.screenRevision);
                 } catch (RuntimeException e) {
                     mFrameMetrics.drop();
