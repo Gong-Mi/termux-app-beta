@@ -85,6 +85,13 @@ public final class TerminalSession extends TerminalOutput {
     /** Set on the main thread when the post-exit reader grace period expires. */
     private volatile boolean mProcessReaderStopRequested;
 
+    /**
+     * Set as soon as waitFor() reports process exit.  Reader draining and parser
+     * cleanup may continue after that point, but the old pid must no longer be
+     * considered killable.
+     */
+    private volatile boolean mProcessExited;
+
     /** Set by the application for user identification of session, not by terminal. */
     public String mSessionName;
 
@@ -224,6 +231,7 @@ public final class TerminalSession extends TerminalOutput {
      * @param rows    The number of rows in the terminal window.
      */
     public void initializeEmulator(int columns, int rows, int cellWidthPixels, int cellHeightPixels) {
+        mProcessExited = false;
         mEmulator = new TerminalEmulator(this, columns, rows, cellWidthPixels, cellHeightPixels, mTranscriptRows, mEmulatorClient);
         mParserWorker = new TerminalParserWorker(mEmulator, mProcessToTerminalIOQueue, mFrameSink, mEmulatorClient, this, 64 * 1024, 32 * 1024);
         mParserWorker.start();
@@ -276,6 +284,10 @@ public final class TerminalSession extends TerminalOutput {
             @Override
             public void run() {
                 int processExitCode = JNI.waitFor(mShellPid);
+                // Revoke kill authority before posting the exit event.  The main
+                // thread may still be draining reader output, but this pid is no
+                // longer a live process and may already be reusable by the OS.
+                mProcessExited = true;
                 mMainThreadHandler.sendMessage(mMainThreadHandler.obtainMessage(MSG_PROCESS_EXITED, processExitCode));
             }
         }.start();
@@ -588,18 +600,22 @@ public final class TerminalSession extends TerminalOutput {
 
     /** Finish this terminal session by sending SIGKILL to the shell. */
     public void finishIfRunning() {
-        if (isRunning()) {
-            try {
-                Os.kill(mShellPid, OsConstants.SIGKILL);
-            } catch (ErrnoException e) {
-                Logger.logWarn(mClient, LOG_TAG, "Failed sending SIGKILL: " + e.getMessage());
-            }
+        final int pid;
+        synchronized (this) {
+            if (mShellPid <= 0 || mProcessExited) return;
+            pid = mShellPid;
+        }
+        try {
+            Os.kill(pid, OsConstants.SIGKILL);
+        } catch (ErrnoException e) {
+            Logger.logWarn(mClient, LOG_TAG, "Failed sending SIGKILL: " + e.getMessage());
         }
     }
 
     /** Cleanup resources when the process exits. */
     void cleanupResources(int exitStatus) {
         synchronized (this) {
+            mProcessExited = true;
             mShellPid = -1;
             mShellExitStatus = exitStatus;
         }
@@ -610,13 +626,14 @@ public final class TerminalSession extends TerminalOutput {
         JNI.close(mTerminalFileDescriptor);
     }
 
+
     @Override
     public void titleChanged(String oldTitle, String newTitle) {
         mClient.onTitleChanged(this);
     }
 
     public synchronized boolean isRunning() {
-        return mShellPid != -1;
+        return mShellPid > 0 && !mProcessExited;
     }
 
     /** Only valid if not {@link #isRunning()}. */
@@ -644,7 +661,7 @@ public final class TerminalSession extends TerminalOutput {
         mClient.onColorsChanged(this);
     }
 
-    public int getPid() {
+    public synchronized int getPid() {
         return mShellPid;
     }
 
