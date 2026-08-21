@@ -33,6 +33,36 @@ public final class TerminalRenderer {
 
     private final float[] asciiMeasures = new float[127];
 
+    /**
+     * Lazily populated BMP (U+0000..U+FFFF) single-code-point advances.
+     *
+     * <p>Same invariant as {@link #asciiMeasures}: the advance of a single code point
+     * does not depend on the paint style left over by the previous draw, only on the
+     * typeface/size fixed at construction. TerminalView redraws the whole screen on
+     * every invalidation, re-measuring the same non-ASCII code points (e.g. the
+     * U+2580 upper-block used by half-block media renderers) over and over; the
+     * per-frame measureText/setFlags call on those is the main-thread hot path.
+     * 0.0f marks an uncached entry. Zero-width code points (combining marks) are
+     * rare and simply re-measure; they are consumed separately by WcWidth.
+     */
+    private final float[] bmpMeasures = new float[0x10000];
+
+    /**
+     * Measure a single code point, caching the result for the life of this renderer.
+     * BMP code points hit {@link #bmpMeasures}; supplementary code points
+     * (surrogate pairs) are measured directly since they cannot alias the table.
+     */
+    private float measureCodePoint(int codePoint, char[] line, int charIndex, int charsForCodePoint) {
+        if (codePoint < bmpMeasures.length) {
+            float cached = bmpMeasures[codePoint];
+            if (cached != 0f) return cached;
+            float measured = mTextPaint.measureText(line, charIndex, 1);
+            bmpMeasures[codePoint] = measured;
+            return measured;
+        }
+        return mTextPaint.measureText(line, charIndex, charsForCodePoint);
+    }
+
     public TerminalRenderer(int textSize, Typeface typeface) {
         mTextSize = textSize;
         mTypeface = typeface;
@@ -112,7 +142,7 @@ public final class TerminalRenderer {
                 // This could happen for some fonts which are not truly monospace, or for more exotic characters such as
                 // smileys which android font renders as wide.
                 // If this is detected, we draw this code point scaled to match what wcwidth() expects.
-                final float measuredCodePointWidth = (codePoint < asciiMeasures.length) ? asciiMeasures[codePoint] : mTextPaint.measureText(line,
+                final float measuredCodePointWidth = (codePoint < asciiMeasures.length) ? asciiMeasures[codePoint] : measureCodePoint(codePoint, line,
                     currentCharIndex, charsForCodePoint);
                 final boolean fontWidthMismatch = Math.abs(measuredCodePointWidth / mFontWidth - codePointWcWidth) > 0.01;
 
