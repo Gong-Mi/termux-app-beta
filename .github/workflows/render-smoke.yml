@@ -239,12 +239,16 @@ jobs:
         run: |
           set -euo pipefail
           # Write the rendering mode preference through run-as (debug build is debuggable).
-          adb shell run-as com.termux sh -c 'mkdir -p shared_prefs; cat > shared_prefs/com.termux_preferences.xml <<EOF
+          # Avoid heredoc inside run-as quoting; generate the file on the runner and copy it in.
+          cat > /tmp/termux_prefs.xml <<'EOF'
           <?xml version="1.0" encoding="utf-8" standalone="yes" ?>
           <map>
               <string name="terminal_rendering_mode">hwui_gpu</string>
           </map>
-          EOF'
+          EOF
+          adb push /tmp/termux_prefs.xml /data/local/tmp/termux_prefs.xml
+          adb shell run-as com.termux mkdir -p shared_prefs
+          adb shell run-as com.termux cp /data/local/tmp/termux_prefs.xml shared_prefs/com.termux_preferences.xml
           adb shell am force-stop com.termux
           adb logcat -c
           adb shell am start -W -S -n com.termux/.app.TermuxActivity
