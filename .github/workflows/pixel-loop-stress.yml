@@ -28,8 +28,6 @@ on:
 
 env:
   JAVA_VERSION: 21
-  PIXEL_LOOP_TAG: pixel-loop-085912
-  PIXEL_LOOP_SHA256: 2c4c6bb62495d11933fb78e266f61dbeb6a8aaa59f9028ab30566d486ac449f8
   PIXEL_LOOP_ASSET: pixel-loop-x86_64
 
 jobs:
@@ -74,18 +72,19 @@ jobs:
       - name: Build debug APK
         run: ./gradlew assembleDebug --no-daemon --console=plain
 
-      - name: Download and verify x86_64 producer
+      - name: Download and verify x86_64 producer from latest release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euxo pipefail
-          curl --fail --location --retry 3 \
-            -o "$PIXEL_LOOP_ASSET" \
-            "https://github.com/Gong-Mi/termux-app-beta/releases/download/${PIXEL_LOOP_TAG}/${PIXEL_LOOP_ASSET}"
-          chmod 755 "$PIXEL_LOOP_ASSET"
-          printf '%s  %s\n' "$PIXEL_LOOP_SHA256" "$PIXEL_LOOP_ASSET" | sha256sum -c -
+          PIXEL_LOOP_PATH=$(python3 .github/workflows/fetch_pixel_loop_release.py \
+            --asset "$PIXEL_LOOP_ASSET" --out-dir .)
+          echo "PIXEL_LOOP_PATH=$PIXEL_LOOP_PATH" >> "$GITHUB_ENV"
+          chmod 755 "$PIXEL_LOOP_PATH"
           file "$PIXEL_LOOP_ASSET" | tee pixel-loop-file.txt
           readelf -d "$PIXEL_LOOP_ASSET" | tee pixel-loop-dynamic.txt
           grep -q 'x86-64' pixel-loop-file.txt
-          grep -q 'interpreter /system/bin/linker64' pixel-loop-file.txt
+          grep -q 'interpreter /system/bin/linker64' pixel-loop-dynamic.txt
           test -x "$PIXEL_LOOP_ASSET"
 
       - name: Create and boot x86_64 emulator
