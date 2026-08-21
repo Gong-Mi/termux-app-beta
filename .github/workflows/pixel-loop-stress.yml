@@ -11,6 +11,20 @@ on:
         required: false
         default: "20"
         type: string
+      fit_mode:
+        description: "Fit mode: width, height, or fill (fill stretches the pixel grid across the whole terminal)"
+        required: false
+        default: "fill"
+        type: choice
+        options:
+          - fill
+          - width
+          - height
+      fps:
+        description: "Frame rate override (GIF native ~12fps when unset)"
+        required: false
+        default: "60"
+        type: string
 
 env:
   JAVA_VERSION: 21
@@ -123,14 +137,19 @@ jobs:
       - name: Run producer through the real Termux terminal session
         env:
           DURATION: ${{ inputs.duration_seconds }}
+          FIT_MODE: ${{ inputs.fit_mode }}
+          FPS: ${{ inputs.fps }}
         run: |
           set -euxo pipefail
-          adb shell input text /data/data/com.termux/files/usr/tmp/$PIXEL_LOOP_ASSET
+          PRODUCER=/data/data/com.termux/files/usr/tmp/$PIXEL_LOOP_ASSET
+          adb shell input text "$PRODUCER --fit $FIT_MODE --fps $FPS"
           adb shell input keyevent KEYCODE_ENTER
           start=$(date +%s)
           sleep "$DURATION"
           end=$(date +%s)
           echo "PRODUCER_REQUESTED_SECONDS=$DURATION" | tee stress-metrics.txt
+          echo "PRODUCER_FIT_MODE=$FIT_MODE" | tee -a stress-metrics.txt
+          echo "PRODUCER_FPS=$FPS" | tee -a stress-metrics.txt
           echo "PRODUCER_WALL_SECONDS=$((end-start))" | tee -a stress-metrics.txt
           adb exec-out screencap -p > pixel-loop-running.png
           adb shell ps -A | grep -E 'com.termux|pixel-loop' | tee -a stress-metrics.txt || true

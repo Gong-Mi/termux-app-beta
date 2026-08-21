@@ -1093,7 +1093,6 @@ public final class TerminalView extends View {
             if (frame == null) {
                 canvas.drawColor(0XFF000000);
             } else {
-                TerminalFrameDiagnostics.logIfEnabled(mTermSession, mFrameMetrics, frame);
                 Trace.beginSection("Termux:TerminalRenderer.render");
                 try {
                     // Only skip rows whose pixels are guaranteed to survive on the canvas
@@ -1112,6 +1111,7 @@ public final class TerminalView extends View {
                 } finally {
                     Trace.endSection();
                 }
+                TerminalFrameDiagnostics.logIfEnabled(mTermSession, mFrameMetrics, frame, mRenderer.getLastSkippedRowCount());
 
                 // render the text selection handles
                 renderTextSelection();

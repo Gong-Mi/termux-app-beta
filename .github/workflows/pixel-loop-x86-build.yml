@@ -31,12 +31,15 @@ jobs:
           yes | "$SDK" --licenses >/dev/null || true
           "$SDK" "platforms;android-36" "ndk;29.0.14206865" >/dev/null
 
-      - name: Restore build-only producer source from its original commit
+      - name: Verify producer source is present and current
         run: |
           set -euxo pipefail
-          git checkout dcdb67ba33642917d3f6be625c46765c3446bdc5 -- tools/pixel-loop
           test -f tools/pixel-loop/src/main.rs
           test -f tools/pixel-loop/assets/video-pixel-loop.gif
+          # The stress producer must support the fill/fps intensity knobs used by
+          # pixel-loop-stress.yml; fail the prebuilt build if they regress.
+          grep -q -- '--fit fill' tools/pixel-loop/src/main.rs
+          grep -q -- '--fps' tools/pixel-loop/src/main.rs
 
       - name: Build only x86_64 producer
         working-directory: tools/pixel-loop

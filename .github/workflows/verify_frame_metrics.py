@@ -28,7 +28,7 @@ import sys
 
 FIELD_RE = re.compile(r"(published|lastPublishedRev|drawn|lastDrawnRev|dropped|coalesced"
                       r"|acked|visible|rev|parserBytes|appendCommands|controlCommands"
-                      r"|parserFrames|finishCommands|stopCommands)=(-?\d+)")
+                      r"|parserFrames|finishCommands|stopCommands|skipped)=(-?\d+)")
 
 
 def parse_lines(path):
@@ -82,6 +82,9 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("logfile", help="file containing 'frame rev=' log lines")
     ap.add_argument("--min-lines", type=int, default=1, help="minimum required line count")
+    ap.add_argument("--require-skipped", action="store_true",
+                    help="require at least one frame line with skipped > 0 (proves the "
+                         "clean-row redraw skip path actually ran)")
     args = ap.parse_args()
 
     rows = parse_lines(args.logfile)
@@ -97,6 +100,7 @@ def main():
     parser_fields = ("parserBytes", "appendCommands", "controlCommands", "parserFrames",
                      "finishCommands", "stopCommands")
     prev_parser = {name: None for name in parser_fields}
+    max_skipped = 0
     for i, row in enumerate(rows):
         rev = row["rev"]
         if prev_rev is not None and rev < prev_rev:
@@ -120,15 +124,26 @@ def main():
             print(f"FAIL: line {i + 1}: {err}")
             print(f"  row: {row}")
             sys.exit(1)
+        skipped = row.get("skipped")
+        if skipped is not None:
+            if skipped < 0:
+                print(f"FAIL: skipped({skipped}) < 0 at line {i + 1}")
+                sys.exit(1)
+            max_skipped = max(max_skipped, skipped)
+
+    if args.require_skipped and max_skipped <= 0:
+        print("FAIL: --require-skipped set but no frame line reports skipped > 0 "
+              "(clean-row skip path never ran; check layer type/hwui mode)")
+        sys.exit(1)
 
     last = rows[-1]
     max_rev_gap = max((rows[i]["rev"] - rows[i - 1]["rev"]) for i in range(1, len(rows)))
     print("PASS frames={} firstRev={} lastRev={} published={} drawn={} dropped={} "
-          "coalesced={} acked={} parserBytes={} parserFrames={} maxRevGap={}"
+          "coalesced={} acked={} parserBytes={} parserFrames={} maxRevGap={} maxSkipped={}"
           .format(len(rows), rows[0]["rev"], last["rev"], last.get("published", 0),
                   last.get("drawn", 0), last.get("dropped", 0), last.get("coalesced", 0),
                   last.get("acked", 0), last.get("parserBytes", 0),
-                  last.get("parserFrames", 0), max_rev_gap))
+                  last.get("parserFrames", 0), max_rev_gap, max_skipped))
 
 
 if __name__ == "__main__":

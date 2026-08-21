@@ -230,6 +230,53 @@ jobs:
           python3 .github/workflows/assert_render.py render_initial.png
           python3 .github/workflows/assert_render.py render_after_input.png
 
+      # The default rendering mode is 'system' -> LAYER_TYPE_NONE, which never
+      # enables the clean-row redraw skip (canvas contents are not preserved).
+      # To prove the skip path itself, switch to the hwui_gpu mode (-> LAYER_TYPE_HARDWARE),
+      # restart the activity, and demand at least one frame that actually skipped rows.
+      - name: Hwui GPU clean-row skip path (implies renderer row culling)
+        if: matrix.gpu == 'swiftshader_indirect'
+        run: |
+          set -euo pipefail
+          # Write the rendering mode preference through run-as (debug build is debuggable).
+          adb shell run-as com.termux sh -c 'mkdir -p shared_prefs; cat > shared_prefs/com.termux_preferences.xml <<EOF
+          <?xml version="1.0" encoding="utf-8" standalone="yes" ?>
+          <map>
+              <string name="terminal_rendering_mode">hwui_gpu</string>
+          </map>
+          EOF'
+          adb shell am force-stop com.termux
+          adb logcat -c
+          adb shell am start -W -S -n com.termux/.app.TermuxActivity
+          # Wait for the first frame under the new mode.
+          frame_seen=0
+          for _ in $(seq 1 40); do
+            if adb logcat -d | grep -q 'Termux:TerminalView.*frame rev='; then
+              frame_seen=1
+              break
+            fi
+            sleep 1
+          done
+          if [ "$frame_seen" -ne 1 ]; then
+            echo 'Timed out waiting for frame diagnostics under hwui_gpu'
+            adb logcat -d | tail -100
+            exit 1
+          fi
+          # Give the idle app a few frames so unchanged rows are actually skipped,
+          # then capture and assert both the frame metrics (skipped>0 required) and
+          # that pixels still render correctly through the layered path.
+          sleep 3
+          adb shell input keyevent KEYCODE_MOVE_END
+          adb shell input text "hwui"
+          sleep 3
+          adb exec-out screencap -p > render_hwui.png
+          adb logcat -d > logcat-hwui.txt
+          grep -E 'Termux:TerminalView.*frame rev=' logcat-hwui.txt > frame-info-hwui.txt \
+            || { echo 'NO_FRAME_INFO_LINES under hwui_gpu'; tail -50 logcat-hwui.txt; exit 1; }
+          python3 .github/workflows/verify_frame_metrics.py frame-info-hwui.txt --min-lines 3 --require-skipped
+          python3 .github/workflows/assert_render.py render_hwui.png
+          adb logcat -d | grep -iE 'FATAL|AndroidRuntime.*com.termux' | tail -20 || true
+
       - name: Upload render evidence
         if: always()
         uses: actions/upload-artifact@v6
@@ -238,8 +285,11 @@ jobs:
           path: |
             render_initial.png
             render_after_input.png
+            render_hwui.png
             logcat-smoke.txt
+            logcat-hwui.txt
             frame-info-lines.txt
+            frame-info-hwui.txt
             /tmp/emu.log
           if-no-files-found: warn
 

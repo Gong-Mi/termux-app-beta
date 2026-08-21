@@ -46,6 +46,13 @@ public final class TerminalRenderer {
      * rare and simply re-measure; they are consumed separately by WcWidth.
      */
     private final float[] bmpMeasures = new float[0x10000];
+    /** Number of rows skipped by the last render (diagnostics/observability only). */
+    private int lastSkippedRowCount;
+
+    /** Rows skipped by the most recent render; 0 when skipCleanRows was not enabled. */
+    public int getLastSkippedRowCount() {
+        return lastSkippedRowCount;
+    }
 
     /**
      * Measure a single code point, caching the result for the life of this renderer.
@@ -120,6 +127,7 @@ public final class TerminalRenderer {
             canvas.drawColor(palette[TextStyle.COLOR_INDEX_FOREGROUND], PorterDuff.Mode.SRC);
 
         float heightOffset = mFontLineSpacingAndAscent;
+        int skippedRows = 0;
         for (int row = topRow; row < endRow; row++) {
             heightOffset += mFontLineSpacing;
 
@@ -133,6 +141,7 @@ public final class TerminalRenderer {
                 // and drawing it entirely. Cursor and selection rows are view
                 // projections, not buffer content, so they always redraw - including
                 // rows that held the cursor/selection in the previous frame.
+                skippedRows++;
                 continue;
             }
 
@@ -218,6 +227,7 @@ public final class TerminalRenderer {
             drawTextRun(canvas, line, palette, heightOffset, lastRunStartColumn, columnWidthSinceLastRun, lastRunStartIndex, charsSinceLastRun,
                 measuredWidthForRun, cursorColor, cursorShape, lastRunStyle, reverseVideo || invertCursorTextColor || lastRunInsideSelection);
         }
+        lastSkippedRowCount = skippedRows;
     }
 
     /**
