@@ -137,13 +137,26 @@ def main():
         sys.exit(1)
 
     last = rows[-1]
+    first = rows[0]
     max_rev_gap = max((rows[i]["rev"] - rows[i - 1]["rev"]) for i in range(1, len(rows)))
     print("PASS frames={} firstRev={} lastRev={} published={} drawn={} dropped={} "
-          "coalesced={} acked={} parserBytes={} parserFrames={} maxRevGap={} maxSkipped={}"
+          "coalesced={} acked={} appendCommands={}(+{}) controlCommands={}(+{}) "
+          "parserBytes={}(+{}) parserFrames={}(+{}) finishCommands={} stopCommands={} "
+          "maxRevGap={} maxSkipped={}"
           .format(len(rows), rows[0]["rev"], last["rev"], last.get("published", 0),
                   last.get("drawn", 0), last.get("dropped", 0), last.get("coalesced", 0),
-                  last.get("acked", 0), last.get("parserBytes", 0),
-                  last.get("parserFrames", 0), max_rev_gap, max_skipped))
+                  last.get("acked", 0),
+                  last.get("appendCommands", 0),
+                  last.get("appendCommands", 0) - first.get("appendCommands", 0),
+                  last.get("controlCommands", 0),
+                  last.get("controlCommands", 0) - first.get("controlCommands", 0),
+                  last.get("parserBytes", 0),
+                  last.get("parserBytes", 0) - first.get("parserBytes", 0),
+                  last.get("parserFrames", 0),
+                  last.get("parserFrames", 0) - first.get("parserFrames", 0),
+                  last.get("finishCommands", 0),
+                  last.get("stopCommands", 0),
+                  max_rev_gap, max_skipped))
 
 
 if __name__ == "__main__":
