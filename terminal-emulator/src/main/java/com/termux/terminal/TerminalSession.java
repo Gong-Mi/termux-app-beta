@@ -258,22 +258,41 @@ public final class TerminalSession extends TerminalOutput {
         // close their descriptor, so sharing the raw FD would create multiple
         // close owners and make a late close vulnerable to fd-number reuse.
         final FileDescriptor terminalFileDescriptorWrapped = wrapFileDescriptor(mTerminalFileDescriptor, mClient);
-        final FileDescriptor inputFileDescriptor;
-        final FileDescriptor outputFileDescriptor;
+        FileDescriptor inputFileDescriptor = null;
+        FileDescriptor outputFileDescriptor = null;
         try {
             inputFileDescriptor = Os.dup(terminalFileDescriptorWrapped);
             outputFileDescriptor = Os.dup(terminalFileDescriptorWrapped);
         } catch (ErrnoException e) {
+            // If the second dup fails, the first duplicate is already a Java
+            // stream candidate and must be closed before releasing the raw
+            // master FD. Otherwise initialization failure leaks one PTY fd.
+            if (inputFileDescriptor != null) {
+                try {
+                    Os.close(inputFileDescriptor);
+                } catch (ErrnoException ignored) {
+                    // Best effort while unwinding initialization.
+                }
+            }
+            if (outputFileDescriptor != null) {
+                try {
+                    Os.close(outputFileDescriptor);
+                } catch (ErrnoException ignored) {
+                    // Best effort while unwinding initialization.
+                }
+            }
             JNI.close(mTerminalFileDescriptor);
             throw new IllegalStateException("Failed to duplicate terminal pty descriptor", e);
         }
+        final FileDescriptor inputDescriptor = inputFileDescriptor;
+        final FileDescriptor outputDescriptor = outputFileDescriptor;
 
         new Thread("TermSessionInputReader[pid=" + mShellPid + "]") {
             @Override
             public void run() {
                 InputStream termIn = null;
                 try {
-                    termIn = new FileInputStream(inputFileDescriptor);
+                    termIn = new FileInputStream(inputDescriptor);
                     synchronized (mPtyStreamLock) {
                         if (mPtyStreamsCloseRequested) return;
                         mTerminalInputStream = termIn;
@@ -311,7 +330,7 @@ public final class TerminalSession extends TerminalOutput {
                 final byte[] buffer = new byte[4096];
                 FileOutputStream termOut = null;
                 try {
-                    termOut = new FileOutputStream(outputFileDescriptor);
+                    termOut = new FileOutputStream(outputDescriptor);
                     synchronized (mPtyStreamLock) {
                         if (mPtyStreamsCloseRequested) return;
                         mTerminalOutputStream = termOut;
