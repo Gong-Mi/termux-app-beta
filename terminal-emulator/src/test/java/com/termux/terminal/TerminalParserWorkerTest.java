@@ -77,7 +77,7 @@ public class TerminalParserWorkerTest extends TestCase {
         @Override public void logStackTrace(String tag, Exception e) { }
     }
 
-    private static final class CapturingSink implements TerminalFrameSink {
+    private static class CapturingSink implements TerminalFrameSink {
         final List<TerminalModelFrame> frames = new ArrayList<>();
 
         @Override
@@ -94,6 +94,24 @@ public class TerminalParserWorkerTest extends TestCase {
         TerminalModelFrame last() {
             synchronized (frames) {
                 return frames.isEmpty() ? null : frames.get(frames.size() - 1);
+            }
+        }
+    }
+
+    private static final class BlockingSink extends CapturingSink {
+        final CountDownLatch publishEntered = new CountDownLatch(1);
+        final CountDownLatch releasePublish = new CountDownLatch(1);
+
+        @Override
+        public void publishFrame(TerminalModelFrame frame) {
+            super.publishFrame(frame);
+            publishEntered.countDown();
+            try {
+                assertTrue("Timed out waiting to release blocked publish",
+                        releasePublish.await(5, TimeUnit.SECONDS));
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new AssertionError(e);
             }
         }
     }
@@ -131,8 +149,12 @@ public class TerminalParserWorkerTest extends TestCase {
         final CapturingSink sink;
 
         WorkerHarness(int maxBytesPerBatch) {
+            this(maxBytesPerBatch, new CapturingSink());
+        }
+
+        WorkerHarness(int maxBytesPerBatch, CapturingSink sink) {
             client = new CapturingClient();
-            sink = new CapturingSink();
+            this.sink = sink;
             inputQueue = new ByteQueue(64 * 1024);
             TerminalEmulator emulator = new TerminalEmulator(
                     new NoopOutput(), COLUMNS, ROWS, CELL_WIDTH, CELL_HEIGHT, null, client);
@@ -276,6 +298,37 @@ public class TerminalParserWorkerTest extends TestCase {
             assertEquals("Repeated pending viewport requests should collapse to one command",
                     1, metrics.controlCommands);
         } finally {
+            h.worker.stop();
+            assertTrue(h.worker.awaitStopped(5000));
+        }
+    }
+
+    public void testViewportRequestsCoalesceWhileWorkerIsPublishing() throws Exception {
+        BlockingSink blockingSink = new BlockingSink();
+        WorkerHarness h = new WorkerHarness(MAX_BYTES_PER_BATCH, blockingSink);
+        StringBuilder lines = new StringBuilder();
+        for (int i = 0; i < ROWS * 3; i++) lines.append("line-").append(i).append('\n');
+        writeString(h.inputQueue, lines.toString());
+        h.worker.start();
+        try {
+            h.worker.requestAppend();
+            assertTrue("Worker should enter the first frame publish",
+                    blockingSink.publishEntered.await(5, TimeUnit.SECONDS));
+
+            for (int i = 0; i < 1000; i++) h.worker.requestViewport(-i);
+            blockingSink.releasePublish.countDown();
+
+            long deadline = System.currentTimeMillis() + 5000;
+            while (h.worker.getMetricsSnapshot().controlCommands < 1
+                    && System.currentTimeMillis() < deadline) {
+                Thread.sleep(10);
+            }
+            assertEquals("Concurrent viewport requests should collapse to one command",
+                    1, h.worker.getMetricsSnapshot().controlCommands);
+            assertTrue("The coalesced viewport should produce a scrolled frame",
+                    h.sink.last().topRow < 0);
+        } finally {
+            blockingSink.releasePublish.countDown();
             h.worker.stop();
             assertTrue(h.worker.awaitStopped(5000));
         }
