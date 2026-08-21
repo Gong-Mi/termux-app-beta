@@ -3,8 +3,6 @@ package com.termux.terminal;
 import android.os.Handler;
 import android.os.Looper;
 
-import java.util.concurrent.atomic.AtomicBoolean;
-
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
@@ -21,11 +19,12 @@ public final class TerminalSessionClientMainThreadWrapper implements TerminalSes
 
     private final TerminalSessionClient mClient;
     private final Handler mHandler;
-    private final AtomicBoolean mTextChangePosted = new AtomicBoolean(false);
+    private final TerminalTextChangeCoalescer mTextChangeCoalescer;
 
     public TerminalSessionClientMainThreadWrapper(@NonNull TerminalSessionClient client, @NonNull Handler handler) {
         mClient = client;
         mHandler = handler;
+        mTextChangeCoalescer = new TerminalTextChangeCoalescer(r -> mHandler.post(r));
     }
 
     private void post(Runnable r) {
@@ -42,12 +41,9 @@ public final class TerminalSessionClientMainThreadWrapper implements TerminalSes
             mClient.onTextChanged(changedSession);
             return;
         }
-        if (!mTextChangePosted.compareAndSet(false, true)) return;
-        boolean posted = mHandler.post(() -> {
-            mTextChangePosted.set(false);
+        mTextChangeCoalescer.notify(() -> {
             mClient.onTextChanged(changedSession);
         });
-        if (!posted) mTextChangePosted.set(false);
     }
 
     @Override
