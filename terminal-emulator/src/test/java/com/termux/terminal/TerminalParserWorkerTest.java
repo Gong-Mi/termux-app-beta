@@ -384,6 +384,52 @@ public class TerminalParserWorkerTest extends TestCase {
         }
     }
 
+    public void testAppendViewportResizeInterleavingUsesLatestConsistentFrame() throws Exception {
+        WorkerHarness h = new WorkerHarness(MAX_BYTES_PER_BATCH);
+        StringBuilder lines = new StringBuilder();
+        for (int i = 0; i < ROWS * 4; i++) lines.append("line-").append(i).append('\n');
+        writeString(h.inputQueue, lines.toString());
+        h.worker.start();
+        try {
+            h.worker.requestAppend();
+            assertTrue("Initial append should publish a frame",
+                    h.client.textLatch.await(5, TimeUnit.SECONDS));
+            long initialRevision = h.sink.last().screenRevision;
+
+            h.worker.requestViewport(-10000);
+            h.worker.requestResize(40, 12, CELL_WIDTH, CELL_HEIGHT);
+            h.worker.requestViewport(-10000);
+
+            long deadline = System.currentTimeMillis() + 5000;
+            TerminalModelFrame finalFrame;
+            do {
+                finalFrame = h.sink.last();
+                if (finalFrame != null
+                        && finalFrame.columns == 40
+                        && finalFrame.rows == 12
+                        && finalFrame.screenRevision > initialRevision) {
+                    break;
+                }
+                Thread.sleep(10);
+            } while (System.currentTimeMillis() < deadline);
+
+            assertNotNull("Resize must eventually publish a frame", finalFrame);
+            assertEquals("Final frame must use resized column count", 40, finalFrame.columns);
+            assertEquals("Final frame must use resized row count", 12, finalFrame.rows);
+            assertTrue("Final frame revision must be newer than append frame",
+                    finalFrame.screenRevision > initialRevision);
+            assertTrue("Viewport must be clamped to the resized transcript range",
+                    finalFrame.topRow >= -finalFrame.activeTranscriptRows);
+            assertTrue("Viewport must remain at or above the screen top",
+                    finalFrame.topRow <= 0);
+            assertTrue("Resizing must not discard transcript content",
+                    finalFrame.screen.getTranscriptText().contains("line-"));
+        } finally {
+            h.worker.stop();
+            assertTrue(h.worker.awaitStopped(5000));
+        }
+    }
+
     public void testVisibleControlMutationsPublishFrames() throws Exception {
         WorkerHarness h = new WorkerHarness(MAX_BYTES_PER_BATCH);
         h.worker.start();
