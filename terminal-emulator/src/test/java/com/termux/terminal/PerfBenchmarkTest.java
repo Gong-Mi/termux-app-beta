@@ -172,4 +172,57 @@ public class PerfBenchmarkTest extends TerminalTestCase {
     public void testPerfWorkerSnapshotMailboxMixedCjkBurst() throws Exception {
         feedWorkerTimed(buildPayload("中文混排ＡＢＣ123", 4 * MB));
     }
+
+    /** Microbenchmark: WcWidth.width() on CJK code points (BMP cache + supplementary fallback). */
+    public void testPerfWcWidthCjkLookup() {
+        int[] codePoints = {0x4E2D, 0x6587, 0x6DFB, 0x6DFB, 0xFF21, 0xFF22, 0xFF23, 0x3042, 0x30A2, 0xAC00,
+                            0x20000, 0x20B9F, 0x2A700, 0x2B73F, 0x2B740, 0x2B81F};
+        long iterations = 10_000_000L;
+        long start = System.nanoTime();
+        int dummy = 0;
+        for (long i = 0; i < iterations; i++) {
+            dummy += WcWidth.width(codePoints[(int) (i % codePoints.length)]);
+        }
+        long elapsedMs = (System.nanoTime() - start) / 1_000_000;
+        double lookupsPerUs = iterations / (double) elapsedMs;
+        System.out.println(getName() + ": " + iterations + " WcWidth lookups in " + elapsedMs
+            + " ms = " + String.format("%.1f", lookupsPerUs) + " lookups/us (dummy=" + dummy + ")");
+    }
+
+    /** Microbenchmark: TerminalRow.setChar() writing double-width CJK cells sequentially. */
+    public void testPerfTerminalRowSetCharCjk() {
+        TerminalRow row = new TerminalRow(80, 0L);
+        int codePoint = 0x4E2D; // '中'
+        long iterations = 2_000_000L;
+        long start = System.nanoTime();
+        int dummy = 0;
+        for (long i = 0; i < iterations; i++) {
+            int column = (int) ((i * 2) % 78); // stride by width-2 to avoid overwriting
+            row.setChar(column, codePoint, 0);
+            dummy += column;
+        }
+        long elapsedMs = (System.nanoTime() - start) / 1_000_000;
+        double charsPerUs = iterations / (double) elapsedMs;
+        System.out.println(getName() + ": " + iterations + " setChar(CJK) in " + elapsedMs
+            + " ms = " + String.format("%.1f", charsPerUs) + " chars/us (dummy=" + dummy + ")");
+    }
+
+    /** Microbenchmark: TerminalRow.findStartOfColumn() scanning a row full of CJK characters. */
+    public void testPerfTerminalRowFindStartOfColumnCjk() {
+        TerminalRow row = new TerminalRow(80, 0L);
+        int codePoint = 0x4E2D; // '中'
+        for (int col = 0; col < 78; col += 2) {
+            row.setChar(col, codePoint, 0);
+        }
+        long iterations = 1_000_000L;
+        long start = System.nanoTime();
+        int dummy = 0;
+        for (long i = 0; i < iterations; i++) {
+            dummy += row.findStartOfColumn((int) (i % 78));
+        }
+        long elapsedMs = (System.nanoTime() - start) / 1_000_000;
+        double queriesPerUs = iterations / (double) elapsedMs;
+        System.out.println(getName() + ": " + iterations + " findStartOfColumn in " + elapsedMs
+            + " ms = " + String.format("%.1f", queriesPerUs) + " queries/us (dummy=" + dummy + ")");
+    }
 }
