@@ -319,14 +319,18 @@ public class TerminalParserWorkerTest extends TestCase {
             blockingSink.releasePublish.countDown();
 
             long deadline = System.currentTimeMillis() + 5000;
-            while (h.worker.getMetricsSnapshot().controlCommands < 1
+            while ((h.worker.getMetricsSnapshot().controlCommands < 1 || h.sink.size() < 2)
                     && System.currentTimeMillis() < deadline) {
                 Thread.sleep(10);
             }
             assertEquals("Concurrent viewport requests should collapse to one command",
                     1, h.worker.getMetricsSnapshot().controlCommands);
-            assertTrue("The coalesced viewport should produce a scrolled frame",
-                    h.sink.last().topRow < 0);
+            assertTrue("The coalesced viewport should publish a second frame",
+                    h.sink.size() >= 2);
+            TerminalModelFrame finalFrame = h.sink.last();
+            int expectedTopRow = Math.max(-finalFrame.activeTranscriptRows, Math.min(0, -999));
+            assertEquals("The latest viewport value must win after coalescing",
+                    expectedTopRow, finalFrame.topRow);
         } finally {
             blockingSink.releasePublish.countDown();
             h.worker.stop();
