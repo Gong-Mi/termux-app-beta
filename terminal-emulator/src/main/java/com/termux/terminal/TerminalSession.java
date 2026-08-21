@@ -241,12 +241,26 @@ public final class TerminalSession extends TerminalOutput {
         mShellPid = processId[0];
         mClient.setTerminalShellPid(this, mShellPid);
 
+        // Keep the subprocess' original master FD owned by this session for
+        // ioctl() and the single final JNI.close().  Each Java stream gets its
+        // own duplicated descriptor: FileInputStream/FileOutputStream both
+        // close their descriptor, so sharing the raw FD would create multiple
+        // close owners and make a late close vulnerable to fd-number reuse.
         final FileDescriptor terminalFileDescriptorWrapped = wrapFileDescriptor(mTerminalFileDescriptor, mClient);
+        final FileDescriptor inputFileDescriptor;
+        final FileDescriptor outputFileDescriptor;
+        try {
+            inputFileDescriptor = Os.dup(terminalFileDescriptorWrapped);
+            outputFileDescriptor = Os.dup(terminalFileDescriptorWrapped);
+        } catch (ErrnoException e) {
+            JNI.close(mTerminalFileDescriptor);
+            throw new IllegalStateException("Failed to duplicate terminal pty descriptor", e);
+        }
 
         new Thread("TermSessionInputReader[pid=" + mShellPid + "]") {
             @Override
             public void run() {
-                try (InputStream termIn = new FileInputStream(terminalFileDescriptorWrapped)) {
+                try (InputStream termIn = new FileInputStream(inputFileDescriptor)) {
                     final byte[] buffer = new byte[4096];
                     while (true) {
                         if (mProcessReaderStopRequested) return;
@@ -268,7 +282,7 @@ public final class TerminalSession extends TerminalOutput {
             @Override
             public void run() {
                 final byte[] buffer = new byte[4096];
-                try (FileOutputStream termOut = new FileOutputStream(terminalFileDescriptorWrapped)) {
+                try (FileOutputStream termOut = new FileOutputStream(outputFileDescriptor)) {
                     while (true) {
                         int bytesToWrite = mTerminalToProcessIOQueue.read(buffer, true);
                         if (bytesToWrite == -1) return;
