@@ -69,6 +69,8 @@ public final class TerminalView extends View {
     private TerminalRenderFrame mLastRenderedFrame;
     /** Latest-only mailbox from the parser worker to the render thread. */
     private TerminalRenderMailbox<TerminalModelFrame> mRenderMailbox;
+    /** Rejects callbacks from a session that was detached while they were in flight. */
+    private final TerminalRenderSessionGate mSessionGate = new TerminalRenderSessionGate();
     /** Most recently acquired model frame, reused for View-only projection changes. */
     private TerminalModelFrame mLastModelFrame;
     /** Immutable accounting object tracking publish/draw/ack lifecycle. */
@@ -321,6 +323,7 @@ public final class TerminalView extends View {
         TerminalSession previousSession = mTermSession;
         if (previousSession != null) previousSession.detachFrameSink();
 
+        final long sessionGeneration = mSessionGate.advance();
         mTermSession = session;
         mEmulator = null;
         mCombiningAccent = 0;
@@ -334,6 +337,7 @@ public final class TerminalView extends View {
         session.setFrameSink(new TerminalFrameSink() {
             @Override
             public void publishFrame(TerminalModelFrame frame) {
+                if (!mSessionGate.isCurrent(sessionGeneration)) return;
                 boolean hadPending = mailbox.peek() != null;
                 mailbox.publish(frame);
                 if (!hadPending) invalidate();
@@ -341,11 +345,13 @@ public final class TerminalView extends View {
 
             @Override
             public boolean shouldCaptureSnapshot() {
+                if (!mSessionGate.isCurrent(sessionGeneration)) return false;
                 return mailbox.peek() == null;
             }
 
             @Override
             public void onFrameConsumed(TerminalModelFrame frame) {
+                if (!mSessionGate.isCurrent(sessionGeneration)) return;
                 session.onFrameConsumed(frame);
             }
         });
