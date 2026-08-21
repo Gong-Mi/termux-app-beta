@@ -41,6 +41,9 @@ public final class TerminalParserWorker {
     private final BlockingQueue<Command> mCommandQueue = new LinkedBlockingQueue<>();
     private final Thread mThread;
     private final AtomicBoolean mAppendScheduled = new AtomicBoolean(false);
+    private final Object mViewportRequestLock = new Object();
+    private boolean mViewportCommandScheduled;
+    private int mPendingViewportTopRow;
     private final AtomicBoolean mStopRequested = new AtomicBoolean(false);
     private final AtomicBoolean mRepublishScheduled = new AtomicBoolean(false);
 
@@ -123,7 +126,13 @@ public final class TerminalParserWorker {
     }
 
     public void requestViewport(int topRow) {
-        enqueueControl(Command.viewport(topRow));
+        if (mStopped || mStopRequested.get()) return;
+        synchronized (mViewportRequestLock) {
+            mPendingViewportTopRow = topRow;
+            if (mViewportCommandScheduled) return;
+            mViewportCommandScheduled = true;
+        }
+        mCommandQueue.add(Command.viewport());
     }
 
     public void requestReset() {
@@ -195,7 +204,12 @@ public final class TerminalParserWorker {
                     break;
                 case MSG_VIEWPORT:
                     mMetrics.recordControlCommand();
-                    int clampedTopRow = clampViewportTopRow(cmd.topRow);
+                    int requestedTopRow;
+                    synchronized (mViewportRequestLock) {
+                        requestedTopRow = mPendingViewportTopRow;
+                        mViewportCommandScheduled = false;
+                    }
+                    int clampedTopRow = clampViewportTopRow(requestedTopRow);
                     if (clampedTopRow != mViewport.topRow) {
                         mViewport = new Viewport(clampedTopRow);
                         publishFrame();
@@ -399,7 +413,7 @@ public final class TerminalParserWorker {
         static Command resize(int columns, int rows, int cellWidth, int cellHeight) {
             return new Command(MSG_RESIZE, columns, rows, cellWidth, cellHeight, 0, 0, null, 0, 0, 0, false, false);
         }
-        static Command viewport(int topRow) { return new Command(MSG_VIEWPORT, 0, 0, 0, 0, topRow, 0, null, 0, 0, 0, false, false); }
+        static Command viewport() { return new Command(MSG_VIEWPORT, 0, 0, 0, 0, 0, 0, null, 0, 0, 0, false, false); }
         static Command reset() { return new Command(MSG_RESET, 0, 0, 0, 0, 0, 0, null, 0, 0, 0, false, false); }
         static Command finish(int exitCode) { return new Command(MSG_FINISH, 0, 0, 0, 0, 0, exitCode, null, 0, 0, 0, false, false); }
         static Command stop() { return new Command(MSG_STOP, 0, 0, 0, 0, 0, 0, null, 0, 0, 0, false, false); }

@@ -255,6 +255,32 @@ public class TerminalParserWorkerTest extends TestCase {
         }
     }
 
+    public void testViewportRequestsCoalesceBeforeWorkerRuns() throws Exception {
+        WorkerHarness h = new WorkerHarness(MAX_BYTES_PER_BATCH);
+        StringBuilder lines = new StringBuilder();
+        for (int i = 0; i < ROWS * 3; i++) lines.append("line-").append(i).append('\n');
+        writeString(h.inputQueue, lines.toString());
+        h.worker.requestAppend();
+        for (int i = 0; i < 1000; i++) h.worker.requestViewport(-i);
+
+        h.worker.start();
+        try {
+            assertTrue("Initial append should publish a frame",
+                    h.client.textLatch.await(5, TimeUnit.SECONDS));
+            long deadline = System.currentTimeMillis() + 5000;
+            while (h.worker.getMetricsSnapshot().controlCommands < 1
+                    && System.currentTimeMillis() < deadline) {
+                Thread.sleep(10);
+            }
+            TerminalParserMetrics.Snapshot metrics = h.worker.getMetricsSnapshot();
+            assertEquals("Repeated pending viewport requests should collapse to one command",
+                    1, metrics.controlCommands);
+        } finally {
+            h.worker.stop();
+            assertTrue(h.worker.awaitStopped(5000));
+        }
+    }
+
     public void testViewportIsClampedToCurrentTranscriptRange() throws Exception {
         WorkerHarness h = new WorkerHarness(MAX_BYTES_PER_BATCH);
         h.worker.start();
