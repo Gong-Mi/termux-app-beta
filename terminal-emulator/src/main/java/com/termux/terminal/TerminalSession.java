@@ -85,6 +85,10 @@ public final class TerminalSession extends TerminalOutput {
     /** Set on the main thread when the post-exit reader grace period expires. */
     private volatile boolean mProcessReaderStopRequested;
 
+    /** Java-side owners for the duplicated PTY descriptors. */
+    private volatile InputStream mTerminalInputStream;
+    private volatile FileOutputStream mTerminalOutputStream;
+
     /**
      * Set as soon as waitFor() reports process exit.  Reader draining and parser
      * cleanup may continue after that point, but the old pid must no longer be
@@ -261,6 +265,7 @@ public final class TerminalSession extends TerminalOutput {
             @Override
             public void run() {
                 try (InputStream termIn = new FileInputStream(inputFileDescriptor)) {
+                    mTerminalInputStream = termIn;
                     final byte[] buffer = new byte[4096];
                     while (true) {
                         if (mProcessReaderStopRequested) return;
@@ -273,6 +278,7 @@ public final class TerminalSession extends TerminalOutput {
                 } catch (Exception e) {
                     // Ignore, just shutting down.
                 } finally {
+                    mTerminalInputStream = null;
                     mMainThreadHandler.sendEmptyMessage(MSG_PROCESS_READER_FINISHED);
                 }
             }
@@ -283,6 +289,7 @@ public final class TerminalSession extends TerminalOutput {
             public void run() {
                 final byte[] buffer = new byte[4096];
                 try (FileOutputStream termOut = new FileOutputStream(outputFileDescriptor)) {
+                    mTerminalOutputStream = termOut;
                     while (true) {
                         int bytesToWrite = mTerminalToProcessIOQueue.read(buffer, true);
                         if (bytesToWrite == -1) return;
@@ -290,6 +297,8 @@ public final class TerminalSession extends TerminalOutput {
                     }
                 } catch (IOException e) {
                     // Ignore.
+                } finally {
+                    mTerminalOutputStream = null;
                 }
             }
         }.start();
@@ -637,7 +646,28 @@ public final class TerminalSession extends TerminalOutput {
         // Stop the reader and writer threads, and close the I/O streams
         mTerminalToProcessIOQueue.close();
         mProcessToTerminalIOQueue.close();
+        closePtyStreams();
         JNI.close(mTerminalFileDescriptor);
+    }
+
+    /** Close Java-owned duplicate descriptors; stream close remains idempotent. */
+    private void closePtyStreams() {
+        InputStream input = mTerminalInputStream;
+        if (input != null) {
+            try {
+                input.close();
+            } catch (IOException ignored) {
+                // The reader is already being stopped.
+            }
+        }
+        FileOutputStream output = mTerminalOutputStream;
+        if (output != null) {
+            try {
+                output.close();
+            } catch (IOException ignored) {
+                // The writer is already being stopped.
+            }
+        }
     }
 
 
@@ -739,6 +769,7 @@ public final class TerminalSession extends TerminalOutput {
                 Logger.logInfo(mClient, LOG_TAG, "event=PTY_READER_FINISHED session=" + mHandle);
             } else if (msg.what == MSG_PROCESS_READER_TIMEOUT) {
                 mProcessReaderStopRequested = true;
+                closePtyStreams();
                 mExitCoordinator.markReaderTimeout();
                 Logger.logWarn(mClient, LOG_TAG, "event=PTY_READER_TIMEOUT session=" + mHandle);
             }
