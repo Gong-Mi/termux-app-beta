@@ -21,6 +21,8 @@ public class TerminalScreenSnapshotViewportTest {
     @Test
     public void snapshotReportsExactlyTheExternalRowsItOwns() {
         TerminalEmulator emulator = emulator();
+        byte[] history = "1\n2\n3\n4\n5\n6\n".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        emulator.append(history, history.length);
         TerminalScreenSnapshot snapshot = TerminalScreenSnapshot.capture(
             emulator.getScreen(), -2, 2, emulator.mColumns);
 
