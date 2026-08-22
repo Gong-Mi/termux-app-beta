@@ -39,7 +39,7 @@ public class ClipboardAndStorageInstrumentedTest {
     @Test
     public void manifestContainsIndependentStorageCapabilities() {
         PackageInfo info = context.getPackageManager().getPackageInfo(
-            context.getPackageName(), PackageInfo.GET_PERMISSIONS);
+            context.getPackageName(), android.content.pm.PackageManager.GET_PERMISSIONS);
         assertNotNull(info.requestedPermissions);
         java.util.List<String> permissions = java.util.Arrays.asList(info.requestedPermissions);
         assertTrue(permissions.contains("android.permission.READ_EXTERNAL_STORAGE"));
