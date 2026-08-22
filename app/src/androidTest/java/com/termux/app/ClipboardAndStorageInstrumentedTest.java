@@ -50,9 +50,15 @@ public class ClipboardAndStorageInstrumentedTest {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             CountDownLatch changed = new CountDownLatch(1);
             ClipboardManager.OnPrimaryClipChangedListener listener = changed::countDown;
-            clipboard.addPrimaryClipChangedListener(listener);
             try {
-                ShareUtils.copyTextToClipboard(context, text);
+                InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {
+                    clipboard.addPrimaryClipChangedListener(listener);
+                    ShareUtils.copyTextToClipboard(context, text);
+                });
+            } catch (RuntimeException e) {
+                throw e;
+            }
+            try {
                 try {
                     assertTrue(changed.await(5, TimeUnit.SECONDS));
                 } catch (InterruptedException e) {
