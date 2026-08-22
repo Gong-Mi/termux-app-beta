@@ -148,8 +148,13 @@ jobs:
           adb shell input text "$PRODUCER --fit $FIT_MODE --fps $FPS"
           adb shell input keyevent KEYCODE_ENTER
           start=$(date +%s)
+          date -Is > host-time-start.txt
+          adb shell 'date +"%Y-%m-%dT%H:%M:%S.%3N%z"' > device-time-start.txt
+          adb shell dumpsys package com.termux | grep -E 'versionCode|versionName|lastUpdateTime|codePath' > package-running.txt || true
           sleep "$DURATION"
           end=$(date +%s)
+          date -Is > host-time-running.txt
+          adb shell 'date +"%Y-%m-%dT%H:%M:%S.%3N%z"' > device-time-running.txt
           echo "PRODUCER_REQUESTED_SECONDS=$DURATION" | tee stress-metrics.txt
           echo "PRODUCER_FIT_MODE=$FIT_MODE" | tee -a stress-metrics.txt
           echo "PRODUCER_FPS=$FPS" | tee -a stress-metrics.txt
@@ -173,6 +178,7 @@ jobs:
           adb shell ps -A > processes-final.txt
           adb logcat -d > logcat-final.txt
           adb shell dumpsys activity activities > activity-final.txt
+          python3 scripts/parse_meminfo.py meminfo-running.txt meminfo-final.txt --json meminfo-summary.json
           grep -iE 'FATAL EXCEPTION|AndroidRuntime|Termux|TerminalView|frame rev=|published=|lastDrawnRev=' logcat-final.txt | tail -200 > terminal-log-summary.txt
           {
             echo '== producer hash inside app UID =='
@@ -201,12 +207,18 @@ jobs:
             pixel-loop-dynamic.txt
             pixel-loop-running.png
             pixel-loop-after-stop.png
+            package-running.txt
+            host-time-start.txt
+            host-time-running.txt
+            device-time-start.txt
+            device-time-running.txt
             stress-metrics.txt
             stress-evidence.txt
             gfxinfo-running.txt
             gfxinfo-final.txt
             meminfo-running.txt
             meminfo-final.txt
+            meminfo-summary.json
             processes-final.txt
             activity-final.txt
             terminal-log-summary.txt
