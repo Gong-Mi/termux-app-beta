@@ -71,9 +71,18 @@ public final class RenderFrameMetrics {
         return mLastAckedScreenRevision;
     }
 
-    /** Invariant check: published >= drawn + dropped, and acked <= lastPublishedRev. */
+    /**
+     * Invariant check for cumulative lifecycle metrics.
+     *
+     * <p>Drawn is a render-attempt count, so it may exceed published when a frame
+     * is redrawn. Dropped also includes mailbox replacement and renderer failures;
+     * it is therefore not an exclusive partition with drawn.</p>
+     */
     public synchronized boolean isConsistent() {
-        return mPublishedFrameCount >= mDrawnFrameCount + mDroppedFrameCount
+        return mPublishedFrameCount >= 0
+            && mDrawnFrameCount >= 0
+            && mDroppedFrameCount >= 0
+            && mCoalescedRevisionCount >= 0
             && mLastAckedScreenRevision <= mLastPublishedScreenRevision;
     }
 }

@@ -11,19 +11,55 @@ name: Render smoke (SwiftShader)
 on:
   push:
     branches: [ master ]
+    paths:
+      - 'app/**'
+      - 'support_ui/**'
+      - 'terminal-emulator/**'
+      - 'terminal-view/**'
+      - 'termux-shared/**'
+      - 'buildSrc/**'
+      - 'scripts/**'
+      - '*.gradle'
+      - '*.properties'
+      - 'gradle/**'
+      - 'gradlew'
+      - 'gradlew.bat'
+      - '.github/workflows/render-smoke.yml'
   pull_request:
     branches: [ master ]
+    paths:
+      - 'app/**'
+      - 'support_ui/**'
+      - 'terminal-emulator/**'
+      - 'terminal-view/**'
+      - 'termux-shared/**'
+      - 'buildSrc/**'
+      - 'scripts/**'
+      - '*.gradle'
+      - '*.properties'
+      - 'gradle/**'
+      - 'gradlew'
+      - 'gradlew.bat'
+      - '.github/workflows/render-smoke.yml'
   workflow_dispatch:
 
 env:
   JAVA_VERSION: 21
+  BUNDLETOOL_VERSION: 1.18.2
 
 jobs:
   render-smoke:
-    name: Emulator render smoke (x86_64 + SwiftShader)
+    name: Emulator render smoke (x86_64 + ${{ matrix.gpu }})
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        gpu: [swiftshader_indirect, "off"]
     steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
       - name: Record runner spec
         run: |
           nproc
@@ -41,6 +77,27 @@ jobs:
         with:
           java-version: ${{ env.JAVA_VERSION }}
           distribution: temurin
+          cache: gradle
+
+      - name: Verify restored Gradle cache files
+        run: |
+          set -euo pipefail
+          modules="$HOME/.gradle/caches/modules-2/files-2.1"
+          wrapper="$HOME/.gradle/wrapper/dists"
+          test -d "$modules"
+          test -d "$wrapper"
+          module_files=$(find "$modules" -type f | wc -l)
+          wrapper_files=$(find "$wrapper" -type f | wc -l)
+          test "$module_files" -gt 0
+          test "$wrapper_files" -gt 0
+          module_size=$(du -sh "$modules" | cut -f1)
+          wrapper_size=$(du -sh "$wrapper" | cut -f1)
+          {
+            echo "GRADLE_MODULE_CACHE_FILES=$module_files"
+            echo "GRADLE_MODULE_CACHE_SIZE=$module_size"
+            echo "GRADLE_WRAPPER_CACHE_FILES=$wrapper_files"
+            echo "GRADLE_WRAPPER_CACHE_SIZE=$wrapper_size"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Install SDK pieces (timed)
         run: |
@@ -57,11 +114,24 @@ jobs:
           t1=$(date +%s)
           echo "SDK_INSTALL_SECONDS=$((t1-t0))" | tee -a "$GITHUB_STEP_SUMMARY"
 
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Build debug APK
-        run: ./gradlew assembleDebug
+      - name: Build fused debug APK from AAB
+        env:
+          KS_PASSWORD: xrj45yWGLbsO7W0v
+        run: |
+          ./gradlew bundleDebug --no-daemon
+          curl --fail --location --retry 3 \
+            -o bundletool.jar \
+            "https://github.com/google/bundletool/releases/download/${BUNDLETOOL_VERSION}/bundletool-all-${BUNDLETOOL_VERSION}.jar"
+          java -jar bundletool.jar build-apks \
+            --bundle=app/build/outputs/bundle/debug/app-debug.aab \
+            --output=termux-app-debug-universal.apks \
+            --mode=universal \
+            --ks=app/testkey_untrusted.jks \
+            --ks-key-alias=alias \
+            --ks-pass=pass:${KS_PASSWORD} \
+            --key-pass=pass:${KS_PASSWORD}
+          mkdir -p render-apk
+          unzip -o termux-app-debug-universal.apks universal.apk -d render-apk
 
       - name: Boot emulator with SwiftShader (timed)
         env:
@@ -77,7 +147,7 @@ jobs:
           fi
           t0=$(date +%s)
           nohup "$ANDROID_HOME/emulator/emulator" -avd smoke \
-            -gpu swiftshader_indirect -no-window -no-audio -no-boot-anim \
+            -gpu "${{ matrix.gpu }}" -no-window -no-audio -no-boot-anim \
             -no-snapshot -wipe-data -memory 3072 -cores 3 \
             > /tmp/emu.log 2>&1 &
           # Boot wait with hard cap and per-minute progress evidence
@@ -110,21 +180,30 @@ jobs:
       - name: Cold start + capture screenshots
         run: |
           set -x
-          # Debug outputs: split-APK builds name files termux-app_*_x86_64.apk (legacy
-          # default "1"), dynamic-feature builds produce termux-app_*_universal.apk
-          # (splits.disabled). Prefer universal so the emulator install covers all ABIs.
-          APK=$(ls app/build/outputs/apk/debug/termux-app_*universal*.apk 2>/dev/null \
-                || ls app/build/outputs/apk/debug/termux-app_*x86_64*.apk 2>/dev/null || true)
-          if [ -z "$APK" ]; then
-            echo "NO_APK_FOUND - outputs:"
-            ls -la app/build/outputs/apk/debug/ 2>&1
-            exit 3
-          fi
-          adb install -r "$APK"
+          adb install -r render-apk/universal.apk
           # Grant storage permission so the bootstrap can write, then cold start
           adb shell pm grant com.termux android.permission.WRITE_EXTERNAL_STORAGE || true
-          adb shell am start -W -n com.termux/.app.TermuxActivity
-          sleep 20
+          # Debug builds include the compile-time frame diagnostic implementation.
+          # Release builds use the empty source-set implementation and cannot enable it via Intent.
+          adb logcat -c
+          adb shell am force-stop com.termux
+          adb shell am start -W -S -n com.termux/.app.TermuxActivity
+          # Boot and bootstrap time varies on GitHub-hosted emulator instances. Wait
+          # for the first real frame instead of turning that scheduling variance into
+          # a false render failure; the later step still requires three valid lines.
+          frame_seen=0
+          for _ in $(seq 1 40); do
+            if adb logcat -d | grep -q 'Termux:TerminalView.*frame rev='; then
+              frame_seen=1
+              break
+            fi
+            sleep 1
+          done
+          if [ "$frame_seen" -ne 1 ]; then
+            echo 'Timed out waiting for first frame diagnostic'
+            adb logcat -d | tail -100
+            exit 1
+          fi
           adb shell ps -A | grep com.termux
           # First screenshot right after boot-to-idle
           adb exec-out screencap -p > render_initial.png
@@ -135,20 +214,86 @@ jobs:
           adb exec-out screencap -p > render_after_input.png
           adb logcat -d | grep -iE 'FATAL|AndroidRuntime.*com.termux' | tail -20 || true
 
+      - name: Frame pipeline smoke assertion
+        run: |
+          set -euo pipefail
+          adb logcat -d > logcat-smoke.txt
+          grep -E 'Termux:TerminalView.*frame rev=' logcat-smoke.txt > frame-info-lines.txt \
+            || { echo 'NO_FRAME_INFO_LINES'; tail -50 logcat-smoke.txt; exit 1; }
+          wc -l frame-info-lines.txt
+          python3 .github/workflows/verify_frame_metrics.py frame-info-lines.txt --min-lines 3 --max-rev-gap 10 --min-drawn-ratio 0.3
+
       - name: Pixel assertions
+        if: matrix.gpu == 'swiftshader_indirect'
         run: |
           python3 -m pip install --quiet Pillow
           python3 .github/workflows/assert_render.py render_initial.png
           python3 .github/workflows/assert_render.py render_after_input.png
 
+      # The default rendering mode is 'system' -> LAYER_TYPE_NONE, which never
+      # enables the clean-row redraw skip (canvas contents are not preserved).
+      # To prove the skip path itself, switch to the hwui_gpu mode (-> LAYER_TYPE_HARDWARE),
+      # restart the activity, and demand at least one frame that actually skipped rows.
+      - name: Hwui GPU clean-row skip path (implies renderer row culling)
+        if: matrix.gpu == 'swiftshader_indirect'
+        run: |
+          set -euo pipefail
+          # Write the rendering mode preference through run-as (debug build is debuggable).
+          # Avoid heredoc inside run-as quoting; generate the file on the runner and copy it in.
+          cat > /tmp/termux_prefs.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8" standalone="yes" ?>
+          <map>
+              <string name="terminal_rendering_mode">hwui_gpu</string>
+          </map>
+          EOF
+          adb push /tmp/termux_prefs.xml /data/local/tmp/termux_prefs.xml
+          adb shell run-as com.termux mkdir -p shared_prefs
+          adb shell run-as com.termux cp /data/local/tmp/termux_prefs.xml shared_prefs/com.termux_preferences.xml
+          adb shell am force-stop com.termux
+          adb logcat -c
+          adb shell am start -W -S -n com.termux/.app.TermuxActivity
+          # Wait for the first frame under the new mode.
+          frame_seen=0
+          for _ in $(seq 1 40); do
+            if adb logcat -d | grep -q 'Termux:TerminalView.*frame rev='; then
+              frame_seen=1
+              break
+            fi
+            sleep 1
+          done
+          if [ "$frame_seen" -ne 1 ]; then
+            echo 'Timed out waiting for frame diagnostics under hwui_gpu'
+            adb logcat -d | tail -100
+            exit 1
+          fi
+          # Give the idle app a few frames so unchanged rows are actually skipped,
+          # then capture and assert both the frame metrics (skipped>0 required) and
+          # that pixels still render correctly through the layered path.
+          sleep 3
+          adb shell input keyevent KEYCODE_MOVE_END
+          adb shell input text "hwui"
+          sleep 3
+          adb exec-out screencap -p > render_hwui.png
+          adb logcat -d > logcat-hwui.txt
+          grep -E 'Termux:TerminalView.*frame rev=' logcat-hwui.txt > frame-info-hwui.txt \
+            || { echo 'NO_FRAME_INFO_LINES under hwui_gpu'; tail -50 logcat-hwui.txt; exit 1; }
+          python3 .github/workflows/verify_frame_metrics.py frame-info-hwui.txt --min-lines 3 --require-skipped --max-rev-gap 10 --min-drawn-ratio 0.3
+          python3 .github/workflows/assert_render.py render_hwui.png
+          adb logcat -d | grep -iE 'FATAL|AndroidRuntime.*com.termux' | tail -20 || true
+
       - name: Upload render evidence
         if: always()
         uses: actions/upload-artifact@v6
         with:
-          name: render-smoke-evidence
+          name: render-smoke-evidence-${{ matrix.gpu }}
           path: |
             render_initial.png
             render_after_input.png
+            render_hwui.png
+            logcat-smoke.txt
+            logcat-hwui.txt
+            frame-info-lines.txt
+            frame-info-hwui.txt
             /tmp/emu.log
           if-no-files-found: warn
 

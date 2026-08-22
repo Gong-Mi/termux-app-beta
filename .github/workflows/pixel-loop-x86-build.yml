@@ -1,4 +1,4 @@
-name: Build pixel-loop x86_64 prebuilt
+name: Build pixel-loop prebuilts (arm64 + x86_64)
 
 on:
   push:
@@ -9,10 +9,22 @@ permissions:
   contents: write
 
 jobs:
-  build-x86_64:
-    name: Build standalone Android x86_64 pixel-loop ELF
+  build-prebuilt:
+    name: Build standalone Android ${{ matrix.abi_name }} pixel-loop ELF
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-linux-android
+            clang: aarch64-linux-android24-clang
+            asset: pixel-loop
+            abi_name: arm64
+          - target: x86_64-linux-android
+            clang: x86_64-linux-android24-clang
+            asset: pixel-loop-x86_64
+            abi_name: x86_64
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -22,7 +34,7 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: x86_64-linux-android
+          targets: ${{ matrix.target }}
 
       - name: Install Android NDK
         run: |
@@ -31,41 +43,51 @@ jobs:
           yes | "$SDK" --licenses >/dev/null || true
           "$SDK" "platforms;android-36" "ndk;29.0.14206865" >/dev/null
 
-      - name: Restore build-only producer source from its original commit
+      - name: Verify producer source is present and current
         run: |
           set -euxo pipefail
-          git checkout dcdb67ba33642917d3f6be625c46765c3446bdc5 -- tools/pixel-loop
           test -f tools/pixel-loop/src/main.rs
           test -f tools/pixel-loop/assets/video-pixel-loop.gif
+          # The stress producer must support the fill/fps intensity knobs used by
+          # pixel-loop-stress.yml; fail the prebuilt build if they regress.
+          grep -q -- '--fit fill' tools/pixel-loop/src/main.rs
+          grep -q -- '--fps' tools/pixel-loop/src/main.rs
 
-      - name: Build only x86_64 producer
+      - name: Build only ${{ matrix.abi_name }} producer
         working-directory: tools/pixel-loop
         run: |
           set -euxo pipefail
           ANDROID_NDK_HOME="$ANDROID_HOME/ndk/29.0.14206865"
           TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
-          export CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER="$TOOLCHAIN/x86_64-linux-android24-clang"
-          cargo build --release --target x86_64-linux-android
-          cp target/x86_64-linux-android/release/pixel-loop "$GITHUB_WORKSPACE/pixel-loop-x86_64"
-          chmod 755 "$GITHUB_WORKSPACE/pixel-loop-x86_64"
-          file "$GITHUB_WORKSPACE/pixel-loop-x86_64"
-          sha256sum "$GITHUB_WORKSPACE/pixel-loop-x86_64" | tee "$GITHUB_WORKSPACE/pixel-loop-x86_64.sha256"
+          case "${{ matrix.target }}" in
+            aarch64-linux-android)
+              export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$TOOLCHAIN/aarch64-linux-android24-clang"
+              ;;
+            x86_64-linux-android)
+              export CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER="$TOOLCHAIN/x86_64-linux-android24-clang"
+              ;;
+          esac
+          cargo build --release --target ${{ matrix.target }}
+          cp target/${{ matrix.target }}/release/pixel-loop "$GITHUB_WORKSPACE/${{ matrix.asset }}"
+          chmod 755 "$GITHUB_WORKSPACE/${{ matrix.asset }}"
+          file "$GITHUB_WORKSPACE/${{ matrix.asset }}"
+          sha256sum "$GITHUB_WORKSPACE/${{ matrix.asset }}" | tee "$GITHUB_WORKSPACE/${{ matrix.asset }}.sha256"
 
-      - name: Upload x86_64 Release asset
+      - name: Upload ${{ matrix.abi_name }} Release asset
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euxo pipefail
           gh release upload pixel-loop-085912 \
-            pixel-loop-x86_64 \
-            pixel-loop-x86_64.sha256 \
+            "${{ matrix.asset }}" \
+            "${{ matrix.asset }}.sha256" \
             --repo "$GITHUB_REPOSITORY" \
             --clobber
 
       - name: Upload build evidence
         uses: actions/upload-artifact@v6
         with:
-          name: pixel-loop-x86_64-prebuilt-evidence
+          name: pixel-loop-${{ matrix.abi_name }}-prebuilt-evidence
           path: |
-            pixel-loop-x86_64
-            pixel-loop-x86_64.sha256
+            ${{ matrix.asset }}
+            ${{ matrix.asset }}.sha256

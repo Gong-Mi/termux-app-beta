@@ -13,9 +13,12 @@ import android.view.View;
 
 import androidx.annotation.Nullable;
 
-import com.termux.terminal.TerminalBuffer;
+import com.termux.terminal.TerminalScreenSnapshot;
 import com.termux.terminal.WcWidth;
 import com.termux.view.R;
+import com.termux.view.TerminalActionModePolicy;
+import com.termux.view.TerminalRenderFrame;
+import com.termux.view.TerminalSelectionCoordinates;
 import com.termux.view.TerminalView;
 
 public class TextSelectionCursorController implements CursorController {
@@ -95,13 +98,19 @@ public class TextSelectionCursorController implements CursorController {
         mSelX1 = mSelX2 = columnAndRow[0];
         mSelY1 = mSelY2 = columnAndRow[1];
 
-        TerminalBuffer screen = terminalView.mEmulator.getScreen();
+        TerminalRenderFrame frame = terminalView.getCurrentRenderFrame();
+        if (frame == null) return;
+        TerminalScreenSnapshot screen = frame.screen;
+        if (screen == null) return;
+
+        if (mSelY1 < screen.firstExternalRow() || mSelY1 >= screen.endExternalRow()) return;
+
         if (!" ".equals(screen.getSelectedText(mSelX1, mSelY1, mSelX1, mSelY1))) {
             // Selecting something other than whitespace. Expand to word.
             while (mSelX1 > 0 && !"".equals(screen.getSelectedText(mSelX1 - 1, mSelY1, mSelX1 - 1, mSelY1))) {
                 mSelX1--;
             }
-            while (mSelX2 < terminalView.mEmulator.mColumns - 1 && !"".equals(screen.getSelectedText(mSelX2 + 1, mSelY1, mSelX2 + 1, mSelY1))) {
+            while (mSelX2 < frame.columns - 1 && !"".equals(screen.getSelectedText(mSelX2 + 1, mSelY1, mSelX2 + 1, mSelY1))) {
                 mSelX2++;
             }
         }
@@ -194,8 +203,11 @@ public class TextSelectionCursorController implements CursorController {
             public void onGetContentRect(ActionMode mode, View view, Rect outRect) {
                 int x1 = Math.round(mSelX1 * terminalView.mRenderer.getFontWidth());
                 int x2 = Math.round(mSelX2 * terminalView.mRenderer.getFontWidth());
-                int y1 = Math.round((mSelY1 - 1 - terminalView.getTopRow()) * terminalView.mRenderer.getFontLineSpacing());
-                int y2 = Math.round((mSelY2 + 1 - terminalView.getTopRow()) * terminalView.mRenderer.getFontLineSpacing());
+                // Anchor the floating ActionMode to the rendered frame's viewport so the bar lines
+                // up with the highlighted rows the renderer drew (issue #39).
+                int renderedTopRow = terminalView.getRenderedViewportTopRow();
+                int y1 = Math.round((mSelY1 - 1 - renderedTopRow) * terminalView.mRenderer.getFontLineSpacing());
+                int y2 = Math.round((mSelY2 + 1 - renderedTopRow) * terminalView.mRenderer.getFontLineSpacing());
 
                 if (x1 > x2) {
                     int tmp = x1;
@@ -211,26 +223,26 @@ public class TextSelectionCursorController implements CursorController {
 
                 outRect.set(x1, top, x2, bottom);
             }
-        }, ActionMode.TYPE_FLOATING);
+        }, TerminalActionModePolicy.typeFor(Build.MANUFACTURER, Build.BRAND));
     }
 
     @Override
     public void updatePosition(TextSelectionHandleView handle, int x, int y) {
-        TerminalBuffer screen = terminalView.mEmulator.getScreen();
-        final int scrollRows = screen.getActiveRows() - terminalView.mEmulator.mRows;
+        TerminalRenderFrame frame = terminalView.getCurrentRenderFrame();
+        if (frame == null) return;
+        TerminalScreenSnapshot screen = frame.screen;
+        if (screen == null) return;
+
+        final int scrollRows = screen.activeTranscriptRows();
+        final int columns = frame.columns;
+        final int rows = frame.endRow - frame.topRow;
+
         if (handle == mStartHandle) {
             mSelX1 = terminalView.getCursorX(x);
-            mSelY1 = terminalView.getCursorY(y);
+            mSelY1 = TerminalSelectionCoordinates.clampSelectionRow(terminalView.getCursorY(y),
+                scrollRows, screen.firstExternalRow(), screen.endExternalRow());
             if (mSelX1 < 0) {
                 mSelX1 = 0;
-            }
-
-            if (mSelY1 < -scrollRows) {
-                mSelY1 = -scrollRows;
-
-            } else if (mSelY1 > terminalView.mEmulator.mRows - 1) {
-                mSelY1 = terminalView.mEmulator.mRows - 1;
-
             }
 
             if (mSelY1 > mSelY2) {
@@ -240,15 +252,17 @@ public class TextSelectionCursorController implements CursorController {
                 mSelX1 = mSelX2;
             }
 
-            if (!terminalView.mEmulator.isAlternateBufferActive()) {
-                int topRow = terminalView.getTopRow();
+            if (!frame.alternateBufferActive) {
+                // Compare against the rendered viewport: the drag edge is where the drawn rows
+                // start/end, not where the scroll target is heading (issue #39).
+                int topRow = terminalView.getRenderedViewportTopRow();
 
                 if (mSelY1 <= topRow) {
                     topRow--;
                     if (topRow < -scrollRows) {
                         topRow = -scrollRows;
                     }
-                } else if (mSelY1 >= topRow + terminalView.mEmulator.mRows) {
+                } else if (mSelY1 >= topRow + rows) {
                     topRow++;
                     if (topRow > 0) {
                         topRow = 0;
@@ -258,19 +272,14 @@ public class TextSelectionCursorController implements CursorController {
                 terminalView.setTopRow(topRow);
             }
 
-            mSelX1 = getValidCurX(screen, mSelY1, mSelX1);
+            mSelX1 = getValidCurX(screen, columns, mSelY1, mSelX1);
 
         } else {
             mSelX2 = terminalView.getCursorX(x);
-            mSelY2 = terminalView.getCursorY(y);
+            mSelY2 = TerminalSelectionCoordinates.clampSelectionRow(terminalView.getCursorY(y),
+                scrollRows, screen.firstExternalRow(), screen.endExternalRow());
             if (mSelX2 < 0) {
                 mSelX2 = 0;
-            }
-
-            if (mSelY2 < -scrollRows) {
-                mSelY2 = -scrollRows;
-            } else if (mSelY2 > terminalView.mEmulator.mRows - 1) {
-                mSelY2 = terminalView.mEmulator.mRows - 1;
             }
 
             if (mSelY1 > mSelY2) {
@@ -280,15 +289,15 @@ public class TextSelectionCursorController implements CursorController {
                 mSelX2 = mSelX1;
             }
 
-            if (!terminalView.mEmulator.isAlternateBufferActive()) {
-                int topRow = terminalView.getTopRow();
+            if (!frame.alternateBufferActive) {
+                int topRow = terminalView.getRenderedViewportTopRow();
 
                 if (mSelY2 <= topRow) {
                     topRow--;
                     if (topRow < -scrollRows) {
                         topRow = -scrollRows;
                     }
-                } else if (mSelY2 >= topRow + terminalView.mEmulator.mRows) {
+                } else if (mSelY2 >= topRow + rows) {
                     topRow++;
                     if (topRow > 0) {
                         topRow = 0;
@@ -298,13 +307,14 @@ public class TextSelectionCursorController implements CursorController {
                 terminalView.setTopRow(topRow);
             }
 
-            mSelX2 = getValidCurX(screen, mSelY2, mSelX2);
+            mSelX2 = getValidCurX(screen, columns, mSelY2, mSelX2);
         }
 
         terminalView.invalidate();
     }
 
-    private int getValidCurX(TerminalBuffer screen, int cy, int cx) {
+    private int getValidCurX(TerminalScreenSnapshot screen, int columns, int cy, int cx) {
+        if (cy < screen.firstExternalRow() || cy >= screen.endExternalRow()) return cx;
         String line = screen.getSelectedText(0, cy, cx, cy);
         if (!TextUtils.isEmpty(line)) {
             int col = 0;
@@ -372,7 +382,9 @@ public class TextSelectionCursorController implements CursorController {
 
     /** Get the currently selected text. */
     public String getSelectedText() {
-        return terminalView.mEmulator.getSelectedText(mSelX1, mSelY1, mSelX2, mSelY2);
+        TerminalRenderFrame frame = terminalView.getCurrentRenderFrame();
+        if (frame == null || frame.screen == null) return "";
+        return frame.screen.getSelectedText(mSelX1, mSelY1, mSelX2, mSelY2);
     }
 
     /** Get the selected text stored before "MORE" button was pressed on the context menu. */

@@ -1,0 +1,91 @@
+name: Gradle cache validation
+
+on:
+  push:
+    branches: [ refactor/parser-worker-mailbox ]
+    paths:
+      - '.github/workflows/gradle-cache-validation.yml'
+  workflow_dispatch:
+    inputs:
+      cache_epoch:
+        description: 'Change this value to force a new cache key and test a cold miss'
+        required: true
+        default: v1
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  JAVA_VERSION: 21
+  CACHE_EPOCH: ${{ inputs.cache_epoch || 'push-v1' }}
+
+jobs:
+  validate:
+    name: Gradle cache ${{ inputs.cache_epoch || 'push-v1' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up JDK
+        uses: actions/setup-java@v5
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: temurin
+
+      - name: Restore validation cache
+        id: cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper/dists
+          key: gradle-validation-${{ runner.os }}-${{ env.CACHE_EPOCH }}-${{ hashFiles('**/build.gradle', '**/build.gradle.kts', '**/settings.gradle', '**/settings.gradle.kts', 'gradle/libs.versions.toml', 'gradle.properties', 'gradle/wrapper/gradle-wrapper.properties', 'buildSrc/**') }}
+
+      - name: Record cache state
+        run: |
+          set -euo pipefail
+          hit='${{ steps.cache.outputs.cache-hit }}'
+          if [ "$hit" != 'true' ]; then hit=false; fi
+          modules="$HOME/.gradle/caches/modules-2/files-2.1"
+          wrapper="$HOME/.gradle/wrapper/dists"
+          module_files=0
+          wrapper_files=0
+          if [ -d "$modules" ]; then module_files=$(find "$modules" -type f | wc -l); fi
+          if [ -d "$wrapper" ]; then wrapper_files=$(find "$wrapper" -type f | wc -l); fi
+          {
+            echo "CACHE_EPOCH=$CACHE_EPOCH"
+            echo "CACHE_HIT=$hit"
+            echo "CACHE_KEY=gradle-validation-${{ runner.os }}-$CACHE_EPOCH-<gradle-files-hash>"
+            echo "MODULE_CACHE_FILES=$module_files"
+            echo "WRAPPER_CACHE_FILES=$wrapper_files"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          if [ "$hit" = 'true' ]; then
+            test "$module_files" -gt 0
+            test "$wrapper_files" -gt 0
+          fi
+
+      - name: Run terminal emulator tests
+        run: |
+          ./gradlew :terminal-emulator:testDebugUnitTest --no-daemon
+
+      - name: Verify test output and cache inputs
+        run: |
+          set -euo pipefail
+          test -d "$HOME/.gradle/caches/modules-2/files-2.1"
+          test -d "$HOME/.gradle/wrapper/dists"
+          test -n "$(find "$HOME/.gradle/caches/modules-2/files-2.1" -type f -print -quit)"
+          test -n "$(find "$HOME/.gradle/wrapper/dists" -type f -print -quit)"
+          test -n "$(find terminal-emulator/build/test-results -type f -name '*.xml' -print -quit)"
+          echo 'CACHE_VALIDATION_TEST_OUTPUT=present' | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Save validation cache after successful miss run
+        if: success() && steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper/dists
+          key: gradle-validation-${{ runner.os }}-${{ env.CACHE_EPOCH }}-${{ hashFiles('**/build.gradle', '**/build.gradle.kts', '**/settings.gradle', '**/settings.gradle.kts', 'gradle/libs.versions.toml', 'gradle.properties', 'gradle/wrapper/gradle-wrapper.properties', 'buildSrc/**') }}

@@ -2,8 +2,8 @@ package com.termux.terminal;
 
 import android.annotation.SuppressLint;
 import android.os.Handler;
+import android.os.Looper;
 import android.os.Message;
-import android.os.Trace;
 import android.system.ErrnoException;
 import android.system.Os;
 import android.system.OsConstants;
@@ -16,6 +16,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.lang.reflect.Field;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.UUID;
 
 /**
@@ -31,11 +32,10 @@ import java.util.UUID;
  */
 public final class TerminalSession extends TerminalOutput {
 
-    private static final int MSG_NEW_INPUT = 1;
     private static final int MSG_PROCESS_EXITED = 4;
     private static final int MSG_PROCESS_READER_FINISHED = 5;
     private static final int MSG_PROCESS_READER_TIMEOUT = 6;
-    private static final int MAX_PROCESS_TO_TERMINAL_BYTES_PER_BATCH = 32 * 1024;
+
     private static final long PROCESS_READER_FINISH_GRACE_MILLIS = 2000;
 
     public final String mHandle = UUID.randomUUID().toString();
@@ -58,6 +58,18 @@ public final class TerminalSession extends TerminalOutput {
     /** Callback which gets notified when a session finishes or changes title. */
     TerminalSessionClient mClient;
 
+    /** Callback passed to the emulator; posts callbacks to {@link #mClient} on the main thread. */
+    private TerminalSessionClient mEmulatorClient;
+
+    /** Sink that will receive immutable model frames once the parser worker is wired in. */
+    private TerminalFrameSink mFrameSink;
+
+    /** Parser worker owning {@link #mEmulator} mutation. Not started yet. */
+    private TerminalParserWorker mParserWorker;
+
+    /** Latest frame published by the parser worker, used by main-thread snapshot methods. */
+    private volatile TerminalModelFrame mLatestFrame;
+
     /** The pid of the shell process. 0 if not started and -1 if finished running. */
     int mShellPid;
 
@@ -72,6 +84,19 @@ public final class TerminalSession extends TerminalOutput {
 
     /** Set on the main thread when the post-exit reader grace period expires. */
     private volatile boolean mProcessReaderStopRequested;
+
+    /** Java-side owners for the duplicated PTY descriptors. */
+    private final Object mPtyStreamLock = new Object();
+    private volatile InputStream mTerminalInputStream;
+    private volatile FileOutputStream mTerminalOutputStream;
+    private boolean mPtyStreamsCloseRequested;
+
+    /**
+     * Set as soon as waitFor() reports process exit.  Reader draining and parser
+     * cleanup may continue after that point, but the old pid must no longer be
+     * considered killable.
+     */
+    private volatile boolean mProcessExited;
 
     /** Set by the application for user identification of session, not by terminal. */
     public String mSessionName;
@@ -94,6 +119,11 @@ public final class TerminalSession extends TerminalOutput {
         this.mEnv = env;
         this.mTranscriptRows = transcriptRows;
         this.mClient = client;
+        this.mEmulatorClient = wrapClient(client);
+    }
+
+    private TerminalSessionClient wrapClient(TerminalSessionClient client) {
+        return new TerminalSessionClientMainThreadWrapper(client, new Handler(Looper.getMainLooper()));
     }
 
     /**
@@ -102,9 +132,69 @@ public final class TerminalSession extends TerminalOutput {
      */
     public void updateTerminalSessionClient(TerminalSessionClient client) {
         mClient = client;
+        mEmulatorClient = wrapClient(client);
 
+        if (mParserWorker != null) mParserWorker.setClient(mEmulatorClient);
         if (mEmulator != null)
-            mEmulator.updateTerminalSessionClient(client);
+            mEmulator.updateTerminalSessionClient(mEmulatorClient);
+    }
+
+    /**
+     * Set the sink that receives immutable terminal model frames from the parser worker.
+     * The worker caches the latest frame for snapshot methods and forwards it to the view sink.
+     */
+    public synchronized void setFrameSink(TerminalFrameSink sink) {
+        final TerminalFrameSink delegate = sink;
+        mFrameSink = new TerminalFrameSink() {
+            @Override
+            public void publishFrame(TerminalModelFrame frame) {
+                mLatestFrame = frame;
+                if (delegate != null) delegate.publishFrame(frame);
+            }
+
+            @Override
+            public boolean shouldCaptureSnapshot() {
+                return delegate == null || delegate.shouldCaptureSnapshot();
+            }
+
+            @Override
+            public void onFrameConsumed(TerminalModelFrame frame) {
+                if (delegate != null) delegate.onFrameConsumed(frame);
+            }
+        };
+        if (mParserWorker != null) mParserWorker.setFrameSink(mFrameSink);
+    }
+
+    /**
+     * Notify the parser worker that a previously published frame has been consumed by
+     * the renderer. This allows the worker to republish if it skipped snapshots while
+     * a frame was pending.
+     */
+    public void onFrameConsumed(TerminalModelFrame frame) {
+        TerminalParserWorker worker = mParserWorker;
+        if (worker != null) worker.onFrameConsumed(frame);
+    }
+
+    /** Detach the current view route; future worker frames are not delivered to it. */
+    public synchronized void detachFrameSink() {
+        mFrameSink = new TerminalFrameSink() {
+            @Override
+            public void publishFrame(TerminalModelFrame frame) {
+                mLatestFrame = frame;
+            }
+
+            @Override
+            public boolean shouldCaptureSnapshot() {
+                return true;
+            }
+        };
+        if (mParserWorker != null) mParserWorker.setFrameSink(mFrameSink);
+    }
+
+    /** Return a point-in-time snapshot of parser-side pipeline counters. */
+    public TerminalParserMetrics.Snapshot getParserMetricsSnapshot() {
+        TerminalParserWorker worker = mParserWorker;
+        return worker == null ? new TerminalParserMetrics().snapshot() : worker.getMetricsSnapshot();
     }
 
     /** Inform the attached pty of the new size and reflow or initialize the emulator. */
@@ -113,7 +203,25 @@ public final class TerminalSession extends TerminalOutput {
             initializeEmulator(columns, rows, cellWidthPixels, cellHeightPixels);
         } else {
             JNI.setPtyWindowSize(mTerminalFileDescriptor, rows, columns, cellWidthPixels, cellHeightPixels);
-            mEmulator.resize(columns, rows, cellWidthPixels, cellHeightPixels);
+            mParserWorker.requestResize(columns, rows, cellWidthPixels, cellHeightPixels);
+        }
+    }
+
+    /** Last viewport top row handed to the parser worker, for main-thread dedupe. */
+    private int mLastViewportTopRow = Integer.MIN_VALUE;
+
+    /** Request a new immutable model frame for a transcript viewport change. */
+    public void setViewport(int topRow) {
+        if (mParserWorker != null) {
+            // The view calls setViewport() on every onScreenUpdated() notification.
+            // Without dedupe, an idle app re-enqueues a viewport command per
+            // published frame, which publishes another frame, which notifies the
+            // view again: an exponential publish loop. Skipping an unchanged
+            // request is safe because the worker already holds that viewport and
+            // the view invalidates itself when it actually changes mTopRow.
+            if (topRow == mLastViewportTopRow) return;
+            mLastViewportTopRow = topRow;
+            mParserWorker.requestViewport(topRow);
         }
     }
 
@@ -129,19 +237,66 @@ public final class TerminalSession extends TerminalOutput {
      * @param rows    The number of rows in the terminal window.
      */
     public void initializeEmulator(int columns, int rows, int cellWidthPixels, int cellHeightPixels) {
-        mEmulator = new TerminalEmulator(this, columns, rows, cellWidthPixels, cellHeightPixels, mTranscriptRows, mClient);
+        mProcessExited = false;
+        synchronized (mPtyStreamLock) {
+            mPtyStreamsCloseRequested = false;
+            mTerminalInputStream = null;
+            mTerminalOutputStream = null;
+        }
+        mEmulator = new TerminalEmulator(this, columns, rows, cellWidthPixels, cellHeightPixels, mTranscriptRows, mEmulatorClient);
+        mParserWorker = new TerminalParserWorker(mEmulator, mProcessToTerminalIOQueue, mFrameSink, mEmulatorClient, this, 64 * 1024, 32 * 1024);
+        mParserWorker.start();
 
         int[] processId = new int[1];
         mTerminalFileDescriptor = JNI.createSubprocess(mShellPath, mCwd, mArgs, mEnv, processId, rows, columns, cellWidthPixels, cellHeightPixels);
         mShellPid = processId[0];
         mClient.setTerminalShellPid(this, mShellPid);
 
+        // Keep the subprocess' original master FD owned by this session for
+        // ioctl() and the single final JNI.close().  Each Java stream gets its
+        // own duplicated descriptor: FileInputStream/FileOutputStream both
+        // close their descriptor, so sharing the raw FD would create multiple
+        // close owners and make a late close vulnerable to fd-number reuse.
         final FileDescriptor terminalFileDescriptorWrapped = wrapFileDescriptor(mTerminalFileDescriptor, mClient);
+        FileDescriptor inputFileDescriptor = null;
+        FileDescriptor outputFileDescriptor = null;
+        try {
+            inputFileDescriptor = Os.dup(terminalFileDescriptorWrapped);
+            outputFileDescriptor = Os.dup(terminalFileDescriptorWrapped);
+        } catch (ErrnoException e) {
+            // If the second dup fails, the first duplicate is already a Java
+            // stream candidate and must be closed before releasing the raw
+            // master FD. Otherwise initialization failure leaks one PTY fd.
+            if (inputFileDescriptor != null) {
+                try {
+                    Os.close(inputFileDescriptor);
+                } catch (ErrnoException ignored) {
+                    // Best effort while unwinding initialization.
+                }
+            }
+            if (outputFileDescriptor != null) {
+                try {
+                    Os.close(outputFileDescriptor);
+                } catch (ErrnoException ignored) {
+                    // Best effort while unwinding initialization.
+                }
+            }
+            JNI.close(mTerminalFileDescriptor);
+            throw new IllegalStateException("Failed to duplicate terminal pty descriptor", e);
+        }
+        final FileDescriptor inputDescriptor = inputFileDescriptor;
+        final FileDescriptor outputDescriptor = outputFileDescriptor;
 
         new Thread("TermSessionInputReader[pid=" + mShellPid + "]") {
             @Override
             public void run() {
-                try (InputStream termIn = new FileInputStream(terminalFileDescriptorWrapped)) {
+                InputStream termIn = null;
+                try {
+                    termIn = new FileInputStream(inputDescriptor);
+                    synchronized (mPtyStreamLock) {
+                        if (mPtyStreamsCloseRequested) return;
+                        mTerminalInputStream = termIn;
+                    }
                     final byte[] buffer = new byte[4096];
                     while (true) {
                         if (mProcessReaderStopRequested) return;
@@ -149,16 +304,21 @@ public final class TerminalSession extends TerminalOutput {
                         if (read == -1) return;
                         if (mProcessReaderStopRequested) return;
                         if (!mProcessToTerminalIOQueue.write(buffer, 0, read)) return;
-                        // Coalesce: if a MSG_NEW_INPUT is already pending, the
-                        // pending handler run will drain everything queued so
-                        // far; no need to enqueue another message per read.
-                        if (!mMainThreadHandler.hasMessages(MSG_NEW_INPUT)) {
-                            mMainThreadHandler.sendEmptyMessage(MSG_NEW_INPUT);
-                        }
+                        mParserWorker.requestAppend();
                     }
                 } catch (Exception e) {
                     // Ignore, just shutting down.
                 } finally {
+                    synchronized (mPtyStreamLock) {
+                        if (mTerminalInputStream == termIn) mTerminalInputStream = null;
+                    }
+                    if (termIn != null) {
+                        try {
+                            termIn.close();
+                        } catch (IOException ignored) {
+                            // The reader is already being stopped.
+                        }
+                    }
                     mMainThreadHandler.sendEmptyMessage(MSG_PROCESS_READER_FINISHED);
                 }
             }
@@ -168,7 +328,13 @@ public final class TerminalSession extends TerminalOutput {
             @Override
             public void run() {
                 final byte[] buffer = new byte[4096];
-                try (FileOutputStream termOut = new FileOutputStream(terminalFileDescriptorWrapped)) {
+                FileOutputStream termOut = null;
+                try {
+                    termOut = new FileOutputStream(outputDescriptor);
+                    synchronized (mPtyStreamLock) {
+                        if (mPtyStreamsCloseRequested) return;
+                        mTerminalOutputStream = termOut;
+                    }
                     while (true) {
                         int bytesToWrite = mTerminalToProcessIOQueue.read(buffer, true);
                         if (bytesToWrite == -1) return;
@@ -176,6 +342,17 @@ public final class TerminalSession extends TerminalOutput {
                     }
                 } catch (IOException e) {
                     // Ignore.
+                } finally {
+                    synchronized (mPtyStreamLock) {
+                        if (mTerminalOutputStream == termOut) mTerminalOutputStream = null;
+                    }
+                    if (termOut != null) {
+                        try {
+                            termOut.close();
+                        } catch (IOException ignored) {
+                            // The writer is already being stopped.
+                        }
+                    }
                 }
             }
         }.start();
@@ -184,6 +361,10 @@ public final class TerminalSession extends TerminalOutput {
             @Override
             public void run() {
                 int processExitCode = JNI.waitFor(mShellPid);
+                // Revoke kill authority before posting the exit event.  The main
+                // thread may still be draining reader output, but this pid is no
+                // longer a live process and may already be reusable by the OS.
+                mProcessExited = true;
                 mMainThreadHandler.sendMessage(mMainThreadHandler.obtainMessage(MSG_PROCESS_EXITED, processExitCode));
             }
         }.start();
@@ -237,6 +418,248 @@ public final class TerminalSession extends TerminalOutput {
         return mEmulator;
     }
 
+    /** @return whether mouse tracking is active, based on the latest frame or emulator. */
+    public boolean isMouseTrackingActive() {
+        TerminalModelFrame frame = mLatestFrame;
+        if (frame != null) return frame.mouseTrackingActive;
+        if (mEmulator == null) return false;
+        synchronized (mEmulator) {
+            return mEmulator.isMouseTrackingActive();
+        }
+    }
+
+    /** @return whether the alternate buffer is active. */
+    public boolean isAlternateBufferActive() {
+        TerminalModelFrame frame = mLatestFrame;
+        if (frame != null) return frame.alternateBufferActive;
+        if (mEmulator == null) return false;
+        synchronized (mEmulator) {
+            return mEmulator.isAlternateBufferActive();
+        }
+    }
+
+    /** @return whether auto-scroll is disabled. */
+    public boolean isAutoScrollDisabled() {
+        TerminalModelFrame frame = mLatestFrame;
+        if (frame != null) return frame.autoScrollDisabled;
+        if (mEmulator == null) return false;
+        synchronized (mEmulator) {
+            return mEmulator.isAutoScrollDisabled();
+        }
+    }
+
+    /** Toggle whether auto-scroll is disabled, serialized with parser worker updates. */
+    public void requestToggleAutoScrollDisabled() {
+        if (mParserWorker != null) {
+            mParserWorker.requestToggleAutoScrollDisabled();
+        } else if (mEmulator != null) {
+            synchronized (mEmulator) {
+                mEmulator.toggleAutoScrollDisabled();
+            }
+        }
+    }
+
+    /** @return number of visible screen rows. */
+    public int getScreenRows() {
+        TerminalModelFrame frame = mLatestFrame;
+        if (frame != null) return frame.rows;
+        if (mEmulator == null) return 0;
+        synchronized (mEmulator) {
+            return mEmulator.mRows;
+        }
+    }
+
+    /** @return number of screen columns. */
+    public int getScreenColumns() {
+        TerminalModelFrame frame = mLatestFrame;
+        if (frame != null) return frame.columns;
+        if (mEmulator == null) return 0;
+        synchronized (mEmulator) {
+            return mEmulator.mColumns;
+        }
+    }
+
+    /** @return cursor column, or 0 if unavailable. */
+    public int getCursorCol() {
+        TerminalModelFrame frame = mLatestFrame;
+        if (frame != null) return frame.cursorCol;
+        if (mEmulator == null) return 0;
+        synchronized (mEmulator) {
+            return mEmulator.getCursorCol();
+        }
+    }
+
+    /** @return cursor row, or 0 if unavailable. */
+    public int getCursorRow() {
+        TerminalModelFrame frame = mLatestFrame;
+        if (frame != null) return frame.cursorRow;
+        if (mEmulator == null) return 0;
+        synchronized (mEmulator) {
+            return mEmulator.getCursorRow();
+        }
+    }
+
+    /** @return active rows (transcript + screen) from the latest frame or live emulator. */
+    public int getScreenActiveRows() {
+        TerminalModelFrame frame = mLatestFrame;
+        if (frame != null) return frame.activeTranscriptRows + frame.rows;
+        synchronized (mEmulator) {
+            return mEmulator != null ? mEmulator.getScreen().getActiveRows() : 0;
+        }
+    }
+
+    /** @return current scroll counter from the latest frame or live emulator. */
+    public int getScrollCounter() {
+        TerminalModelFrame frame = mLatestFrame;
+        if (frame != null) return frame.scrollCounter;
+        synchronized (mEmulator) {
+            return mEmulator != null ? mEmulator.getScrollCounter() : 0;
+        }
+    }
+
+    /** Clear the scroll counter, serialized with parser worker updates. */
+    public void clearScrollCounter() {
+        if (mParserWorker != null) {
+            // The view calls clearScrollCounter() on every onScreenUpdated()
+            // notification; when nothing scrolled the reset is a semantic no-op.
+            // Skipping it also breaks the publish -> notify -> clear -> publish
+            // feedback loop for idle sessions.
+            if (getScrollCounter() == 0) return;
+            mParserWorker.requestClearScrollCounter();
+        } else if (mEmulator != null) {
+            synchronized (mEmulator) {
+                mEmulator.clearScrollCounter();
+            }
+        }
+    }
+
+    /** Set cursor blink state, serialized with parser worker updates. */
+    public void setCursorBlinkState(boolean visible) {
+        if (mParserWorker != null) {
+            mParserWorker.requestSetCursorBlinkState(visible);
+        } else if (mEmulator != null) {
+            synchronized (mEmulator) {
+                mEmulator.setCursorBlinkState(visible);
+            }
+        }
+    }
+
+    /** Enable/disable cursor blinking, serialized with parser worker updates. */
+    public void setCursorBlinkingEnabled(boolean enabled) {
+        if (mParserWorker != null) {
+            mParserWorker.requestSetCursorBlinkingEnabled(enabled);
+        } else if (mEmulator != null) {
+            synchronized (mEmulator) {
+                mEmulator.setCursorBlinkingEnabled(enabled);
+            }
+        }
+    }
+
+    /** @return a transcript string of the latest frame's visible screen, or empty if unavailable. */
+    public CharSequence getScreenTranscriptText() {
+        TerminalModelFrame frame = mLatestFrame;
+        if (frame != null) return frame.screen.getTranscriptText();
+        synchronized (mEmulator) {
+            return mEmulator != null ? mEmulator.getScreen().getTranscriptText() : "";
+        }
+    }
+
+    /** @return whether the cursor is enabled in the latest frame or live emulator. */
+    public boolean isCursorEnabled() {
+        TerminalModelFrame frame = mLatestFrame;
+        if (frame != null) {
+            // Cursor visible implies enabled; use cursorStyle as fallback if needed.
+            return frame.cursorVisible || frame.cursorStyle != 0;
+        }
+        synchronized (mEmulator) {
+            return mEmulator != null && mEmulator.isCursorEnabled();
+        }
+    }
+
+    /** @return active transcript rows. */
+    public int getActiveTranscriptRows() {
+        TerminalModelFrame frame = mLatestFrame;
+        return frame != null ? frame.activeTranscriptRows : (mEmulator != null ? mEmulator.getScreen().getActiveTranscriptRows() : 0);
+    }
+
+    /** @return cursor-keys application mode, or false if unavailable. */
+    public boolean isCursorKeysApplicationMode() {
+        TerminalModelFrame frame = mLatestFrame;
+        return frame != null ? frame.cursorKeysApplicationMode : (mEmulator != null && mEmulator.isCursorKeysApplicationMode());
+    }
+
+    /** @return keypad application mode, or false if unavailable. */
+    public boolean isKeypadApplicationMode() {
+        TerminalModelFrame frame = mLatestFrame;
+        return frame != null ? frame.keypadApplicationMode : (mEmulator != null && mEmulator.isKeypadApplicationMode());
+    }
+
+    /** @return a copy of the current color palette, or null if unavailable. */
+    public int[] getCurrentColors() {
+        TerminalModelFrame frame = mLatestFrame;
+        if (frame != null) return frame.copyPalette();
+        if (mEmulator != null) return Arrays.copyOf(mEmulator.mColors.mCurrentColors, mEmulator.mColors.mCurrentColors.length);
+        return null;
+    }
+
+    /** @return the word at the given column/row, or null if unavailable. */
+    public String getWordAtLocation(int x, int y) {
+        synchronized (mEmulator) {
+            return mEmulator != null ? mEmulator.getScreen().getWordAtLocation(x, y) : null;
+        }
+    }
+
+    /** Get transcript text from the terminal session. */
+    public String getTranscriptText(boolean linesJoined, boolean trim) {
+        synchronized (mEmulator) {
+            if (mEmulator == null) return null;
+            TerminalBuffer buffer = mEmulator.getScreen();
+            String text = linesJoined ? buffer.getTranscriptTextWithFullLinesJoined() : buffer.getTranscriptTextWithoutJoinedLines();
+            if (text == null) return null;
+            return trim ? text.trim() : text;
+        }
+    }
+
+    /** Get selected text in the given region from the latest frame or live screen. */
+    public String getSelectedText(int x1, int y1, int x2, int y2, boolean rectangular) {
+        synchronized (mEmulator) {
+            return mEmulator != null ? mEmulator.getScreen().getSelectedText(x1, y1, x2, y2, rectangular) : null;
+        }
+    }
+
+    /** Paste text into the terminal, serialized with parser worker updates. */
+    public void paste(String text) {
+        if (mParserWorker != null) {
+            mParserWorker.requestPaste(text);
+        } else if (mEmulator != null) {
+            synchronized (mEmulator) {
+                mEmulator.paste(text);
+            }
+        }
+    }
+
+    /** Send a mouse event, serialized with parser worker updates. */
+    public void sendMouseEvent(int button, int x, int y, boolean pressed) {
+        if (mParserWorker != null) {
+            mParserWorker.requestSendMouseEvent(button, x, y, pressed);
+        } else if (mEmulator != null) {
+            synchronized (mEmulator) {
+                mEmulator.sendMouseEvent(button, x, y, pressed);
+            }
+        }
+    }
+
+    /** Reset the terminal color palette. */
+    public void resetColors() {
+        if (mParserWorker != null) {
+            mParserWorker.requestResetColors();
+        } else if (mEmulator != null) {
+            synchronized (mEmulator) {
+                mEmulator.mColors.reset();
+            }
+        }
+    }
+
     /** Notify the {@link #mClient} that the screen has changed. */
     protected void notifyScreenUpdate() {
         mClient.onTextChanged(this);
@@ -244,24 +667,32 @@ public final class TerminalSession extends TerminalOutput {
 
     /** Reset state for terminal emulator state. */
     public void reset() {
-        mEmulator.reset();
-        notifyScreenUpdate();
+        if (mParserWorker != null) {
+            mParserWorker.requestReset();
+        } else if (mEmulator != null) {
+            mEmulator.reset();
+            notifyScreenUpdate();
+        }
     }
 
     /** Finish this terminal session by sending SIGKILL to the shell. */
     public void finishIfRunning() {
-        if (isRunning()) {
-            try {
-                Os.kill(mShellPid, OsConstants.SIGKILL);
-            } catch (ErrnoException e) {
-                Logger.logWarn(mClient, LOG_TAG, "Failed sending SIGKILL: " + e.getMessage());
-            }
+        final int pid;
+        synchronized (this) {
+            if (mShellPid <= 0 || mProcessExited) return;
+            pid = mShellPid;
+        }
+        try {
+            Os.kill(pid, OsConstants.SIGKILL);
+        } catch (ErrnoException e) {
+            Logger.logWarn(mClient, LOG_TAG, "Failed sending SIGKILL: " + e.getMessage());
         }
     }
 
     /** Cleanup resources when the process exits. */
     void cleanupResources(int exitStatus) {
         synchronized (this) {
+            mProcessExited = true;
             mShellPid = -1;
             mShellExitStatus = exitStatus;
         }
@@ -269,8 +700,37 @@ public final class TerminalSession extends TerminalOutput {
         // Stop the reader and writer threads, and close the I/O streams
         mTerminalToProcessIOQueue.close();
         mProcessToTerminalIOQueue.close();
+        closePtyStreams();
         JNI.close(mTerminalFileDescriptor);
     }
+
+    /** Close Java-owned duplicate descriptors; stream close remains idempotent. */
+    private void closePtyStreams() {
+        final InputStream input;
+        final FileOutputStream output;
+        synchronized (mPtyStreamLock) {
+            mPtyStreamsCloseRequested = true;
+            input = mTerminalInputStream;
+            output = mTerminalOutputStream;
+            mTerminalInputStream = null;
+            mTerminalOutputStream = null;
+        }
+        if (input != null) {
+            try {
+                input.close();
+            } catch (IOException ignored) {
+                // The reader is already being stopped.
+            }
+        }
+        if (output != null) {
+            try {
+                output.close();
+            } catch (IOException ignored) {
+                // The writer is already being stopped.
+            }
+        }
+    }
+
 
     @Override
     public void titleChanged(String oldTitle, String newTitle) {
@@ -278,7 +738,7 @@ public final class TerminalSession extends TerminalOutput {
     }
 
     public synchronized boolean isRunning() {
-        return mShellPid != -1;
+        return mShellPid > 0 && !mProcessExited;
     }
 
     /** Only valid if not {@link #isRunning()}. */
@@ -306,7 +766,7 @@ public final class TerminalSession extends TerminalOutput {
         mClient.onColorsChanged(this);
     }
 
-    public int getPid() {
+    public synchronized int getPid() {
         return mShellPid;
     }
 
@@ -353,14 +813,7 @@ public final class TerminalSession extends TerminalOutput {
     @SuppressLint("HandlerLeak")
     class MainThreadHandler extends Handler {
 
-        final byte[] mReceiveBuffer = new byte[64 * 1024];
         final TerminalSessionExitCoordinator mExitCoordinator = new TerminalSessionExitCoordinator();
-        final TerminalInputQueueDrain.Consumer mReceiveConsumer = new TerminalInputQueueDrain.Consumer() {
-            @Override
-            public void accept(byte[] buffer, int length) {
-                mEmulator.append(buffer, length);
-            }
-        };
 
         @Override
         public void handleMessage(Message msg) {
@@ -377,60 +830,17 @@ public final class TerminalSession extends TerminalOutput {
                 Logger.logInfo(mClient, LOG_TAG, "event=PTY_READER_FINISHED session=" + mHandle);
             } else if (msg.what == MSG_PROCESS_READER_TIMEOUT) {
                 mProcessReaderStopRequested = true;
+                closePtyStreams();
                 mExitCoordinator.markReaderTimeout();
                 Logger.logWarn(mClient, LOG_TAG, "event=PTY_READER_TIMEOUT session=" + mHandle);
-            }
-
-            TerminalInputQueueDrain.Result drainResult;
-            Trace.beginSection("Termux:TerminalSession.drain+parse");
-            try {
-                drainResult = TerminalInputQueueDrain.drain(
-                    mProcessToTerminalIOQueue, mReceiveBuffer,
-                    MAX_PROCESS_TO_TERMINAL_BYTES_PER_BATCH, mReceiveConsumer);
-            } finally {
-                Trace.endSection();
-            }
-            if (drainResult.getBytesRead() > 0) {
-                Trace.beginSection("Termux:notifyScreenUpdate");
-                try {
-                    notifyScreenUpdate();
-                } finally {
-                    Trace.endSection();
-                }
-            }
-
-            // A full 64KB receive buffer used to make the nominal 32KB cap
-            // ineffective. Yield after the real budget and explicitly retain
-            // the wakeup for the queued tail.
-            if (drainResult.hasMore()) {
-                if (!hasMessages(MSG_NEW_INPUT)) {
-                    sendEmptyMessage(MSG_NEW_INPUT);
-                }
-                return;
             }
 
             if (mExitCoordinator.shouldFinish(false)) {
                 mExitCoordinator.markFinished();
                 removeMessages(MSG_PROCESS_READER_TIMEOUT);
                 int exitCode = mExitCoordinator.getExitStatus();
-                Logger.logInfo(mClient, LOG_TAG, "event=FINAL_CLEANUP session=" + mHandle + " exitStatus=" + exitCode);
-                cleanupResources(exitCode);
-
-                String exitDescription = "\r\n[Process completed";
-                if (exitCode > 0) {
-                    // Non-zero process exit.
-                    exitDescription += " (code " + exitCode + ")";
-                } else if (exitCode < 0) {
-                    // Negated signal.
-                    exitDescription += " (signal " + (-exitCode) + ")";
-                }
-                exitDescription += " - press Enter]";
-
-                byte[] bytesToWrite = exitDescription.getBytes(StandardCharsets.UTF_8);
-                mEmulator.append(bytesToWrite, bytesToWrite.length);
-                notifyScreenUpdate();
-
-                mClient.onSessionFinished(TerminalSession.this);
+                Logger.logInfo(mClient, LOG_TAG, "event=FINISHING session=" + mHandle + " exitStatus=" + exitCode);
+                mParserWorker.requestFinish(exitCode);
             }
         }
 

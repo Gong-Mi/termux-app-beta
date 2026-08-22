@@ -41,6 +41,8 @@ import androidx.annotation.RequiresApi;
 import com.termux.terminal.KeyHandler;
 import com.termux.terminal.TerminalBuffer;
 import com.termux.terminal.TerminalEmulator;
+import com.termux.terminal.TerminalFrameSink;
+import com.termux.terminal.TerminalModelFrame;
 import com.termux.terminal.TerminalSession;
 import com.termux.view.textselection.TextSelectionCursorController;
 
@@ -52,17 +54,32 @@ public final class TerminalView extends View {
 
     /** The currently displayed terminal session, whose emulator is {@link #mEmulator}. */
     public TerminalSession mTermSession;
-    /** Our terminal emulator whose session is {@link #mTermSession}. */
+    /**
+     * Our terminal emulator whose session is {@link #mTermSession}.
+     * @deprecated Kept for source compatibility only. External code should use {@link #isSessionAttached()}
+     *             and snapshot methods on {@link #mTermSession}; after attachSession this field is null.
+     */
+    @Deprecated
     public TerminalEmulator mEmulator;
 
     public TerminalRenderer mRenderer;
     /** 上一帧的渲染交接快照（供调试/审计：行级变更归属）。渲染本身不依赖它。 */
     private TerminalRenderFrame mLastRenderFrame;
+    /** The frame that was actually drawn in the previous onDraw, used to decide whether clean rows can be skipped. */
+    private TerminalRenderFrame mLastRenderedFrame;
+    /** Latest-only mailbox from the parser worker to the render thread. */
+    private TerminalRenderMailbox<TerminalModelFrame> mRenderMailbox;
+    /** Rejects callbacks from a session that was detached while they were in flight. */
+    private final TerminalRenderSessionGate mSessionGate = new TerminalRenderSessionGate();
+    /** Most recently acquired model frame, reused for View-only projection changes. */
+    private TerminalModelFrame mLastModelFrame;
     /** Immutable accounting object tracking publish/draw/ack lifecycle. */
     private final RenderFrameMetrics mFrameMetrics = new RenderFrameMetrics();
-    /** 打开后每帧打印变更台账摘要（默认关闭，零开销）。 */
-    private static volatile boolean sDebugFrameInfo = false;
-
+    /** Last selection rectangle used to build mLastRenderFrame. */
+    private int mLastRenderSelectionX1 = Integer.MIN_VALUE;
+    private int mLastRenderSelectionY1 = Integer.MIN_VALUE;
+    private int mLastRenderSelectionX2 = Integer.MIN_VALUE;
+    private int mLastRenderSelectionY2 = Integer.MIN_VALUE;
     public TerminalViewClient mClient;
 
     private boolean mRenderingStateReported;
@@ -154,7 +171,7 @@ public final class TerminalView extends View {
             @Override
             public boolean onUp(MotionEvent event) {
                 mScrollRemainder = 0.0f;
-                if (mEmulator != null && mEmulator.isMouseTrackingActive() && !event.isFromSource(InputDevice.SOURCE_MOUSE) && !isSelectingText() && !scrolledWithFinger) {
+                if (mTermSession != null && mTermSession.isMouseTrackingActive() && !event.isFromSource(InputDevice.SOURCE_MOUSE) && !isSelectingText() && !scrolledWithFinger) {
                     // Quick event processing when mouse tracking is active - do not wait for check of double tapping
                     // for zooming.
                     sendMouseEventCode(event, TerminalEmulator.MOUSE_LEFT_BUTTON, true);
@@ -167,7 +184,7 @@ public final class TerminalView extends View {
 
             @Override
             public boolean onSingleTapUp(MotionEvent event) {
-                if (mEmulator == null) return true;
+                if (mTermSession == null) return true;
 
                 if (isSelectingText()) {
                     stopTextSelectionMode();
@@ -180,8 +197,8 @@ public final class TerminalView extends View {
 
             @Override
             public boolean onScroll(MotionEvent e, float distanceX, float distanceY) {
-                if (mEmulator == null) return true;
-                if (mEmulator.isMouseTrackingActive() && e.isFromSource(InputDevice.SOURCE_MOUSE)) {
+                if (mTermSession == null) return true;
+                if (mTermSession.isMouseTrackingActive() && e.isFromSource(InputDevice.SOURCE_MOUSE)) {
                     // If moving with mouse pointer while pressing button, report that instead of scroll.
                     // This means that we never report moving with button press-events for touch input,
                     // since we cannot just start sending these events without a starting press event,
@@ -199,7 +216,7 @@ public final class TerminalView extends View {
 
             @Override
             public boolean onScale(float focusX, float focusY, float scale) {
-                if (mEmulator == null || isSelectingText()) return true;
+                if (mTermSession == null || isSelectingText()) return true;
                 mScaleFactor *= scale;
                 mScaleFactor = mClient.onScale(mScaleFactor);
                 return true;
@@ -207,16 +224,17 @@ public final class TerminalView extends View {
 
             @Override
             public boolean onFling(final MotionEvent e2, float velocityX, float velocityY) {
-                if (mEmulator == null) return true;
+                if (mTermSession == null) return true;
                 // Do not start scrolling until last fling has been taken care of:
                 if (!mScroller.isFinished()) return true;
 
-                final boolean mouseTrackingAtStartOfFling = mEmulator.isMouseTrackingActive();
+                final boolean mouseTrackingAtStartOfFling = mTermSession.isMouseTrackingActive();
                 float SCALE = 0.25f;
                 if (mouseTrackingAtStartOfFling) {
-                    mScroller.fling(0, 0, 0, -(int) (velocityY * SCALE), 0, 0, -mEmulator.mRows / 2, mEmulator.mRows / 2);
+                    int rows = mTermSession.getScreenRows();
+                    mScroller.fling(0, 0, 0, -(int) (velocityY * SCALE), 0, 0, -rows / 2, rows / 2);
                 } else {
-                    mScroller.fling(0, mTopRow, 0, -(int) (velocityY * SCALE), 0, 0, -mEmulator.getScreen().getActiveTranscriptRows(), 0);
+                    mScroller.fling(0, mTopRow, 0, -(int) (velocityY * SCALE), 0, 0, -mTermSession.getActiveTranscriptRows(), 0);
                 }
 
                 post(new Runnable() {
@@ -224,7 +242,7 @@ public final class TerminalView extends View {
 
                     @Override
                     public void run() {
-                        if (mouseTrackingAtStartOfFling != mEmulator.isMouseTrackingActive()) {
+                        if (mouseTrackingAtStartOfFling != mTermSession.isMouseTrackingActive()) {
                             mScroller.abortAnimation();
                             return;
                         }
@@ -301,11 +319,42 @@ public final class TerminalView extends View {
      */
     public boolean attachSession(TerminalSession session) {
         if (session == mTermSession) return false;
-        mTopRow = 0;
 
+        TerminalSession previousSession = mTermSession;
+        if (previousSession != null) previousSession.detachFrameSink();
+
+        final long sessionGeneration = mSessionGate.advance();
         mTermSession = session;
         mEmulator = null;
         mCombiningAccent = 0;
+        mTopRow = 0;
+        mLastRenderFrame = null;
+        mLastRenderedFrame = null;
+        mLastModelFrame = null;
+
+        final TerminalRenderMailbox<TerminalModelFrame> mailbox = new TerminalRenderMailbox<>(mFrameMetrics);
+        mRenderMailbox = mailbox;
+        session.setFrameSink(new TerminalFrameSink() {
+            @Override
+            public void publishFrame(TerminalModelFrame frame) {
+                if (!mSessionGate.isCurrent(sessionGeneration)) return;
+                boolean hadPending = mailbox.peek() != null;
+                mailbox.publish(frame);
+                if (!hadPending) invalidate();
+            }
+
+            @Override
+            public boolean shouldCaptureSnapshot() {
+                if (!mSessionGate.isCurrent(sessionGeneration)) return false;
+                return mailbox.peek() == null;
+            }
+
+            @Override
+            public void onFrameConsumed(TerminalModelFrame frame) {
+                if (!mSessionGate.isCurrent(sessionGeneration)) return;
+                session.onFrameConsumed(frame);
+            }
+        });
 
         updateSize();
 
@@ -313,6 +362,19 @@ public final class TerminalView extends View {
         setVerticalScrollBarEnabled(true);
 
         return true;
+    }
+
+    /**
+     * Returns true if a terminal session is currently attached to this view.
+     * Use this instead of inspecting the deprecated {@link #mEmulator} field.
+     */
+    public boolean isSessionAttached() {
+        return mTermSession != null;
+    }
+
+    /** Returns the currently attached terminal session, or null if none. */
+    public TerminalSession getTermSession() {
+        return mTermSession;
     }
 
     @Override
@@ -369,7 +431,7 @@ public final class TerminalView extends View {
                 }
                 super.commitText(text, newCursorPosition);
 
-                if (mEmulator == null) return true;
+                if (mTermSession == null) return true;
 
                 Editable content = getEditable();
                 sendTextToTerminal(content);
@@ -449,17 +511,19 @@ public final class TerminalView extends View {
 
     @Override
     protected int computeVerticalScrollRange() {
-        return mEmulator == null ? 1 : mEmulator.getScreen().getActiveRows();
+        return mTermSession != null ? mTermSession.getScreenActiveRows() : 1;
     }
 
     @Override
     protected int computeVerticalScrollExtent() {
-        return mEmulator == null ? 1 : mEmulator.mRows;
+        return mTermSession == null ? 1 : mTermSession.getScreenRows();
     }
 
     @Override
     protected int computeVerticalScrollOffset() {
-        return mEmulator == null ? 1 : mEmulator.getScreen().getActiveRows() + mTopRow - mEmulator.mRows;
+        if (mTermSession == null) return 1;
+        int activeRows = mTermSession.getScreenActiveRows();
+        return activeRows + mTopRow - mTermSession.getScreenRows();
     }
 
     public void onScreenUpdated() {
@@ -467,22 +531,22 @@ public final class TerminalView extends View {
     }
 
     public void onScreenUpdated(boolean skipScrolling) {
-        if (mEmulator == null) return;
+        if (mTermSession == null) return;
 
-        int rowsInHistory = mEmulator.getScreen().getActiveTranscriptRows();
+        int rowsInHistory = mTermSession.getActiveTranscriptRows();
         if (mTopRow < -rowsInHistory) mTopRow = -rowsInHistory;
 
-        if (isSelectingText() || mEmulator.isAutoScrollDisabled()) {
+        if (isSelectingText() || mTermSession.isAutoScrollDisabled()) {
 
             // Do not scroll when selecting text.
-            int rowShift = mEmulator.getScrollCounter();
+            int rowShift = mTermSession.getScrollCounter();
             if (-mTopRow + rowShift > rowsInHistory) {
                 // .. unless we're hitting the end of history transcript, in which
                 // case we abort text selection and scroll to end.
                 if (isSelectingText())
                     stopTextSelectionMode();
 
-                if (mEmulator.isAutoScrollDisabled()) {
+                if (mTermSession.isAutoScrollDisabled()) {
                     mTopRow = -rowsInHistory;
                     skipScrolling = true;
                 }
@@ -504,7 +568,8 @@ public final class TerminalView extends View {
             mTopRow = 0;
         }
 
-        mEmulator.clearScrollCounter();
+        mTermSession.clearScrollCounter();
+        mTermSession.setViewport(mTopRow);
 
         invalidate();
         if (mAccessibilityEnabled) setContentDescription(getText());
@@ -525,11 +590,15 @@ public final class TerminalView extends View {
      */
     public void setTextSize(int textSize) {
         mRenderer = new TerminalRenderer(textSize, mRenderer == null ? Typeface.MONOSPACE : mRenderer.mTypeface);
+        // New font metrics invalidate every pixel of the previous layer rendering.
+        mLastRenderedFrame = null;
         updateSize();
     }
 
     public void setTypeface(Typeface newTypeface) {
         mRenderer = new TerminalRenderer(mRenderer.mTextSize, newTypeface);
+        // New font metrics invalidate every pixel of the previous layer rendering.
+        mLastRenderedFrame = null;
         updateSize();
         invalidate();
     }
@@ -557,11 +626,30 @@ public final class TerminalView extends View {
      */
     public int[] getColumnAndRow(MotionEvent event, boolean relativeToScroll) {
         int column = (int) (event.getX() / mRenderer.mFontWidth);
-        int row = (int) ((event.getY() - mRenderer.mFontLineSpacingAndAscent) / mRenderer.mFontLineSpacing);
+        int row;
         if (relativeToScroll) {
-            row += mTopRow;
+            // Selection gestures must resolve against the viewport of the frame the renderer last
+            // drew (WYSIWYG): the scroll target may differ while the parser worker catches up.
+            row = TerminalSelectionCoordinates.rowFromPixel(event.getY(),
+                mRenderer.mFontLineSpacingAndAscent, mRenderer.mFontLineSpacing,
+                getRenderedViewportTopRow());
+        } else {
+            // Mouse protocol coordinates are screen-local rows; never apply any viewport offset.
+            row = TerminalSelectionCoordinates.rowFromPixel(event.getY(),
+                mRenderer.mFontLineSpacingAndAscent, mRenderer.mFontLineSpacing, 0);
         }
         return new int[] { column, row };
+    }
+
+    /**
+     * The viewport the last rendered frame was captured with. The renderer draws this frame's
+     * content, so selection anchors, handle positions and the ActionMode rect must all use this
+     * row offset to line up with what is on screen. Falls back to {@link #mTopRow} before the
+     * first frame has been rendered.
+     */
+    public int getRenderedViewportTopRow() {
+        TerminalRenderFrame frame = mLastRenderFrame;
+        return frame != null ? frame.topRow : mTopRow;
     }
 
     /** Send a single mouse event code to the terminal. */
@@ -579,31 +667,35 @@ public final class TerminalView extends View {
                 mMouseScrollStartY = y;
             }
         }
-        mEmulator.sendMouseEvent(button, x, y, pressed);
+        if (mTermSession != null) {
+            mTermSession.sendMouseEvent(button, x, y, pressed);
+        }
     }
 
     /** Perform a scroll, either from dragging the screen or by scrolling a mouse wheel. */
     void doScroll(MotionEvent event, int rowsDown) {
+        int previousTopRow = mTopRow;
         boolean up = rowsDown < 0;
         int amount = Math.abs(rowsDown);
         for (int i = 0; i < amount; i++) {
-            if (mEmulator.isMouseTrackingActive()) {
+            if (mTermSession.isMouseTrackingActive()) {
                 sendMouseEventCode(event, up ? TerminalEmulator.MOUSE_WHEELUP_BUTTON : TerminalEmulator.MOUSE_WHEELDOWN_BUTTON, true);
-            } else if (mEmulator.isAlternateBufferActive()) {
+            } else if (mTermSession.isAlternateBufferActive()) {
                 // Send up and down key events for scrolling, which is what some terminals do to make scroll work in
                 // e.g. less, which shifts to the alt screen without mouse handling.
                 handleKeyCode(up ? KeyEvent.KEYCODE_DPAD_UP : KeyEvent.KEYCODE_DPAD_DOWN, 0);
             } else {
-                mTopRow = Math.min(0, Math.max(-(mEmulator.getScreen().getActiveTranscriptRows()), mTopRow + (up ? -1 : 1)));
+                mTopRow = Math.min(0, Math.max(-(mTermSession.getActiveTranscriptRows()), mTopRow + (up ? -1 : 1)));
                 if (!awakenScrollBars()) invalidate();
             }
         }
+        if (mTopRow != previousTopRow) mTermSession.setViewport(mTopRow);
     }
 
     /** Overriding {@link View#onGenericMotionEvent(MotionEvent)}. */
     @Override
     public boolean onGenericMotionEvent(MotionEvent event) {
-        if (mEmulator != null && event.isFromSource(InputDevice.SOURCE_MOUSE) && event.getAction() == MotionEvent.ACTION_SCROLL) {
+        if (mTermSession != null && event.isFromSource(InputDevice.SOURCE_MOUSE) && event.getAction() == MotionEvent.ACTION_SCROLL) {
             // Handle mouse wheel scrolling.
             boolean up = event.getAxisValue(MotionEvent.AXIS_VSCROLL) > 0.0f;
             doScroll(event, up ? -3 : 3);
@@ -616,7 +708,7 @@ public final class TerminalView extends View {
     @Override
     @TargetApi(23)
     public boolean onTouchEvent(MotionEvent event) {
-        if (mEmulator == null) return true;
+        if (mTermSession == null) return true;
         final int action = event.getAction();
 
         if (isSelectingText()) {
@@ -634,10 +726,14 @@ public final class TerminalView extends View {
                     ClipData.Item clipItem = clipData.getItemAt(0);
                     if (clipItem != null) {
                         CharSequence text = clipItem.coerceToText(getContext());
-                        if (!TextUtils.isEmpty(text)) mEmulator.paste(text.toString());
+                        if (!TextUtils.isEmpty(text)) {
+                            if (mTermSession != null) {
+                                mTermSession.paste(text.toString());
+                            }
+                        }
                     }
                 }
-            } else if (mEmulator.isMouseTrackingActive()) { // BUTTON_PRIMARY.
+            } else if (mTermSession.isMouseTrackingActive()) { // BUTTON_PRIMARY.
                 switch (event.getAction()) {
                     case MotionEvent.ACTION_DOWN:
                     case MotionEvent.ACTION_UP:
@@ -781,7 +877,7 @@ public final class TerminalView extends View {
     public boolean onKeyDown(int keyCode, KeyEvent event) {
         if (TERMINAL_VIEW_KEY_LOGGING_ENABLED)
             mClient.logInfo(LOG_TAG, "onKeyDown(keyCode=" + keyCode + ", isSystem()=" + event.isSystem() + ", event=" + event + ")");
-        if (mEmulator == null) return true;
+        if (mTermSession == null) return true;
         if (isSelectingText()) {
             stopTextSelectionMode();
         }
@@ -862,8 +958,7 @@ public final class TerminalView extends View {
         if (mTermSession == null) return;
 
         // Ensure cursor is shown when a key is pressed down like long hold on (arrow) keys
-        if (mEmulator != null)
-            mEmulator.setCursorBlinkState(true);
+        mTermSession.setCursorBlinkState(true);
 
         final boolean controlDown = controlDownFromEvent || mClient.readControlKey();
         final boolean altDown = leftAltDownFromEvent || mClient.readAltKey();
@@ -921,14 +1016,16 @@ public final class TerminalView extends View {
     /** Input the specified keyCode if applicable and return if the input was consumed. */
     public boolean handleKeyCode(int keyCode, int keyMod) {
         // Ensure cursor is shown when a key is pressed down like long hold on (arrow) keys
-        if (mEmulator != null)
-            mEmulator.setCursorBlinkState(true);
+        if (mTermSession != null) {
+            mTermSession.setCursorBlinkState(true);
+        }
 
         if (handleKeyCodeAction(keyCode, keyMod))
             return true;
 
-        TerminalEmulator term = mTermSession.getEmulator();
-        String code = KeyHandler.getCode(keyCode, keyMod, term.isCursorKeysApplicationMode(), term.isKeypadApplicationMode());
+        if (mTermSession == null) return false;
+        String code = KeyHandler.getCode(keyCode, keyMod,
+                mTermSession.isCursorKeysApplicationMode(), mTermSession.isKeypadApplicationMode());
         if (code == null) return false;
         mTermSession.write(code);
         return true;
@@ -945,7 +1042,7 @@ public final class TerminalView extends View {
                 if (shiftDown) {
                     long time = SystemClock.uptimeMillis();
                     MotionEvent motionEvent = MotionEvent.obtain(time, time, MotionEvent.ACTION_DOWN, 0, 0, 0);
-                    doScroll(motionEvent, keyCode == KeyEvent.KEYCODE_PAGE_UP ? -mEmulator.mRows : mEmulator.mRows);
+                    doScroll(motionEvent, keyCode == KeyEvent.KEYCODE_PAGE_UP ? -mTermSession.getScreenRows() : mTermSession.getScreenRows());
                     motionEvent.recycle();
                     return true;
                 }
@@ -968,7 +1065,7 @@ public final class TerminalView extends View {
 
         // Do not return for KEYCODE_BACK and send it to the client since user may be trying
         // to exit the activity.
-        if (mEmulator == null && keyCode != KeyEvent.KEYCODE_BACK) return true;
+        if (mTermSession == null && keyCode != KeyEvent.KEYCODE_BACK) return true;
 
         if (mClient.onKeyUp(keyCode, event)) {
             invalidate();
@@ -1000,14 +1097,9 @@ public final class TerminalView extends View {
         int newColumns = Math.max(4, (int) (viewWidth / mRenderer.mFontWidth));
         int newRows = Math.max(4, (viewHeight - mRenderer.mFontLineSpacingAndAscent) / mRenderer.mFontLineSpacing);
 
-        if (mEmulator == null || (newColumns != mEmulator.mColumns || newRows != mEmulator.mRows)) {
+        if (mTermSession.getEmulator() == null || (newColumns != mTermSession.getScreenColumns() || newRows != mTermSession.getScreenRows())) {
             mTermSession.updateSize(newColumns, newRows, (int) mRenderer.getFontWidth(), mRenderer.getFontLineSpacing());
-            mEmulator = mTermSession.getEmulator();
             mClient.onEmulatorSet();
-
-            // Update mTerminalCursorBlinkerRunnable inner class mEmulator on session change
-            if (mTerminalCursorBlinkerRunnable != null)
-                mTerminalCursorBlinkerRunnable.setEmulator(mEmulator);
 
             mTopRow = 0;
             scrollTo(0, 0);
@@ -1030,34 +1122,56 @@ public final class TerminalView extends View {
                 mClient.onTerminalRenderingStateChanged(canvasHardwareAccelerated, layerType);
             }
 
-            if (mEmulator == null) {
+            TerminalModelFrame model = mRenderMailbox != null ? mRenderMailbox.acquireLatest() : null;
+            if (model != null) mLastModelFrame = model;
+            if (mLastModelFrame != null) {
+                // render the terminal view and highlight any selected text
+                int[] selectors = mDefaultSelectors;
+                if (mTextSelectionCursorController != null) {
+                    mTextSelectionCursorController.getSelectors(selectors);
+                }
+                TerminalSelectionRange selection = TerminalSelectionRange.fromSelectors(selectors);
+                boolean selectionChanged = selection.x1 != mLastRenderSelectionX1
+                    || selection.y1 != mLastRenderSelectionY1
+                    || selection.x2 != mLastRenderSelectionX2
+                    || selection.y2 != mLastRenderSelectionY2;
+                if (model != null || mLastRenderFrame == null || selectionChanged) {
+                    // Explicit handoff: collect all render inputs once and reuse it while the
+                    // immutable model frame and view-only selection projection are unchanged.
+                    mLastRenderFrame = new TerminalRenderFrame(mLastModelFrame, mLastModelFrame.topRow,
+                        selection.x1, selection.y1, selection.x2, selection.y2);
+                    mLastRenderSelectionX1 = selection.x1;
+                    mLastRenderSelectionY1 = selection.y1;
+                    mLastRenderSelectionX2 = selection.x2;
+                    mLastRenderSelectionY2 = selection.y2;
+                }
+            }
+            TerminalRenderFrame frame = mLastRenderFrame;
+            if (frame == null) {
                 canvas.drawColor(0XFF000000);
             } else {
-                // render the terminal view and highlight any selected text
-                int[] sel = mDefaultSelectors;
-                if (mTextSelectionCursorController != null) {
-                    mTextSelectionCursorController.getSelectors(sel);
-                }
-
-                // 显式交接：一次性采集本帧渲染所需的一切，渲染器只读该帧对象。
-                TerminalBuffer screen = mEmulator.getScreen();
-                int dirtyCount = screen.getDirtyMutationCount();
-                long[] dirtyBits = dirtyCount == 0 ? null : screen.getAndClearDirtyRowBits();
-                TerminalRenderFrame frame = new TerminalRenderFrame(mEmulator, mTopRow, dirtyBits, dirtyCount,
-                    sel[0], sel[1], sel[2], sel[3]);
-                mLastRenderFrame = frame;
-                mFrameMetrics.publish(frame.screenRevision);
-                if (sDebugFrameInfo) logFrameInfo(frame);
                 Trace.beginSection("Termux:TerminalRenderer.render");
                 try {
-                    mRenderer.render(frame, canvas);
+                    // Only skip rows whose pixels are guaranteed to survive on the canvas
+                    // from the previous draw: a hardware/software view layer retains them,
+                    // and reverseVideo clears the whole canvas before rows are drawn.
+                    boolean skipCleanRows = !frame.reverseVideo
+                        && mLastRenderedFrame != null
+                        && !frame.needsFullRedraw(mLastRenderedFrame)
+                        && (getLayerType() == View.LAYER_TYPE_HARDWARE || getLayerType() == View.LAYER_TYPE_SOFTWARE);
+                    mRenderer.render(frame, canvas, skipCleanRows, mLastRenderedFrame);
+                    mLastRenderedFrame = frame;
                     mFrameMetrics.ack(frame.screenRevision);
+                    if (model != null) {
+                        mTermSession.onFrameConsumed(model);
+                    }
                 } catch (RuntimeException e) {
                     mFrameMetrics.drop();
                     throw e;
                 } finally {
                     Trace.endSection();
                 }
+                TerminalFrameDiagnostics.logIfEnabled(mTermSession, mFrameMetrics, frame, mRenderer.getLastSkippedRowCount());
 
                 // render the text selection handles
                 renderTextSelection();
@@ -1071,13 +1185,18 @@ public final class TerminalView extends View {
         return mTermSession;
     }
 
-    /** 打开/关闭每帧变更台账摘要日志。打开后每帧一行：解析/模型改了哪几行、本帧画了多少行。 */
+    /** Enable the debug-only per-frame diagnostic implementation for this build variant. */
     public static void setDebugFrameInfoEnabled(boolean enabled) {
-        sDebugFrameInfo = enabled;
+        TerminalFrameDiagnostics.setEnabled(enabled);
     }
 
-    /** 上一帧的渲染交接快照，供行级归属调试（解析改了 vs 渲染画了）。 */
+    /** Previous render handoff snapshot, exposed for diagnostics and tests. */
     public TerminalRenderFrame getLastRenderFrame() {
+        return mLastRenderFrame;
+    }
+
+    /** Current render frame used by the latest onDraw. May be null before first draw. */
+    public TerminalRenderFrame getCurrentRenderFrame() {
         return mLastRenderFrame;
     }
 
@@ -1109,23 +1228,9 @@ public final class TerminalView extends View {
         return mFrameMetrics.getLastAckedScreenRevision();
     }
 
-    private void logFrameInfo(TerminalRenderFrame f) {
-        int dirtyInView = 0;
-        for (int row = f.topRow; row < f.endRow; row++) {
-            if (f.rowNeedsRedraw(row)) dirtyInView++;
-        }
-        android.util.Log.i("Termux:TerminalView", "frame rev=" + f.screenRevision
-            + " published=" + mFrameMetrics.getPublishedFrameCount() + " lastPublishedRev=" + mFrameMetrics.getLastPublishedScreenRevision()
-            + " drawn=" + mFrameMetrics.getDrawnFrameCount() + " lastDrawnRev=" + mFrameMetrics.getLastDrawnScreenRevision()
-            + " dropped=" + mFrameMetrics.getDroppedFrameCount() + " coalesced=" + mFrameMetrics.getCoalescedRevisionCount() + " acked=" + mFrameMetrics.getLastAckedScreenRevision()
-            + " mutations=" + f.dirtyMutationCount
-            + " visible=" + (f.endRow - f.topRow) + " redrawWorthies=" + dirtyInView
-            + " cursor=" + (f.cursorVisible ? f.cursorRow : "hidden")
-            + " sel=" + f.selectionY1 + ".." + f.selectionY2);
-    }
-
     private CharSequence getText() {
-        return mEmulator.getScreen().getSelectedText(0, mTopRow, mEmulator.mColumns, mTopRow + mEmulator.mRows);
+        if (mTermSession == null) return "";
+        return mTermSession.getScreenTranscriptText();
     }
 
     public int getCursorX(float x) {
@@ -1133,18 +1238,22 @@ public final class TerminalView extends View {
     }
 
     public int getCursorY(float y) {
-        return (int) (((y - 40) / mRenderer.mFontLineSpacing) + mTopRow);
+        // Align with the rendered frame's viewport, not the scroll target (issue #39).
+        return TerminalSelectionCoordinates.rowFromPixel(y, mRenderer.mFontLineSpacingAndAscent,
+            mRenderer.mFontLineSpacing, getRenderedViewportTopRow());
     }
 
     public int getPointX(int cx) {
-        if (cx > mEmulator.mColumns) {
-            cx = mEmulator.mColumns;
+        int columns = mTermSession.getScreenColumns();
+        if (cx > columns) {
+            cx = columns;
         }
         return Math.round(cx * mRenderer.mFontWidth);
     }
 
     public int getPointY(int cy) {
-        return Math.round((cy - mTopRow) * mRenderer.mFontLineSpacing);
+        // The handle must sit on the row the renderer actually drew (issue #39).
+        return Math.round((cy - getRenderedViewportTopRow()) * mRenderer.mFontLineSpacing);
     }
 
     public int getTopRow() {
@@ -1153,6 +1262,7 @@ public final class TerminalView extends View {
 
     public void setTopRow(int mTopRow) {
         this.mTopRow = mTopRow;
+        if (mTermSession != null) mTermSession.setViewport(mTopRow);
     }
 
 
@@ -1364,16 +1474,17 @@ public final class TerminalView extends View {
         // Stop any existing cursor blinker callbacks
         stopTerminalCursorBlinker();
 
-        if (mEmulator == null) return;
+        if (mTermSession == null) return;
 
-        mEmulator.setCursorBlinkingEnabled(false);
+        mTermSession.setCursorBlinkingEnabled(false);
 
         if (start) {
             // If cursor blinker is not enabled or is not valid
             if (mTerminalCursorBlinkerRate < TERMINAL_CURSOR_BLINK_RATE_MIN || mTerminalCursorBlinkerRate > TERMINAL_CURSOR_BLINK_RATE_MAX)
                 return;
             // If cursor blinder is to be started only if cursor is enabled
-            else if (startOnlyIfCursorEnabled && ! mEmulator.isCursorEnabled()) {
+            boolean cursorEnabled = mTermSession.isCursorEnabled();
+            if (startOnlyIfCursorEnabled && !cursorEnabled) {
                 if (TERMINAL_VIEW_KEY_LOGGING_ENABLED)
                     mClient.logVerbose(LOG_TAG, "Ignoring call to start cursor blinker since cursor is not enabled");
                 return;
@@ -1384,8 +1495,8 @@ public final class TerminalView extends View {
                 mClient.logVerbose(LOG_TAG, "Starting cursor blinker with the blink rate " + mTerminalCursorBlinkerRate);
             if (mTerminalCursorBlinkerHandler == null)
                 mTerminalCursorBlinkerHandler = new Handler(Looper.getMainLooper());
-            mTerminalCursorBlinkerRunnable = new TerminalCursorBlinkerRunnable(mEmulator, mTerminalCursorBlinkerRate);
-            mEmulator.setCursorBlinkingEnabled(true);
+            mTerminalCursorBlinkerRunnable = new TerminalCursorBlinkerRunnable(mTermSession, mTerminalCursorBlinkerRate);
+            mTermSession.setCursorBlinkingEnabled(true);
             mTerminalCursorBlinkerRunnable.run();
         }
     }
@@ -1403,31 +1514,31 @@ public final class TerminalView extends View {
 
     private class TerminalCursorBlinkerRunnable implements Runnable {
 
-        private TerminalEmulator mEmulator;
+        private TerminalSession mSession;
         private final int mBlinkRate;
 
         // Initialize with false so that initial blink state is visible after toggling
         boolean mCursorVisible = false;
 
-        public TerminalCursorBlinkerRunnable(TerminalEmulator emulator, int blinkRate) {
-            mEmulator = emulator;
+        public TerminalCursorBlinkerRunnable(TerminalSession session, int blinkRate) {
+            mSession = session;
             mBlinkRate = blinkRate;
         }
 
         public void setEmulator(TerminalEmulator emulator) {
-            mEmulator = emulator;
+            // Kept for API compatibility; the runnable now resolves all state from the session.
         }
 
         public void run() {
             try {
-                if (mEmulator != null) {
+                if (mSession != null) {
                     // Toggle the blink state and then invalidate() the view so
                     // that onDraw() is called, which then calls TerminalRenderer.render()
                     // which checks with TerminalEmulator.shouldCursorBeVisible() to decide whether
                     // to draw the cursor or not
                     mCursorVisible = !mCursorVisible;
                     //mClient.logVerbose(LOG_TAG, "Toggling cursor blink state to " + mCursorVisible);
-                    mEmulator.setCursorBlinkState(mCursorVisible);
+                    mSession.setCursorBlinkState(mCursorVisible);
                     invalidate();
                 }
             } finally {

@@ -33,6 +33,43 @@ public final class TerminalRenderer {
 
     private final float[] asciiMeasures = new float[127];
 
+    /**
+     * Lazily populated BMP (U+0000..U+FFFF) single-code-point advances.
+     *
+     * <p>Same invariant as {@link #asciiMeasures}: the advance of a single code point
+     * does not depend on the paint style left over by the previous draw, only on the
+     * typeface/size fixed at construction. TerminalView redraws the whole screen on
+     * every invalidation, re-measuring the same non-ASCII code points (e.g. the
+     * U+2580 upper-block used by half-block media renderers) over and over; the
+     * per-frame measureText/setFlags call on those is the main-thread hot path.
+     * 0.0f marks an uncached entry. Zero-width code points (combining marks) are
+     * rare and simply re-measure; they are consumed separately by WcWidth.
+     */
+    private final float[] bmpMeasures = new float[0x10000];
+    /** Number of rows skipped by the last render (diagnostics/observability only). */
+    private int lastSkippedRowCount;
+
+    /** Rows skipped by the most recent render; 0 when skipCleanRows was not enabled. */
+    public int getLastSkippedRowCount() {
+        return lastSkippedRowCount;
+    }
+
+    /**
+     * Measure a single code point, caching the result for the life of this renderer.
+     * BMP code points hit {@link #bmpMeasures}; supplementary code points
+     * (surrogate pairs) are measured directly since they cannot alias the table.
+     */
+    private float measureCodePoint(int codePoint, char[] line, int charIndex, int charsForCodePoint) {
+        if (codePoint < bmpMeasures.length) {
+            float cached = bmpMeasures[codePoint];
+            if (cached != 0f) return cached;
+            float measured = mTextPaint.measureText(line, charIndex, 1);
+            bmpMeasures[codePoint] = measured;
+            return measured;
+        }
+        return mTextPaint.measureText(line, charIndex, charsForCodePoint);
+    }
+
     public TerminalRenderer(int textSize, Typeface typeface) {
         mTextSize = textSize;
         mTypeface = typeface;
@@ -55,6 +92,22 @@ public final class TerminalRenderer {
 
     /** Render the terminal to a canvas with at a specified row scroll, and an optional rectangular selection. */
     public final void render(TerminalRenderFrame frame, Canvas canvas) {
+        render(frame, canvas, false, null);
+    }
+
+    /**
+     * Render the terminal to a canvas.
+     *
+     * @param skipCleanRows when true, rows whose content provably did not change
+     *                      since the previous rendering of the same viewport are
+     *                      skipped. The caller must only pass true when the view is
+     *                      layered (hardware/software layer) so that skipped rows
+     *                      retain their previous pixels, when
+     *                      {@link TerminalRenderFrame#needsFullRedraw(TerminalRenderFrame)}
+     *                      is false for the previous frame, and when that previous
+     *                      frame is supplied as {@code previousRenderedFrame}.
+     */
+    public final void render(TerminalRenderFrame frame, Canvas canvas, boolean skipCleanRows, TerminalRenderFrame previousRenderedFrame) {
         final boolean reverseVideo = frame.reverseVideo;
         final int endRow = frame.endRow;
         final int columns = frame.columns;
@@ -62,7 +115,7 @@ public final class TerminalRenderer {
         final int cursorRow = frame.cursorRow;
         final boolean cursorVisible = frame.cursorVisible;
         final TerminalScreenSnapshot screen = frame.screen;
-        final int[] palette = frame.copyPalette();
+        final int[] palette = frame.paletteForRenderer();
         final int cursorShape = frame.cursorStyle;
         final int selectionX1 = frame.selectionX1;
         final int selectionY1 = frame.selectionY1;
@@ -74,8 +127,23 @@ public final class TerminalRenderer {
             canvas.drawColor(palette[TextStyle.COLOR_INDEX_FOREGROUND], PorterDuff.Mode.SRC);
 
         float heightOffset = mFontLineSpacingAndAscent;
+        int skippedRows = 0;
         for (int row = topRow; row < endRow; row++) {
             heightOffset += mFontLineSpacing;
+
+            if (skipCleanRows
+                    && frame.rowUnchangedFrom(previousRenderedFrame, row)
+                    && !(cursorVisible && row == cursorRow)
+                    && !needsRedrawForProjection(previousRenderedFrame, row,
+                        selectionY1, selectionY2)) {
+                // The layered canvas keeps the pixels produced by the previous frame
+                // for this row; nothing changed in the buffer here, so skip measuring
+                // and drawing it entirely. Cursor and selection rows are view
+                // projections, not buffer content, so they always redraw - including
+                // rows that held the cursor/selection in the previous frame.
+                skippedRows++;
+                continue;
+            }
 
             final int cursorX = (row == cursorRow && cursorVisible) ? cursorCol : -1;
             int selx1 = -1, selx2 = -1;
@@ -85,7 +153,8 @@ public final class TerminalRenderer {
             }
 
             TerminalRenderRow lineObject = screen.rowAtExternal(row);
-            final char[] line = lineObject.copyText();
+            // TerminalRenderRow is immutable; avoid copying the complete row on every draw.
+            final char[] line = lineObject.textForRenderer();
             final int charsUsedInLine = lineObject.getSpaceUsed();
 
             long lastRunStyle = 0;
@@ -111,7 +180,7 @@ public final class TerminalRenderer {
                 // This could happen for some fonts which are not truly monospace, or for more exotic characters such as
                 // smileys which android font renders as wide.
                 // If this is detected, we draw this code point scaled to match what wcwidth() expects.
-                final float measuredCodePointWidth = (codePoint < asciiMeasures.length) ? asciiMeasures[codePoint] : mTextPaint.measureText(line,
+                final float measuredCodePointWidth = (codePoint < asciiMeasures.length) ? asciiMeasures[codePoint] : measureCodePoint(codePoint, line,
                     currentCharIndex, charsForCodePoint);
                 final boolean fontWidthMismatch = Math.abs(measuredCodePointWidth / mFontWidth - codePointWcWidth) > 0.01;
 
@@ -158,6 +227,22 @@ public final class TerminalRenderer {
             drawTextRun(canvas, line, palette, heightOffset, lastRunStartColumn, columnWidthSinceLastRun, lastRunStartIndex, charsSinceLastRun,
                 measuredWidthForRun, cursorColor, cursorShape, lastRunStyle, reverseVideo || invertCursorTextColor || lastRunInsideSelection);
         }
+        lastSkippedRowCount = skippedRows;
+    }
+
+    /**
+     * Whether {@code row} intersects a view projection that is not part of the buffer
+     * content: the selection rectangle of the current or previous frame, or the cursor
+     * row of the previous frame (the current frame's cursor row is checked by the
+     * caller). Such rows must redraw even when their buffer content is unchanged,
+     * because the projection pixels are not stored in the snapshot.
+     */
+    private static boolean needsRedrawForProjection(TerminalRenderFrame previousRenderedFrame, int row,
+                                                    int selectionY1, int selectionY2) {
+        if (row >= selectionY1 && row <= selectionY2) return true;
+        if (previousRenderedFrame == null) return true;
+        if (previousRenderedFrame.cursorVisible && row == previousRenderedFrame.cursorRow) return true;
+        return row >= previousRenderedFrame.selectionY1 && row <= previousRenderedFrame.selectionY2;
     }
 
     private void drawTextRun(Canvas canvas, char[] text, int[] palette, float y, int startColumn, int runWidthColumns,
