@@ -37,7 +37,7 @@ public class ClipboardAndStorageInstrumentedTest {
     }
 
     @Test
-    public void manifestContainsIndependentStorageCapabilities() {
+    public void manifestContainsIndependentStorageCapabilities() throws Exception {
         PackageInfo info = context.getPackageManager().getPackageInfo(
             context.getPackageName(), android.content.pm.PackageManager.GET_PERMISSIONS);
         assertNotNull(info.requestedPermissions);
