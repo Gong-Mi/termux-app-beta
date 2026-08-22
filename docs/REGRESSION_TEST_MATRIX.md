@@ -27,6 +27,7 @@ Clipboard evidence is split deliberately:
 | Test | Module/layer | Contract |
 |---|---|---|
 | `TerminalRenderFrameTest` | `terminal-view` / JVM | Frame snapshot fields and selection/cursor projection invariants |
+| `TerminalScreenSnapshotViewportTest` | `terminal-emulator` / JVM | A snapshot reports exactly the external rows it owns; an older viewport cannot be treated as covering a newer selection |
 | `RenderFrameMetricsTest` | `terminal-view` / JVM | Published/drawn/acknowledged/dropped/coalesced frame accounting |
 | `TerminalRenderMailboxTest` | `terminal-view` / JVM | Latest-value mailbox replacement and handoff behavior |
 | `TerminalRenderSessionGateTest` | `terminal-view` / JVM | Stale session callbacks are rejected after detach/reattach |

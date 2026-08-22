@@ -93,6 +93,16 @@ public final class TerminalScreenSnapshot {
         return firstExternalRow + rows.length;
     }
 
+    /**
+     * Whether the snapshot owns every external row in the half-open range.
+     * Selection callers must check this before treating snapshot text as complete.
+     */
+    public boolean containsExternalRowRange(int startInclusive, int endExclusive) {
+        return startInclusive >= firstExternalRow
+            && endExclusive <= endExternalRow()
+            && endExclusive >= startInclusive;
+    }
+
     public int columns() {
         return columns;
     }
