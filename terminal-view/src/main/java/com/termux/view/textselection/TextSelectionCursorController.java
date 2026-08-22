@@ -18,6 +18,7 @@ import com.termux.terminal.WcWidth;
 import com.termux.view.R;
 import com.termux.view.TerminalActionModePolicy;
 import com.termux.view.TerminalRenderFrame;
+import com.termux.view.TerminalSelectionCoordinates;
 import com.termux.view.TerminalView;
 
 public class TextSelectionCursorController implements CursorController {
@@ -202,8 +203,11 @@ public class TextSelectionCursorController implements CursorController {
             public void onGetContentRect(ActionMode mode, View view, Rect outRect) {
                 int x1 = Math.round(mSelX1 * terminalView.mRenderer.getFontWidth());
                 int x2 = Math.round(mSelX2 * terminalView.mRenderer.getFontWidth());
-                int y1 = Math.round((mSelY1 - 1 - terminalView.getTopRow()) * terminalView.mRenderer.getFontLineSpacing());
-                int y2 = Math.round((mSelY2 + 1 - terminalView.getTopRow()) * terminalView.mRenderer.getFontLineSpacing());
+                // Anchor the floating ActionMode to the rendered frame's viewport so the bar lines
+                // up with the highlighted rows the renderer drew (issue #39).
+                int renderedTopRow = terminalView.getRenderedViewportTopRow();
+                int y1 = Math.round((mSelY1 - 1 - renderedTopRow) * terminalView.mRenderer.getFontLineSpacing());
+                int y2 = Math.round((mSelY2 + 1 - renderedTopRow) * terminalView.mRenderer.getFontLineSpacing());
 
                 if (x1 > x2) {
                     int tmp = x1;
@@ -235,17 +239,10 @@ public class TextSelectionCursorController implements CursorController {
 
         if (handle == mStartHandle) {
             mSelX1 = terminalView.getCursorX(x);
-            mSelY1 = terminalView.getCursorY(y);
+            mSelY1 = TerminalSelectionCoordinates.clampSelectionRow(terminalView.getCursorY(y),
+                scrollRows, screen.firstExternalRow(), screen.endExternalRow());
             if (mSelX1 < 0) {
                 mSelX1 = 0;
-            }
-
-            if (mSelY1 < -scrollRows) {
-                mSelY1 = -scrollRows;
-
-            } else if (mSelY1 > rows - 1) {
-                mSelY1 = rows - 1;
-
             }
 
             if (mSelY1 > mSelY2) {
@@ -256,7 +253,9 @@ public class TextSelectionCursorController implements CursorController {
             }
 
             if (!frame.alternateBufferActive) {
-                int topRow = terminalView.getTopRow();
+                // Compare against the rendered viewport: the drag edge is where the drawn rows
+                // start/end, not where the scroll target is heading (issue #39).
+                int topRow = terminalView.getRenderedViewportTopRow();
 
                 if (mSelY1 <= topRow) {
                     topRow--;
@@ -277,15 +276,10 @@ public class TextSelectionCursorController implements CursorController {
 
         } else {
             mSelX2 = terminalView.getCursorX(x);
-            mSelY2 = terminalView.getCursorY(y);
+            mSelY2 = TerminalSelectionCoordinates.clampSelectionRow(terminalView.getCursorY(y),
+                scrollRows, screen.firstExternalRow(), screen.endExternalRow());
             if (mSelX2 < 0) {
                 mSelX2 = 0;
-            }
-
-            if (mSelY2 < -scrollRows) {
-                mSelY2 = -scrollRows;
-            } else if (mSelY2 > rows - 1) {
-                mSelY2 = rows - 1;
             }
 
             if (mSelY1 > mSelY2) {
@@ -296,7 +290,7 @@ public class TextSelectionCursorController implements CursorController {
             }
 
             if (!frame.alternateBufferActive) {
-                int topRow = terminalView.getTopRow();
+                int topRow = terminalView.getRenderedViewportTopRow();
 
                 if (mSelY2 <= topRow) {
                     topRow--;

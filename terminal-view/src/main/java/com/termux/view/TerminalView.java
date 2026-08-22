@@ -626,10 +626,30 @@ public final class TerminalView extends View {
      */
     public int[] getColumnAndRow(MotionEvent event, boolean relativeToScroll) {
         int column = (int) (event.getX() / mRenderer.mFontWidth);
-        int row = TerminalSelectionCoordinates.rowFromPixel(event.getY(),
-            mRenderer.mFontLineSpacingAndAscent, mRenderer.mFontLineSpacing,
-            relativeToScroll ? mTopRow : 0);
+        int row;
+        if (relativeToScroll) {
+            // Selection gestures must resolve against the viewport of the frame the renderer last
+            // drew (WYSIWYG): the scroll target may differ while the parser worker catches up.
+            row = TerminalSelectionCoordinates.rowFromPixel(event.getY(),
+                mRenderer.mFontLineSpacingAndAscent, mRenderer.mFontLineSpacing,
+                getRenderedViewportTopRow());
+        } else {
+            // Mouse protocol coordinates are screen-local rows; never apply any viewport offset.
+            row = TerminalSelectionCoordinates.rowFromPixel(event.getY(),
+                mRenderer.mFontLineSpacingAndAscent, mRenderer.mFontLineSpacing, 0);
+        }
         return new int[] { column, row };
+    }
+
+    /**
+     * The viewport the last rendered frame was captured with. The renderer draws this frame's
+     * content, so selection anchors, handle positions and the ActionMode rect must all use this
+     * row offset to line up with what is on screen. Falls back to {@link #mTopRow} before the
+     * first frame has been rendered.
+     */
+    public int getRenderedViewportTopRow() {
+        TerminalRenderFrame frame = mLastRenderFrame;
+        return frame != null ? frame.topRow : mTopRow;
     }
 
     /** Send a single mouse event code to the terminal. */
@@ -1218,8 +1238,9 @@ public final class TerminalView extends View {
     }
 
     public int getCursorY(float y) {
+        // Align with the rendered frame's viewport, not the scroll target (issue #39).
         return TerminalSelectionCoordinates.rowFromPixel(y, mRenderer.mFontLineSpacingAndAscent,
-            mRenderer.mFontLineSpacing, mTopRow);
+            mRenderer.mFontLineSpacing, getRenderedViewportTopRow());
     }
 
     public int getPointX(int cx) {
@@ -1231,7 +1252,8 @@ public final class TerminalView extends View {
     }
 
     public int getPointY(int cy) {
-        return Math.round((cy - mTopRow) * mRenderer.mFontLineSpacing);
+        // The handle must sit on the row the renderer actually drew (issue #39).
+        return Math.round((cy - getRenderedViewportTopRow()) * mRenderer.mFontLineSpacing);
     }
 
     public int getTopRow() {
