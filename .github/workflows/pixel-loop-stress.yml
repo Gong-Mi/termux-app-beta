@@ -116,9 +116,11 @@ jobs:
       - name: Install Termux and stage producer inside app UID
         run: |
           set -euxo pipefail
-          APK=$(ls app/build/outputs/apk/debug/termux-app_*universal*.apk 2>/dev/null \
+          BASE_APK=$(ls app/build/outputs/apk/debug/termux-app_*universal*.apk 2>/dev/null \
                 || ls app/build/outputs/apk/debug/termux-app_*x86_64*.apk)
-          adb install -r "$APK"
+          FEATURE_APK=$(ls support_ui/build/outputs/apk/debug/support_ui-debug.apk)
+          # support_ui is a dynamic-feature module; TermuxActivity lives there.
+          adb install-multiple -r "$BASE_APK" "$FEATURE_APK"
           adb shell am start -W -n com.termux/.app.TermuxActivity
           for i in $(seq 1 24); do
             if adb shell run-as com.termux test -x /data/data/com.termux/files/usr/bin/sh; then
