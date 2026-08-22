@@ -14,6 +14,7 @@ import android.view.View;
 import androidx.annotation.Nullable;
 
 import com.termux.terminal.TerminalScreenSnapshot;
+import com.termux.terminal.TerminalSession;
 import com.termux.terminal.WcWidth;
 import com.termux.view.R;
 import com.termux.view.TerminalActionModePolicy;
@@ -99,10 +100,30 @@ public class TextSelectionCursorController implements CursorController {
         mSelY1 = mSelY2 = columnAndRow[1];
 
         TerminalRenderFrame frame = terminalView.getCurrentRenderFrame();
-        if (frame == null) return;
-        TerminalScreenSnapshot screen = frame.screen;
+        TerminalScreenSnapshot screen = null;
+        int columns = terminalView.mTermSession != null ? terminalView.mTermSession.getScreenColumns() : 0;
+        if (frame != null) {
+            screen = frame.screen;
+            columns = frame.columns;
+        } else if (terminalView.mTermSession != null) {
+            // No rendered frame yet (issue #39): still attempt word expansion from the live session
+            // snapshot so the long-press does not silently fail.
+            TerminalSession session = terminalView.getCurrentSession();
+            if (session != null) {
+                String word = session.getWordAtLocation(mSelX1, mSelY1);
+                if (word != null && !word.isEmpty()) {
+                    // Expand to the word returned by the session. We keep the original tap column
+                    // centred by extending both sides as evenly as possible; this is a best-effort
+                    // fallback until the first render frame arrives.
+                    int wordLen = word.length();
+                    int left = Math.max(0, mSelX1 - wordLen / 2);
+                    mSelX1 = left;
+                    mSelX2 = Math.min(columns - 1, left + wordLen - 1);
+                    return;
+                }
+            }
+        }
         if (screen == null) return;
-
         if (mSelY1 < screen.firstExternalRow() || mSelY1 >= screen.endExternalRow()) return;
 
         if (!" ".equals(screen.getSelectedText(mSelX1, mSelY1, mSelX1, mSelY1))) {
@@ -110,7 +131,7 @@ public class TextSelectionCursorController implements CursorController {
             while (mSelX1 > 0 && !"".equals(screen.getSelectedText(mSelX1 - 1, mSelY1, mSelX1 - 1, mSelY1))) {
                 mSelX1--;
             }
-            while (mSelX2 < frame.columns - 1 && !"".equals(screen.getSelectedText(mSelX2 + 1, mSelY1, mSelX2 + 1, mSelY1))) {
+            while (mSelX2 < columns - 1 && !"".equals(screen.getSelectedText(mSelX2 + 1, mSelY1, mSelX2 + 1, mSelY1))) {
                 mSelX2++;
             }
         }
@@ -383,8 +404,29 @@ public class TextSelectionCursorController implements CursorController {
     /** Get the currently selected text. */
     public String getSelectedText() {
         TerminalRenderFrame frame = terminalView.getCurrentRenderFrame();
-        if (frame == null || frame.screen == null) return "";
-        return frame.screen.getSelectedText(mSelX1, mSelY1, mSelX2, mSelY2);
+        if (frame != null && frame.screen != null && selectionRowsInFrame(frame)) {
+            return frame.screen.getSelectedText(mSelX1, mSelY1, mSelX2, mSelY2);
+        }
+        // Selection rows may be outside the latest rendered frame (e.g. user scrolled it out of
+        // view, or no frame has been rendered yet). Fall back to the session snapshot so copy/paste
+        // always matches the absolute row coordinates that were selected (issue #39).
+        TerminalSession session = terminalView.getCurrentSession();
+        if (session != null) {
+            String text = session.getSelectedText(mSelX1, mSelY1, mSelX2, mSelY2, false);
+            if (text != null) return text;
+        }
+        return "";
+    }
+
+    /** Return true if the current selection coordinates are fully contained by the given frame. */
+    private boolean selectionRowsInFrame(TerminalRenderFrame frame) {
+        int first = frame.topRow;
+        int lastExclusive = frame.endRow;
+        // Empty / invalid selection.
+        if (mSelY1 < 0 || mSelY2 < 0) return true;
+        int y1 = Math.min(mSelY1, mSelY2);
+        int y2 = Math.max(mSelY1, mSelY2);
+        return y1 >= first && y2 < lastExclusive;
     }
 
     /** Get the selected text stored before "MORE" button was pressed on the context menu. */
