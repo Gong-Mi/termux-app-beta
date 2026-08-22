@@ -83,10 +83,14 @@ jobs:
           unzip -l termux-app-debug-default.apks | tee termux-app-debug-default.apks.listing
           unzip -p termux-app-debug-default.apks toc.pb > termux-app-debug-default.apks.toc.pb
           test -s termux-app-debug-default.apks.toc.pb
-          grep -Eq 'base-master.apk|base-arm64_v8a.apk|base-x86_64.apk' termux-app-debug-default.apks.listing
+          split_count=$(grep -cE 'splits/[^ ]+\.apk' termux-app-debug-default.apks.listing)
+          test "$split_count" -gt 1
+          grep -Eq 'splits/base-master\.apk|splits/base-arm64_v8a\.apk|splits/base-x86_64\.apk' termux-app-debug-default.apks.listing
+          ! grep -qE 'universal\.apk' termux-app-debug-default.apks.listing
           {
             echo '## Debug default split APKS'
             echo
+            echo "SPLIT_APK_COUNT=$split_count"
             sha256sum input/app-debug.aab termux-app-debug-default.apks
             echo
             java -jar bundletool.jar version
@@ -144,6 +148,10 @@ jobs:
           unzip -p termux-app-debug-universal.apks toc.pb > termux-app-debug-universal.apks.toc.pb
           test -s termux-app-debug-universal.apks.toc.pb
           grep -q 'universal.apk' termux-app-debug-universal.apks.listing
+          mkdir -p universal-apk
+          unzip -o termux-app-debug-universal.apks universal.apk -d universal-apk
+          mv universal-apk/universal.apk termux-app-debug-universal.apk
+          sha256sum termux-app-debug-universal.apk | tee termux-app-debug-universal.apk.sha256
           {
             echo '## Debug fused universal APKS'
             echo
@@ -162,6 +170,15 @@ jobs:
             termux-app-debug-universal.apks.listing
             termux-app-debug-universal.apks.toc.pb
             bundletool.sha256
+
+      - name: Upload universal APK only
+        uses: actions/upload-artifact@v6
+        with:
+          name: termux-app-debug-universal-apk
+          if-no-files-found: error
+          path: |
+            termux-app-debug-universal.apk
+            termux-app-debug-universal.apk.sha256
 
   emulator-split-smoke:
     name: Install exact default and universal targets on SwiftShader emulator

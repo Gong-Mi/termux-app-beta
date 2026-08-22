@@ -83,6 +83,10 @@ jobs:
           unzip -p termux-app-release-universal.apks toc.pb > termux-app-release-universal.apks.toc.pb
           test -s termux-app-release-universal.apks.toc.pb
           grep -q 'universal.apk' termux-app-release-universal.apks.listing
+          mkdir -p universal-apk
+          unzip -o termux-app-release-universal.apks universal.apk -d universal-apk
+          mv universal-apk/universal.apk termux-app-release-universal.apk
+          sha256sum termux-app-release-universal.apk | tee termux-app-release-universal.apk.sha256
           {
             echo '## Release universal APKS'
             echo
@@ -101,3 +105,12 @@ jobs:
             termux-app-release-universal.apks.listing
             termux-app-release-universal.apks.toc.pb
             bundletool.sha256
+
+      - name: Upload universal APK only
+        uses: actions/upload-artifact@v6
+        with:
+          name: termux-app-release-universal-apk
+          if-no-files-found: error
+          path: |
+            termux-app-release-universal.apk
+            termux-app-release-universal.apk.sha256
