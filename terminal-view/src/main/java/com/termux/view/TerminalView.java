@@ -1110,19 +1110,20 @@ public final class TerminalView extends View {
                 if (mTextSelectionCursorController != null) {
                     mTextSelectionCursorController.getSelectors(selectors);
                 }
-                boolean selectionChanged = selectors[0] != mLastRenderSelectionX1
-                    || selectors[1] != mLastRenderSelectionY1
-                    || selectors[2] != mLastRenderSelectionX2
-                    || selectors[3] != mLastRenderSelectionY2;
+                TerminalSelectionRange selection = TerminalSelectionRange.fromSelectors(selectors);
+                boolean selectionChanged = selection.x1 != mLastRenderSelectionX1
+                    || selection.y1 != mLastRenderSelectionY1
+                    || selection.x2 != mLastRenderSelectionX2
+                    || selection.y2 != mLastRenderSelectionY2;
                 if (model != null || mLastRenderFrame == null || selectionChanged) {
                     // Explicit handoff: collect all render inputs once and reuse it while the
                     // immutable model frame and view-only selection projection are unchanged.
                     mLastRenderFrame = new TerminalRenderFrame(mLastModelFrame, mLastModelFrame.topRow,
-                        selectors[0], selectors[1], selectors[2], selectors[3]);
-                    mLastRenderSelectionX1 = selectors[0];
-                    mLastRenderSelectionY1 = selectors[1];
-                    mLastRenderSelectionX2 = selectors[2];
-                    mLastRenderSelectionY2 = selectors[3];
+                        selection.x1, selection.y1, selection.x2, selection.y2);
+                    mLastRenderSelectionX1 = selection.x1;
+                    mLastRenderSelectionY1 = selection.y1;
+                    mLastRenderSelectionX2 = selection.x2;
+                    mLastRenderSelectionY2 = selection.y2;
                 }
             }
             TerminalRenderFrame frame = mLastRenderFrame;
