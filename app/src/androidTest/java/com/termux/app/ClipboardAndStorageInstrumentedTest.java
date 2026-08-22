@@ -42,9 +42,14 @@ public class ClipboardAndStorageInstrumentedTest {
             context.getPackageName(), android.content.pm.PackageManager.GET_PERMISSIONS);
         assertNotNull(info.requestedPermissions);
         java.util.List<String> permissions = java.util.Arrays.asList(info.requestedPermissions);
-        assertTrue(permissions.contains("android.permission.READ_EXTERNAL_STORAGE"));
-        assertTrue(permissions.contains("android.permission.WRITE_EXTERNAL_STORAGE"));
-        assertTrue(permissions.contains("android.permission.MANAGE_EXTERNAL_STORAGE"));
+        if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.S_V2) {
+            assertTrue(permissions.contains("android.permission.READ_EXTERNAL_STORAGE"));
+            assertTrue(permissions.contains("android.permission.WRITE_EXTERNAL_STORAGE"));
+        } else {
+            assertTrue(permissions.contains("android.permission.MANAGE_EXTERNAL_STORAGE"));
+            assertTrue(!permissions.contains("android.permission.READ_EXTERNAL_STORAGE"));
+            assertTrue(!permissions.contains("android.permission.WRITE_EXTERNAL_STORAGE"));
+        }
     }
 
     @Test

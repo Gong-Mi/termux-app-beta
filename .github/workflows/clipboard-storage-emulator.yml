@@ -117,6 +117,9 @@ jobs:
 
       - name: Run clipboard and storage tests
         run: |
+          adb shell am force-stop com.termux
+          adb shell am start -W -n com.termux/.app.TermuxActivity
+          sleep 3
           adb shell am instrument -w -r \
             -e class com.termux.app.ClipboardAndStorageInstrumentedTest \
             com.termux.test/androidx.test.runner.AndroidJUnitRunner \
