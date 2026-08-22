@@ -179,6 +179,7 @@ jobs:
           adb logcat -d > logcat-final.txt
           adb shell dumpsys activity activities > activity-final.txt
           python3 scripts/parse_meminfo.py meminfo-running.txt meminfo-final.txt --json meminfo-summary.json
+          python3 scripts/parse_gfxinfo.py gfxinfo-final.txt gfxinfo-summary.json
           grep -iE 'FATAL EXCEPTION|AndroidRuntime|Termux|TerminalView|frame rev=|published=|lastDrawnRev=' logcat-final.txt | tail -200 > terminal-log-summary.txt
           {
             echo '== producer hash inside app UID =='
@@ -219,6 +220,7 @@ jobs:
             meminfo-running.txt
             meminfo-final.txt
             meminfo-summary.json
+            gfxinfo-summary.json
             processes-final.txt
             activity-final.txt
             terminal-log-summary.txt
