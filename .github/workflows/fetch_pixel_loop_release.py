@@ -72,7 +72,7 @@ def main():
     asset_url = assets[args.asset]["url"]
     asset_path = os.path.join(args.out_dir, args.asset)
 
-    print(f"Downloading {args.asset} from release {tag}...")
+    print(f"Downloading {args.asset} from release {tag}...", file=sys.stderr)
     download(asset_url, asset_path, args.token)
     actual_hash = sha256_file(asset_path)
 
@@ -85,7 +85,7 @@ def main():
         # Fall back to the digest returned by the GitHub API asset metadata.
         expected_hash = assets[args.asset].get("digest", "").replace("sha256:", "").lower()
         if not expected_hash:
-            print(f"WARN: no .sha256 asset and no API digest for {args.asset}; skipping checksum verification")
+            print(f"WARN: no .sha256 asset and no API digest for {args.asset}; skipping checksum verification", file=sys.stderr)
             print(asset_path)
             return
 
@@ -95,7 +95,7 @@ def main():
         print(f"actual:   {actual_hash}", file=sys.stderr)
         sys.exit(1)
 
-    print(f"OK {args.asset} {actual_hash} ({os.path.getsize(asset_path)} bytes)")
+    print(f"OK {args.asset} {actual_hash} ({os.path.getsize(asset_path)} bytes)", file=sys.stderr)
     print(asset_path)
 
 
