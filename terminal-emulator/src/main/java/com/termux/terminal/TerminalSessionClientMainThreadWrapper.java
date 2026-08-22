@@ -18,26 +18,31 @@ import androidx.annotation.Nullable;
 public final class TerminalSessionClientMainThreadWrapper implements TerminalSessionClient {
 
     private final TerminalSessionClient mClient;
-    private final Handler mHandler;
+    private final Dispatcher mDispatcher;
     private final TerminalTextChangeCoalescer mTextChangeCoalescer;
 
     public TerminalSessionClientMainThreadWrapper(@NonNull TerminalSessionClient client, @NonNull Handler handler) {
+        this(client, new HandlerDispatcher(handler));
+    }
+
+    /** Test constructor that uses a custom dispatcher instead of a real Handler/Looper. */
+    TerminalSessionClientMainThreadWrapper(@NonNull TerminalSessionClient client, @NonNull Dispatcher dispatcher) {
         mClient = client;
-        mHandler = handler;
-        mTextChangeCoalescer = new TerminalTextChangeCoalescer(r -> mHandler.post(r));
+        mDispatcher = dispatcher;
+        mTextChangeCoalescer = new TerminalTextChangeCoalescer(dispatcher::post);
     }
 
     private void post(Runnable r) {
-        if (mHandler.getLooper() == Looper.myLooper()) {
+        if (mDispatcher.isCurrentThread()) {
             r.run();
         } else {
-            mHandler.post(r);
+            mDispatcher.post(r);
         }
     }
 
     @Override
     public void onTextChanged(@NonNull TerminalSession changedSession) {
-        if (mHandler.getLooper() == Looper.myLooper()) {
+        if (mDispatcher.isCurrentThread()) {
             mClient.onTextChanged(changedSession);
             return;
         }
@@ -124,5 +129,32 @@ public final class TerminalSessionClientMainThreadWrapper implements TerminalSes
     @Override
     public void logStackTrace(String tag, Exception e) {
         mClient.logStackTrace(tag, e);
+    }
+
+    /** Abstraction over Handler/Looper so the wrapper can be unit-tested without Android. */
+    interface Dispatcher {
+        /** Return true if the calling thread is the dispatcher's target thread. */
+        boolean isCurrentThread();
+
+        /** Post a runnable to the dispatcher's target thread. Returns true if posted. */
+        boolean post(Runnable runnable);
+    }
+
+    private static final class HandlerDispatcher implements Dispatcher {
+        private final Handler mHandler;
+
+        HandlerDispatcher(Handler handler) {
+            mHandler = handler;
+        }
+
+        @Override
+        public boolean isCurrentThread() {
+            return mHandler.getLooper() == Looper.myLooper();
+        }
+
+        @Override
+        public boolean post(Runnable runnable) {
+            return mHandler.post(runnable);
+        }
     }
 }
