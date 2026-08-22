@@ -84,7 +84,9 @@ jobs:
           file "$PIXEL_LOOP_ASSET" | tee pixel-loop-file.txt
           readelf -d "$PIXEL_LOOP_ASSET" | tee pixel-loop-dynamic.txt
           grep -q 'x86-64' pixel-loop-file.txt
-          grep -q 'interpreter /system/bin/linker64' pixel-loop-dynamic.txt
+          # The interpreter is a program header (readelf -l, "Requesting program
+          # interpreter:"); readelf -d (dynamic section) never prints it.
+          readelf -l "$PIXEL_LOOP_ASSET" | grep -q 'Requesting program interpreter: /system/bin/linker64'
           test -x "$PIXEL_LOOP_ASSET"
 
       - name: Create and boot x86_64 emulator
