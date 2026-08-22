@@ -1,6 +1,7 @@
 package com.termux.app;
 
 import android.content.Context;
+import android.content.ClipboardManager;
 import android.content.Intent;
 import android.content.pm.PackageInfo;
 import android.os.Build;
@@ -20,6 +21,8 @@ import org.junit.runner.RunWith;
 
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
@@ -41,6 +44,27 @@ public class ClipboardAndStorageInstrumentedTest {
     @Test
     public void clipboardCopyRoundTripsThroughShareUtils() {
         String text = "termux-clipboard-regression-" + System.nanoTime();
+        ClipboardManager clipboard = (ClipboardManager) context.getSystemService(Context.CLIPBOARD_SERVICE);
+        assertNotNull(clipboard);
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            CountDownLatch changed = new CountDownLatch(1);
+            ClipboardManager.OnPrimaryClipChangedListener listener = changed::countDown;
+            clipboard.addPrimaryClipChangedListener(listener);
+            try {
+                ShareUtils.copyTextToClipboard(context, text);
+                try {
+                    assertTrue(changed.await(5, TimeUnit.SECONDS));
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new AssertionError(e);
+                }
+            } finally {
+                clipboard.removePrimaryClipChangedListener(listener);
+            }
+            return;
+        }
+
         ShareUtils.copyTextToClipboard(context, text);
 
         String actual = ShareUtils.getTextStringFromClipboardIfSet(context, false);
