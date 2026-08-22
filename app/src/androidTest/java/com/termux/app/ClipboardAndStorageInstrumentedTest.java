@@ -1,6 +1,7 @@
 package com.termux.app;
 
 import android.content.Context;
+import android.content.Intent;
 import android.content.pm.PackageInfo;
 import android.os.Build;
 import android.os.Environment;
@@ -13,6 +14,7 @@ import androidx.core.content.ContextCompat;
 import com.termux.shared.interact.ShareUtils;
 
 import org.junit.Assume;
+import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
@@ -26,6 +28,15 @@ import static org.junit.Assert.assertTrue;
 @RunWith(AndroidJUnit4.class)
 public class ClipboardAndStorageInstrumentedTest {
     private final Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+
+    @Before
+    public void launchTargetActivityForClipboardVisibility() throws Exception {
+        Intent intent = context.getPackageManager().getLaunchIntentForPackage(context.getPackageName());
+        assertNotNull(intent);
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        InstrumentationRegistry.getInstrumentation().startActivitySync(intent);
+        Thread.sleep(1000);
+    }
 
     @Test
     public void clipboardCopyRoundTripsThroughShareUtils() {
