@@ -276,7 +276,7 @@ public class TextSelectionCursorController implements CursorController {
             if (!frame.alternateBufferActive) {
                 // Compare against the rendered viewport: the drag edge is where the drawn rows
                 // start/end, not where the scroll target is heading (issue #39).
-                int topRow = terminalView.getRenderedViewportTopRow();
+                int topRow = frame.topRow;
 
                 if (mSelY1 <= topRow) {
                     topRow--;
@@ -311,7 +311,7 @@ public class TextSelectionCursorController implements CursorController {
             }
 
             if (!frame.alternateBufferActive) {
-                int topRow = terminalView.getRenderedViewportTopRow();
+                int topRow = frame.topRow;
 
                 if (mSelY2 <= topRow) {
                     topRow--;
