@@ -80,24 +80,31 @@ jobs:
           cache: gradle
 
       - name: Verify restored Gradle cache files
+        if: always()
         run: |
-          set -euo pipefail
+          set -uo pipefail
           modules="$HOME/.gradle/caches/modules-2/files-2.1"
           wrapper="$HOME/.gradle/wrapper/dists"
-          test -d "$modules"
-          test -d "$wrapper"
-          module_files=$(find "$modules" -type f | wc -l)
-          wrapper_files=$(find "$wrapper" -type f | wc -l)
-          test "$module_files" -gt 0
-          test "$wrapper_files" -gt 0
-          module_size=$(du -sh "$modules" | cut -f1)
-          wrapper_size=$(du -sh "$wrapper" | cut -f1)
+          module_files=0
+          wrapper_files=0
+          module_size="0B"
+          wrapper_size="0B"
+          if [ -d "$modules" ]; then
+            module_files=$(find "$modules" -type f | wc -l)
+            module_size=$(du -sh "$modules" | cut -f1)
+          fi
+          if [ -d "$wrapper" ]; then
+            wrapper_files=$(find "$wrapper" -type f | wc -l)
+            wrapper_size=$(du -sh "$wrapper" | cut -f1)
+          fi
           {
             echo "GRADLE_MODULE_CACHE_FILES=$module_files"
             echo "GRADLE_MODULE_CACHE_SIZE=$module_size"
             echo "GRADLE_WRAPPER_CACHE_FILES=$wrapper_files"
             echo "GRADLE_WRAPPER_CACHE_SIZE=$wrapper_size"
           } | tee -a "$GITHUB_STEP_SUMMARY"
+          # This step intentionally does not fail: actions/setup-java cache restore
+          # can be a cold miss. The build step will populate the cache if needed.
 
       - name: Install SDK pieces (timed)
         run: |
