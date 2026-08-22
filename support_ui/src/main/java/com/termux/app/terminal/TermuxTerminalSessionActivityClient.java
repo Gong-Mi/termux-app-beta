@@ -208,8 +208,9 @@ public class TermuxTerminalSessionActivityClient extends TermuxTerminalSessionCl
 
         mActivity.runOnUiThread(() -> {
             String text = ShareUtils.getTextStringFromClipboardIfSet(mActivity, true);
-            if (text != null && session != null)
-                session.paste(text);
+            TerminalSession targetSession = ClipboardSessionResolver.resolve(session, mActivity.getCurrentSession());
+            if (text != null && targetSession != null)
+                targetSession.paste(text);
         });
     }
 
