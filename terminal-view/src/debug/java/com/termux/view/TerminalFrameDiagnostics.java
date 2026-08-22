@@ -20,14 +20,15 @@ final class TerminalFrameDiagnostics {
         if (!sEnabled) return;
 
         TerminalParserMetrics.Snapshot parser = session.getParserMetricsSnapshot();
+        RenderFrameMetrics.Snapshot render = metrics.snapshot();
         int dirtyInView = 0;
         for (int row = frame.topRow; row < frame.endRow; row++) {
             if (frame.rowNeedsRedraw(row)) dirtyInView++;
         }
         Log.i("Termux:TerminalView", "frame rev=" + frame.screenRevision
-            + " published=" + metrics.getPublishedFrameCount() + " lastPublishedRev=" + metrics.getLastPublishedScreenRevision()
-            + " drawn=" + metrics.getDrawnFrameCount() + " lastDrawnRev=" + metrics.getLastDrawnScreenRevision()
-            + " dropped=" + metrics.getDroppedFrameCount() + " coalesced=" + metrics.getCoalescedRevisionCount() + " acked=" + metrics.getLastAckedScreenRevision()
+            + " published=" + render.publishedFrameCount + " lastPublishedRev=" + render.lastPublishedScreenRevision
+            + " drawn=" + render.drawnFrameCount + " lastDrawnRev=" + render.lastDrawnScreenRevision
+            + " dropped=" + render.droppedFrameCount + " coalesced=" + render.coalescedRevisionCount + " acked=" + render.lastAckedScreenRevision
             + " parserBytes=" + parser.inputBytes + " appendCommands=" + parser.appendCommands
             + " controlCommands=" + parser.controlCommands + " parserFrames=" + parser.publishedFrames
             + " finishCommands=" + parser.finishCommands + " stopCommands=" + parser.stopCommands

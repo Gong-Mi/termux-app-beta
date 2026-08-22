@@ -106,4 +106,22 @@ public class RenderFrameMetricsTest {
         m.ack(2); // ack revision larger than published
         assertFalse(m.isConsistent());
     }
+
+    @Test
+    public void snapshotIsAtomicAndConsistent() {
+        RenderFrameMetrics m = new RenderFrameMetrics();
+        m.publish(1);
+        m.ack(1);
+        m.publish(3);
+
+        RenderFrameMetrics.Snapshot s = m.snapshot();
+        assertEquals(2L, s.publishedFrameCount);
+        assertEquals(3L, s.lastPublishedScreenRevision);
+        assertEquals(1L, s.drawnFrameCount);
+        assertEquals(1L, s.lastDrawnScreenRevision);
+        assertEquals(0L, s.droppedFrameCount);
+        assertEquals(1L, s.coalescedRevisionCount);
+        assertEquals(1L, s.lastAckedScreenRevision);
+        assertTrue(s.lastAckedScreenRevision <= s.lastPublishedScreenRevision);
+    }
 }
