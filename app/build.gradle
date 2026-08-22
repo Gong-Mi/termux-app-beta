@@ -47,12 +47,16 @@ android {
 
         implementation project(":terminal-emulator")
         implementation project(":termux-shared")
+        androidTestImplementation "androidx.test:runner:1.4.0"
+        androidTestImplementation "androidx.test:rules:1.4.0"
+        androidTestImplementation "androidx.test.ext:junit:1.1.3"
     }
 
     defaultConfig {
         applicationId "com.termux"
         minSdk buildMinSdk
         targetSdk buildTargetSdk
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         versionCode 1022
         versionName "0.119.0-beta.3"
 
