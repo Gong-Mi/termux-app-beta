@@ -3,8 +3,36 @@ name: CI (x86 + ARM Linux)
 on:
   push:
     branches: [ master ]
+    paths:
+      - 'app/**'
+      - 'support_ui/**'
+      - 'terminal-emulator/**'
+      - 'terminal-view/**'
+      - 'termux-shared/**'
+      - 'buildSrc/**'
+      - 'scripts/**'
+      - '*.gradle'
+      - '*.properties'
+      - 'gradle/**'
+      - 'gradlew'
+      - 'gradlew.bat'
+      - '.github/workflows/ci.yml'
   pull_request:
     branches: [ master ]
+    paths:
+      - 'app/**'
+      - 'support_ui/**'
+      - 'terminal-emulator/**'
+      - 'terminal-view/**'
+      - 'termux-shared/**'
+      - 'buildSrc/**'
+      - 'scripts/**'
+      - '*.gradle'
+      - '*.properties'
+      - 'gradle/**'
+      - 'gradlew'
+      - 'gradlew.bat'
+      - '.github/workflows/ci.yml'
   workflow_dispatch:
 
 env:
@@ -25,6 +53,12 @@ jobs:
 
       - name: Validate device smoke scripts
         run: bash -n scripts/android_compat_log_smoke.sh
+
+      - name: Validate PTY FD ownership contract
+        run: python3 scripts/verify_pty_fd_ownership.py
+
+      - name: Validate Android version-sensitive manifest permissions
+        run: python3 scripts/verify_manifest_compat.py
 
       - name: Set up JDK
         uses: actions/setup-java@v5
@@ -69,10 +103,14 @@ jobs:
           fi
 
   build-apk:
-    # Full APK build. x86 only: Google ships no linux-aarch64 NDK host
-    # package (verified in repository2-3.xml), so the ndkBuild step cannot
-    # run on ARM64 Linux runners.
-    name: Build APK (x86)
+    # The app is split into a base module and the install-time dynamic-feature
+    # module support_ui (which owns TermuxActivity). A plain `assembleDebug`
+    # APK is NOT an installable target: it lacks support_ui, so cold start
+    # crashes with ClassNotFoundException. Installable targets are materialized
+    # from the debug AAB by bundletool in signed-apks.yml (separate default
+    # split .apks and fused universal .apks artifacts); this job only builds
+    # the AAB for that pipeline.
+    name: Build debug AAB (x86)
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -86,11 +124,14 @@ jobs:
           distribution: temurin
           cache: gradle
 
-      - name: Build debug APK
-        run: ./gradlew assembleDebug
+      - name: Build debug AAB
+        run: |
+          ./gradlew bundleDebug --no-daemon
+          test -s app/build/outputs/bundle/debug/app-debug.aab
 
-      - name: Upload APK
+      - name: Upload debug AAB
         uses: actions/upload-artifact@v6
         with:
-          name: termux-app-debug
-          path: app/build/outputs/apk/debug/*.apk
+          name: termux-app-debug-aab
+          if-no-files-found: error
+          path: app/build/outputs/bundle/debug/app-debug.aab

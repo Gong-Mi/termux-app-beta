@@ -48,8 +48,8 @@
    setChar / blockCopy（重叠区并集、非重叠只记目标区）/ blockSet / scrollDownOneLine（可见行内部索引整体旋转，记所有可见行）/ resize（全量）/ setLineWrap / clearLineWrap / setOrClearEffect / clearTranscript / blockCopyLinesDown 全部按行记账。
    纯记账：不参与任何渲染/解析行为路径。
 3. **DirtyRowJournalTest**（新增，12 用例）—— 锁定每个变更入口的记行语义；这组测试本身就是“交接规格”。
-4. **TerminalView**：`setDebugFrameInfoEnabled(true)` 开每帧摘要日志（默认关，零开销）；
-   `getLastRenderFrame()` 暴露上一帧交接快照供行级归属调试。
+4. **TerminalFrameDiagnostics**（debug source set）——仅 Debug 变体提供每帧摘要日志；Release 变体使用空实现，不能通过 Intent 打开；
+   `getLastRenderFrame()` 仍暴露上一帧交接快照供行级归属调试。
 
 ## 4. 等价性论证（行为保持）
 

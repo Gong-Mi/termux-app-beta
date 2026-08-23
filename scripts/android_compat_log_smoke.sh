@@ -1,4 +1,18 @@
 #!/usr/bin/env bash
+# Cold-start smoke test that also exercises the parser-worker render pipeline.
+#
+# Checks, in order:
+#   1. package installed + debuggable (needed for compat overrides anyway)
+#   2. cold start keeps the process alive (catches ClassNotFoundException-level
+#      regressions, e.g. installing a base-only APK from a split AAB app)
+#   3. debug builds emit per-frame diagnostics (Termux:TerminalView) and the
+#      screen revision advances, i.e. the parser-worker mailbox -> render handoff
+#      actually runs
+#   4. no FATAL/ANR/package-scoped system errors
+#   5. compatibility changes reported for the app uid
+#
+# The fused universal .apks target (from signed-apks.yml) is the one that must
+# pass this; a base-only `assembleDebug` APK is expected to fail at step 2.
 set -euo pipefail
 
 usage() {
@@ -32,6 +46,7 @@ if ! grep -q 'DEBUGGABLE' <<<"$package_info"; then
     echo "Package is not debuggable; Developer Options compatibility overrides are unavailable: $package" >&2
     exit 1
 fi
+debuggable=true
 
 target_sdk=$(grep -m1 -o 'targetSdk=[0-9]*' <<<"$package_info" || true)
 version_name=$(grep -m1 -o 'versionName=[^ ]*' <<<"$package_info" || true)
@@ -43,21 +58,77 @@ echo "uid=$uid"
 echo "${version_name:-versionName=unknown}"
 echo "${version_code:-versionCode=unknown}"
 echo "${target_sdk:-targetSdk=unknown}"
-echo "debuggable=true"
+echo "debuggable=$debuggable"
 echo "compatOverridesMutated=false"
 
-# Bound the evidence window to this cold start. This clears system log buffers,
-# but does not change package data or compatibility overrides.
+# Bound the evidence window to this cold start.
 "${adb_cmd[@]}" logcat -c
+
+# A dozing/locked display does not run onDraw, so no frame diagnostics are
+# emitted. Wake + dismiss keyguard before the cold start so the render
+# pipeline actually produces frames; retry until the device is really awake.
+"${adb_cmd[@]}" shell input keyevent 224 2>/dev/null || true   # KEYCODE_WAKEUP
+"${adb_cmd[@]}" shell wm dismiss-keyguard 2>/dev/null || true
+"${adb_cmd[@]}" shell input keyevent 82 2>/dev/null || true    # KEYCODE_MENU
+for _ in $(seq 1 10); do
+    wake=$("${adb_cmd[@]}" shell dumpsys power 2>/dev/null | grep -m1 mWakefulness | tr -d '\r ')
+    case "$wake" in
+        *Awake*) break ;;
+        *) "${adb_cmd[@]}" shell input keyevent 224 2>/dev/null || true; sleep 1 ;;
+    esac
+done
+
 "${adb_cmd[@]}" shell am force-stop "$package"
 "${adb_cmd[@]}" shell am start -W -n "$component" >/dev/null
+sleep 2
 
-pid=$("${adb_cmd[@]}" shell pidof -s "$package" | tr -d '\r')
+pid=$("${adb_cmd[@]}" shell pidof -s "$package" | tr -d '\r' || true)
 if [[ -z "$pid" ]]; then
-    echo "Package did not remain running after cold start: $package" >&2
+    echo "FAIL: package crashed during cold start (no pid). If this is a split-AAB app," >&2
+    echo "a base-only APK will fail here with ClassNotFoundException. Install the fused" >&2
+    echo "universal .apks from signed-apks.yml instead." >&2
+    echo "--- relevant AndroidRuntime lines ---" >&2
+    "${adb_cmd[@]}" logcat -d -v threadtime -s AndroidRuntime:E '*:S' | tail -20 >&2 || true
     exit 1
 fi
 echo "pid=$pid"
+
+# Frame diagnostics only fire from onDraw, which requires an actually visible
+# window. If a keyguard we cannot dismiss keeps the app in the background,
+# SKIP the frame check (device state, not an app regression).
+frame_status=run
+resumed=$("${adb_cmd[@]}" shell dumpsys activity activities 2>/dev/null | grep -m1 'ResumedActivity' | grep -F "$package" || true)
+if [[ -z "$resumed" ]]; then
+    frame_status=skipped
+    echo "frame_status=skipped (ResumedActivity is not $package; keyguard/launcher in front)"
+    echo "ResumedActivity: $("${adb_cmd[@]}" shell dumpsys activity activities 2>/dev/null | grep -m1 'ResumedActivity' | tr -d '\r')" >&2
+fi
+
+echo "--- parser-worker frame pipeline (debug diagnostics) ---"
+# The tag Termux:TerminalView contains a colon, which adb logcat's
+# 'Tag:priority' filter grammar cannot parse; filter by pid instead.
+frame_logs=$("${adb_cmd[@]}" logcat -d --pid="$pid" 2>/dev/null | grep 'Termux:TerminalView:.*frame rev=' || true)
+if [[ $frame_status == skipped ]]; then
+    echo "(frame check skipped: no resumed app window - unlock the device to exercise onDraw)"
+elif [[ -z "$frame_logs" ]]; then
+    if [[ "$debuggable" == true ]]; then
+        echo "FAIL: no Termux:TerminalView diagnostics while $package is resumed" >&2
+        echo "and debuggable; the parser-worker render handoff is not producing frames." >&2
+        exit 1
+    fi
+    echo "(no frame diagnostics; release builds skip this check)"
+else
+    first_rev=$(sed -n 's/.*frame rev=\([0-9]*\).*/\1/p' <<<"$frame_logs" | head -1)
+    last_rev=$(sed -n 's/.*frame rev=\([0-9]*\).*/\1/p' <<<"$frame_logs" | tail -1)
+    echo "frame samples: $(wc -l <<<"$frame_logs")"
+    echo "screenRevision: ${first_rev:-none} -> ${last_rev:-none}"
+    if [[ -z "$last_rev" || "$last_rev" -lt 1 ]]; then
+        echo "FAIL: frame diagnostics present but screen revision did not advance" >&2
+        exit 1
+    fi
+    # Keep the evidence visible for the caller.
+    tail -5 <<<"$frame_logs"
+fi
 
 echo "--- compatibility changes reported for uid $uid ---"
 compat_logs=$("${adb_cmd[@]}" logcat -d -v threadtime -s CompatChangeReporter:D '*:S' | grep "UID $uid;" || true)
@@ -70,7 +141,7 @@ fi
 echo "--- app process fatal errors ---"
 app_fatal=$("${adb_cmd[@]}" logcat -d -v threadtime --pid="$pid" | grep -E 'FATAL EXCEPTION|Fatal signal|ANR in' || true)
 if [[ -n "$app_fatal" ]]; then
-    printf '%s\n' "$app_fatal"
+    printf '%s\n' "$app_fatal" >&2
     exit 1
 else
     echo "none"
@@ -79,8 +150,10 @@ fi
 echo "--- package-scoped system errors ---"
 system_errors=$("${adb_cmd[@]}" logcat -d -v threadtime -s AndroidRuntime:E ActivityManager:E ActivityTaskManager:E | grep -F "$package" || true)
 if [[ -n "$system_errors" ]]; then
-    printf '%s\n' "$system_errors"
+    printf '%s\n' "$system_errors" >&2
     exit 1
 else
     echo "none"
 fi
+
+echo "SMOKE-PASS"

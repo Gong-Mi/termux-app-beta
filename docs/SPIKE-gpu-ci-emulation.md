@@ -108,3 +108,76 @@ boot 本身只要 60 秒。
 
 对 STRATEGY-gles.md 的影响："CI 验不了视觉正确性"这条延期理由需要
 修正为"CI 可验渲染回归（SwiftShader），真机视觉正确性仍需设备验收"。
+
+## ARM64 Android + 容器化路线（2026-08-19 增补）
+
+这里的目标不是为每个 Android API 维护一个 Android 容器，而是把测试
+runner 容器化，把 Android 版本作为可替换的 system image：
+
+```text
+containerized test runner
+  -> Cuttlefish/emulator launcher + adb + verifier
+  -> selected ARM64 Android system image
+  -> ARM64 Android guest
+  -> optional KVM + DRM/virgl/GLES backend
+```
+
+### 方案分层
+
+| 方案 | Android 形态 | GPU 证据 | 维护边界 | 当前结论 |
+|------|--------------|----------|----------|----------|
+| ARM64 Cuttlefish + Docker | ARM64 Android guest | `drm_virgl` 可验 host GLES/Canvas/RenderThread/SF；不是 Mali/Adreno/Vulkan | runner 镜像、启动器、system-image manifest；不维护 Android framework | 首选 ARM 容器化路线 |
+| ARM64 Android Emulator | ARM64 system image | ARM64 host 官方路径主要是 SwiftShader；不是真手机 GPU | emulator 工具 + image matrix | 可作 ARM ABI/framework 补充 |
+| Firebase ARM virtual device | Google 托管 ARM guest | 适合测试矩阵；GPU/ADB 证据受服务边界限制 | 只维护 model/API/test 配置 | 云端 fallback |
+| Redroid ARM64 | Android userspace in host container | 取决于 host GPU/kernel，不能自动得到真实手机 driver | kernel/binder/GPU/namespace 兼容层 | 不作为主路线 |
+| 真实 Mali/Adreno 手机 | 物理 Android | 真 driver/HWC/RenderThread/GPU | 设备刷机、连接、电源、版本 | 最终 acceptance |
+
+### 不应做的事情
+
+- 不为 API 33/34/35/36 各写一个 Android Dockerfile；
+- 不把 Cuttlefish virgl 结果写成 Mali/Adreno 或 Vulkan 结果；
+- 不把 ARM64 guest 跑起来写成 ARM GPU 验收；
+- 不把容器看成消除了 `/dev/kvm`、`/dev/dri/renderD*` 和 render group 依赖；
+- 不在没有 ARM64 runner 和 capability evidence 时添加假绿色的 workflow。
+
+### ARM64 Cuttlefish 的必要 host 能力
+
+```text
+/dev/kvm
+/dev/dri/renderD*
+render group access
+network/TAP capability
+```
+
+Docker 只是固定测试 runner 和 host tools；KVM/DRM 仍然来自宿主机，
+因此这不是完全隔离的 Android 容器。
+
+### 当前本机 probe
+
+当前 Android/Termux host 为 `aarch64`，但实测：
+
+```text
+/dev/kvm: absent
+/dev/dri/card0: present
+/dev/dri/renderD*: absent
+```
+
+所以当前设备不能被报告为 ARM64 Cuttlefish/KVM/virgl runner。它的 Android
+GPU 属性存在，不等于容器可获得 Linux DRM render node。
+
+### 分阶段施工
+
+1. 先定义 system-image manifest、API/ABI matrix、SHA-256 和 evidence schema；
+2. 在 ARM64 Linux runner 上只做 KVM/DRM/container capability probe；
+3. capability 通过后再启动 ARM64 Cuttlefish，安装 exact APK，采集 logcat、
+   SurfaceFlinger、gfxinfo、截图和 frame diagnostics；
+4. 单独启用 virgl/GLES，声明为 virtual-GPU GLES evidence；
+5. 最后用真实 Mali/Adreno 设备补 physical GPU acceptance。
+
+官方依据：
+
+- Cuttlefish: https://source.android.com/docs/devices/cuttlefish
+- Cuttlefish Docker: https://source.android.com/docs/devices/cuttlefish/docker
+- Cuttlefish GPU: https://source.android.com/docs/devices/cuttlefish/gpu
+- Emulator ARM64 host: https://developer.android.com/studio/releases/emulator
+- Firebase ARM virtual devices: https://firebase.google.com/docs/test-lab/android/avds

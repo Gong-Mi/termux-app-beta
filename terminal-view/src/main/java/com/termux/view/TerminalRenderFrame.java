@@ -1,6 +1,8 @@
 package com.termux.view;
 
+import com.termux.terminal.FrameRevision;
 import com.termux.terminal.TerminalEmulator;
+import com.termux.terminal.TerminalModelFrame;
 import com.termux.terminal.TerminalScreenSnapshot;
 
 import java.util.Arrays;
@@ -13,7 +15,7 @@ import java.util.Arrays;
  * 必须显式加在这个帧上；渲染 bug 归属（解析改了没 / 渲染用了旧值）也以本对象为准。
  * 本类不改变任何渲染行为 —— 采集的值与原先渲染时现场读取的值完全一致（同一线程，渲染期间无并发变更）。
  */
-public final class TerminalRenderFrame {
+public final class TerminalRenderFrame implements FrameRevision {
 
     /** 外部坐标系顶行（含 transcript 滚动偏移），来自 TerminalView.mTopRow。 */
     public final int topRow;
@@ -28,12 +30,18 @@ public final class TerminalRenderFrame {
     public final boolean cursorVisible;
     /** 反相显示标志。 */
     public final boolean reverseVideo;
-    /** 当前调色板的不可变副本。 */
+    /** Immutable palette storage for emulator-owned frames; model-owned frames keep it in modelFrame. */
     private final int[] palette;
+    private final TerminalModelFrame modelFrame;
+    private int[] rendererPalette;
     /** 活动屏幕缓冲（主屏或备用屏，渲染前快照）。 */
     public final TerminalScreenSnapshot screen;
     /** 文本选择的矩形（外部坐标）。 */
     public final int selectionX1, selectionY1, selectionX2, selectionY2;
+    /** Alternate buffer state captured at snapshot time. */
+    public final boolean alternateBufferActive;
+    /** Number of active transcript rows captured at snapshot time. */
+    public final int activeTranscriptRows;
     /**
      * 渲染前采集的变更台账：自上一帧清除以来被解析/模型修改过的行（内部坐标系位图）与批次计数。
      * 用于把渲染问题归属到“解析改了哪些行” vs “渲染画了什么”。
@@ -48,6 +56,7 @@ public final class TerminalRenderFrame {
         this.topRow = topRow;
         this.endRow = topRow + emulator.mRows;
         this.columns = emulator.mColumns;
+        this.modelFrame = null;
         this.cursorCol = emulator.getCursorCol();
         this.cursorRow = emulator.getCursorRow();
         this.cursorStyle = emulator.getCursorStyle();
@@ -62,10 +71,87 @@ public final class TerminalRenderFrame {
         this.selectionY1 = selectionY1;
         this.selectionX2 = selectionX2;
         this.selectionY2 = selectionY2;
+        this.alternateBufferActive = emulator.isAlternateBufferActive();
+        this.activeTranscriptRows = emulator.getScreen().getActiveTranscriptRows();
+    }
+
+    public TerminalRenderFrame(TerminalModelFrame model, int selectionX1, int selectionY1, int selectionX2, int selectionY2) {
+        this(model, model.topRow, selectionX1, selectionY1, selectionX2, selectionY2);
+    }
+
+    public TerminalRenderFrame(TerminalModelFrame model, int topRow, int selectionX1, int selectionY1, int selectionX2, int selectionY2) {
+        this.topRow = topRow;
+        this.endRow = topRow + model.rows;
+        this.columns = model.columns;
+        this.modelFrame = model;
+        this.cursorCol = model.cursorCol;
+        this.cursorRow = model.cursorRow;
+        this.cursorStyle = model.cursorStyle;
+        this.cursorVisible = model.cursorVisible;
+        this.reverseVideo = model.reverseVideo;
+        this.palette = null;
+        this.screen = model.screen;
+        this.screenRevision = model.screenRevision;
+        this.dirtyRowBits = null;
+        this.dirtyMutationCount = model.dirtyMutationCount;
+        this.selectionX1 = selectionX1;
+        this.selectionY1 = selectionY1;
+        this.selectionX2 = selectionX2;
+        this.selectionY2 = selectionY2;
+        this.alternateBufferActive = model.alternateBufferActive;
+        this.activeTranscriptRows = model.activeTranscriptRows;
+    }
+
+    /**
+     * Whether the content of {@code externalRow} is provably identical in this frame
+     * and {@code previous}: the snapshot row-reuse machinery hands back the same
+     * immutable {@link TerminalRenderRow} object for untouched rows, so object
+     * identity is the authoritative unchanged signal. This works across mailbox
+     * frame drops, where per-publish dirty bits would be lost.
+     */
+    public final boolean rowUnchangedFrom(TerminalRenderFrame previous, int externalRow) {
+        if (previous == null) return false;
+        return screen.rowAtExternal(externalRow) == previous.screen.rowAtExternal(externalRow);
+    }
+
+    /**
+     * Whether this frame requires a full redraw even though every row reports
+     * clean: the previous rendering of the same viewport is provably stale when
+     * the row ordering, the color map, or the reverse-video mode changed.
+     * Returns true also when {@code previous} is null (first frame).
+     */
+    public final boolean needsFullRedraw(TerminalRenderFrame previous) {
+        if (previous == null) return true;
+        if (topRow != previous.topRow || endRow != previous.endRow || columns != previous.columns) return true;
+        if (reverseVideo != previous.reverseVideo) return true;
+        int[] a = paletteForRenderer();
+        int[] b = previous.paletteForRenderer();
+        if (a.length != b.length) return true;
+        for (int i = 0; i < a.length; i++) {
+            if (a[i] != b[i]) return true;
+        }
+        return false;
+    }
+
+    int[] paletteForRenderer() {
+        if (rendererPalette == null) {
+            rendererPalette = modelFrame != null ? modelFrame.copyPalette() : palette;
+        }
+        return rendererPalette;
+    }
+
+    public int colorAt(int index) {
+        return modelFrame != null ? modelFrame.colorAt(index) : palette[index];
     }
 
     public int[] copyPalette() {
-        return Arrays.copyOf(palette, palette.length);
+        int[] source = paletteForRenderer();
+        return Arrays.copyOf(source, source.length);
+    }
+
+    @Override
+    public long getScreenRevision() {
+        return screenRevision;
     }
 
     /**
@@ -73,7 +159,10 @@ public final class TerminalRenderFrame {
      * 供审计/测试用；渲染器当前仍然是全量重绘，本方法只回答“哪行有正当的重绘理由”。
      */
     public final boolean rowNeedsRedraw(int externalRow) {
-        if (dirtyRowBits != null) {
+        if (modelFrame != null) {
+            int internal = screen.internalRowAtExternal(externalRow);
+            if (modelFrame.isDirtyInternalRow(internal)) return true;
+        } else if (dirtyRowBits != null) {
             int internal = screen.internalRowAtExternal(externalRow);
             if ((dirtyRowBits[internal >> 6] & (1L << (internal & 63))) != 0) return true;
         }

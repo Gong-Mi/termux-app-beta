@@ -289,7 +289,7 @@ public class PermissionUtils {
             requestLegacyStoragePermission = false;
 
         if (requestLegacyStoragePermission == null)
-            requestLegacyStoragePermission = isLegacyExternalStoragePossible(context);
+            requestLegacyStoragePermission = LegacyExternalStoragePermission.isApplicable(Build.VERSION.SDK_INT);
 
         boolean checkIfHasRequestedLegacyExternalStorage = checkIfHasRequestedLegacyExternalStorage(context);
 
@@ -338,12 +338,15 @@ public class PermissionUtils {
      * @return Returns {@code true} if permission is granted, otherwise {@code false}.
      */
     public static boolean checkStoragePermission(@NonNull Context context, boolean checkLegacyStoragePermission) {
-        if (checkLegacyStoragePermission || Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
-            return checkPermissions(context,
-                new String[]{Manifest.permission.READ_EXTERNAL_STORAGE,
-                    Manifest.permission.WRITE_EXTERNAL_STORAGE});
-        } else {
+        if (checkLegacyStoragePermission && LegacyExternalStoragePermission.isApplicable(Build.VERSION.SDK_INT)) {
+            return LegacyExternalStoragePermission.isGranted(context);
+        } else if (!checkLegacyStoragePermission &&
+            ManageExternalStoragePermission.isApplicable(Build.VERSION.SDK_INT)) {
             return Environment.isExternalStorageManager();
+        } else if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
+            return true;
+        } else {
+            return LegacyExternalStoragePermission.isGranted(context);
         }
     }
 
@@ -418,8 +421,7 @@ public class PermissionUtils {
      * https://developer.android.com/training/data-storage/use-cases#opt-out-scoped-storage
      */
     public static boolean isLegacyExternalStoragePossible(@NonNull Context context) {
-        return !(Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
-            PackageUtils.getTargetSDKForPackage(context) >= Build.VERSION_CODES.R);
+        return LegacyExternalStoragePermission.isApplicable(Build.VERSION.SDK_INT);
     }
 
     /**

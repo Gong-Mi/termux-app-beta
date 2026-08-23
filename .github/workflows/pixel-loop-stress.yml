@@ -11,11 +11,23 @@ on:
         required: false
         default: "20"
         type: string
+      fit_mode:
+        description: "Fit mode: width, height, or fill (fill stretches the pixel grid across the whole terminal)"
+        required: false
+        default: "fill"
+        type: choice
+        options:
+          - fill
+          - width
+          - height
+      fps:
+        description: "Frame rate override (GIF native ~12fps when unset)"
+        required: false
+        default: "60"
+        type: string
 
 env:
   JAVA_VERSION: 21
-  PIXEL_LOOP_TAG: pixel-loop-085912
-  PIXEL_LOOP_SHA256: 611573282b5a44e9631975fa95bb34491ed8f27c3d235002a837a52d9598e43e
   PIXEL_LOOP_ASSET: pixel-loop-x86_64
 
 jobs:
@@ -60,18 +72,21 @@ jobs:
       - name: Build debug APK
         run: ./gradlew assembleDebug --no-daemon --console=plain
 
-      - name: Download and verify x86_64 producer
+      - name: Download and verify x86_64 producer from latest release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euxo pipefail
-          curl --fail --location --retry 3 \
-            -o "$PIXEL_LOOP_ASSET" \
-            "https://github.com/Gong-Mi/termux-app-beta/releases/download/${PIXEL_LOOP_TAG}/${PIXEL_LOOP_ASSET}"
-          chmod 755 "$PIXEL_LOOP_ASSET"
-          printf '%s  %s\n' "$PIXEL_LOOP_SHA256" "$PIXEL_LOOP_ASSET" | sha256sum -c -
+          PIXEL_LOOP_PATH=$(python3 .github/workflows/fetch_pixel_loop_release.py \
+            --asset "$PIXEL_LOOP_ASSET" --out-dir .)
+          echo "PIXEL_LOOP_PATH=$PIXEL_LOOP_PATH" >> "$GITHUB_ENV"
+          chmod 755 "$PIXEL_LOOP_PATH"
           file "$PIXEL_LOOP_ASSET" | tee pixel-loop-file.txt
           readelf -d "$PIXEL_LOOP_ASSET" | tee pixel-loop-dynamic.txt
           grep -q 'x86-64' pixel-loop-file.txt
-          grep -q 'interpreter /system/bin/linker64' pixel-loop-file.txt
+          # The interpreter is a program header (readelf -l, "Requesting program
+          # interpreter:"); readelf -d (dynamic section) never prints it.
+          readelf -l "$PIXEL_LOOP_ASSET" | grep -q 'Requesting program interpreter: /system/bin/linker64'
           test -x "$PIXEL_LOOP_ASSET"
 
       - name: Create and boot x86_64 emulator
@@ -101,10 +116,12 @@ jobs:
       - name: Install Termux and stage producer inside app UID
         run: |
           set -euxo pipefail
-          APK=$(ls app/build/outputs/apk/debug/termux-app_*universal*.apk 2>/dev/null \
+          BASE_APK=$(ls app/build/outputs/apk/debug/termux-app_*universal*.apk 2>/dev/null \
                 || ls app/build/outputs/apk/debug/termux-app_*x86_64*.apk)
-          adb install -r "$APK"
-          adb shell am start -W -n com.termux/.app.TermuxActivity --ez com.termux.DEBUG_FRAME_INFO true
+          FEATURE_APK=$(ls support_ui/build/outputs/apk/debug/support_ui-debug.apk)
+          # support_ui is a dynamic-feature module; TermuxActivity lives there.
+          adb install-multiple -r "$BASE_APK" "$FEATURE_APK"
+          adb shell am start -W -n com.termux/.app.TermuxActivity
           for i in $(seq 1 24); do
             if adb shell run-as com.termux test -x /data/data/com.termux/files/usr/bin/sh; then
               echo "TERMUX_PREFIX_READY_AFTER_${i}0_SECONDS=1"
@@ -123,14 +140,24 @@ jobs:
       - name: Run producer through the real Termux terminal session
         env:
           DURATION: ${{ inputs.duration_seconds }}
+          FIT_MODE: ${{ inputs.fit_mode }}
+          FPS: ${{ inputs.fps }}
         run: |
           set -euxo pipefail
-          adb shell input text /data/data/com.termux/files/usr/tmp/$PIXEL_LOOP_ASSET
+          PRODUCER=/data/data/com.termux/files/usr/tmp/$PIXEL_LOOP_ASSET
+          adb shell input text "$PRODUCER --fit $FIT_MODE --fps $FPS"
           adb shell input keyevent KEYCODE_ENTER
           start=$(date +%s)
+          date -Is > host-time-start.txt
+          adb shell 'date +"%Y-%m-%dT%H:%M:%S.%3N%z"' > device-time-start.txt
+          adb shell dumpsys package com.termux | grep -E 'versionCode|versionName|lastUpdateTime|codePath' > package-running.txt || true
           sleep "$DURATION"
           end=$(date +%s)
+          date -Is > host-time-running.txt
+          adb shell 'date +"%Y-%m-%dT%H:%M:%S.%3N%z"' > device-time-running.txt
           echo "PRODUCER_REQUESTED_SECONDS=$DURATION" | tee stress-metrics.txt
+          echo "PRODUCER_FIT_MODE=$FIT_MODE" | tee -a stress-metrics.txt
+          echo "PRODUCER_FPS=$FPS" | tee -a stress-metrics.txt
           echo "PRODUCER_WALL_SECONDS=$((end-start))" | tee -a stress-metrics.txt
           adb exec-out screencap -p > pixel-loop-running.png
           adb shell ps -A | grep -E 'com.termux|pixel-loop' | tee -a stress-metrics.txt || true
@@ -151,6 +178,8 @@ jobs:
           adb shell ps -A > processes-final.txt
           adb logcat -d > logcat-final.txt
           adb shell dumpsys activity activities > activity-final.txt
+          python3 scripts/parse_meminfo.py meminfo-running.txt meminfo-final.txt --json meminfo-summary.json
+          python3 scripts/parse_gfxinfo.py gfxinfo-final.txt gfxinfo-summary.json
           grep -iE 'FATAL EXCEPTION|AndroidRuntime|Termux|TerminalView|frame rev=|published=|lastDrawnRev=' logcat-final.txt | tail -200 > terminal-log-summary.txt
           {
             echo '== producer hash inside app UID =='
@@ -166,26 +195,8 @@ jobs:
       - name: Verify frame metrics invariants
         run: |
           set -euo pipefail
-          echo '== frame metrics invariant check =='
-          last=$(grep -E 'frame rev=' terminal-log-summary.txt | tail -1)
-          if [ -z "$last" ]; then
-            echo 'ERROR: no frame diagnostic lines found' >&2
-            exit 1
-          fi
-          echo "$last"
-          # Extract counters with simple regex from the log line.
-          published=$(echo "$last" | grep -oE 'published=[0-9]+' | cut -d= -f2)
-          drawn=$(echo "$last" | grep -oE 'drawn=[0-9]+' | cut -d= -f2)
-          dropped=$(echo "$last" | grep -oE 'dropped=[0-9]+' | cut -d= -f2)
-          coalesced=$(echo "$last" | grep -oE 'coalesced=[0-9]+' | cut -d= -f2)
-          acked=$(echo "$last" | grep -oE 'acked=[0-9]+' | cut -d= -f2)
-          lastDrawnRev=$(echo "$last" | grep -oE 'lastDrawnRev=[0-9-]+' | cut -d= -f2)
-          lastPublishedRev=$(echo "$last" | grep -oE 'lastPublishedRev=[0-9-]+' | cut -d= -f2)
-          [ "$published" -ge 0 ] && [ "$drawn" -ge 0 ] && [ "$dropped" -ge 0 ] && [ "$coalesced" -ge 0 ] && [ "$acked" -ge -1 ]
-          [ "$((drawn + dropped))" -le "$published" ] || { echo "ERROR: drawn($drawn)+dropped($dropped) > published($published)" >&2; exit 1; }
-          [ "$acked" -eq "$lastDrawnRev" ] || { echo "ERROR: acked($acked) != lastDrawnRev($lastDrawnRev)" >&2; exit 1; }
-          [ "$acked" -le "$lastPublishedRev" ] || { echo "ERROR: acked($acked) > lastPublishedRev($lastPublishedRev)" >&2; exit 1; }
-          echo "PASS published=$published drawn=$drawn dropped=$dropped coalesced=$coalesced acked=$acked inFlight=$((published-drawn-dropped))"
+          echo '== frame metric invariant check (all lines) =='
+          python3 .github/workflows/verify_frame_metrics.py terminal-log-summary.txt --min-lines 1
 
       - name: Upload pixel-loop stress evidence
         if: always()
@@ -197,12 +208,19 @@ jobs:
             pixel-loop-dynamic.txt
             pixel-loop-running.png
             pixel-loop-after-stop.png
+            package-running.txt
+            host-time-start.txt
+            host-time-running.txt
+            device-time-start.txt
+            device-time-running.txt
             stress-metrics.txt
             stress-evidence.txt
             gfxinfo-running.txt
             gfxinfo-final.txt
             meminfo-running.txt
             meminfo-final.txt
+            meminfo-summary.json
+            gfxinfo-summary.json
             processes-final.txt
             activity-final.txt
             terminal-log-summary.txt

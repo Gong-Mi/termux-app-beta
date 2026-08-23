@@ -5,6 +5,7 @@ import android.app.Notification;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.app.Service;
+import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.res.Resources;
@@ -20,7 +21,6 @@ import androidx.annotation.Nullable;
 
 import com.termux.R;
 import com.termux.app.event.SystemEventReceiver;
-import com.termux.app.terminal.TermuxTerminalSessionActivityClient;
 import com.termux.app.terminal.TermuxTerminalSessionServiceClient;
 import com.termux.shared.termux.plugins.TermuxPluginUtils;
 import com.termux.shared.data.IntentUtils;
@@ -81,7 +81,7 @@ public final class TermuxService extends Service implements AppShell.AppShellCli
      * that holds activity references for activity related functions.
      * Note that the service may often outlive the activity, so need to clear this reference.
      */
-    private TermuxTerminalSessionActivityClient mTermuxTerminalSessionActivityClient;
+    private TermuxSessionActivityClient mTermuxSessionActivityClient;
 
     /** The basic implementation of the {@link TerminalSessionClient} interface to be used by {@link TerminalSession}
      * that does not hold activity references and only a service reference.
@@ -195,7 +195,7 @@ public final class TermuxService extends Service implements AppShell.AppShellCli
         // Since we cannot rely on {@link TermuxActivity.onDestroy()} to always complete,
         // we unset clients here as well if it failed, so that we do not leave service and session
         // clients with references to the activity.
-        if (mTermuxTerminalSessionActivityClient != null)
+        if (mTermuxSessionActivityClient != null)
             unsetTermuxTerminalSessionClient();
         return false;
     }
@@ -614,13 +614,15 @@ public final class TermuxService extends Service implements AppShell.AppShellCli
 
         // Notify {@link TermuxSessionsListViewController} that sessions list has been updated if
         // activity in is foreground
-        if (mTermuxTerminalSessionActivityClient != null)
-            mTermuxTerminalSessionActivityClient.termuxSessionListNotifyUpdated();
+        if (mTermuxSessionActivityClient != null)
+            mTermuxSessionActivityClient.termuxSessionListNotifyUpdated();
 
         updateNotification();
 
         // No need to recreate the activity since it likely just started and theme should already have applied
-        TermuxActivity.updateTermuxActivityStyling(this, false);
+        Intent stylingIntent = new Intent(TERMUX_ACTIVITY.ACTION_RELOAD_STYLE);
+        stylingIntent.putExtra(TERMUX_ACTIVITY.EXTRA_RECREATE_ACTIVITY, false);
+        sendBroadcast(stylingIntent);
 
         return newTermuxSession;
     }
@@ -651,8 +653,8 @@ public final class TermuxService extends Service implements AppShell.AppShellCli
 
             // Notify {@link TermuxSessionsListViewController} that sessions list has been updated if
             // activity in is foreground
-            if (mTermuxTerminalSessionActivityClient != null)
-                mTermuxTerminalSessionActivityClient.termuxSessionListNotifyUpdated();
+            if (mTermuxSessionActivityClient != null)
+                mTermuxSessionActivityClient.termuxSessionListNotifyUpdated();
         }
 
         updateNotification();
@@ -687,8 +689,8 @@ public final class TermuxService extends Service implements AppShell.AppShellCli
         switch (sessionAction) {
             case TERMUX_SERVICE.VALUE_EXTRA_SESSION_ACTION_SWITCH_TO_NEW_SESSION_AND_OPEN_ACTIVITY:
                 setCurrentStoredTerminalSession(newTerminalSession);
-                if (mTermuxTerminalSessionActivityClient != null)
-                    mTermuxTerminalSessionActivityClient.setCurrentSession(newTerminalSession);
+                if (mTermuxSessionActivityClient != null)
+                    mTermuxSessionActivityClient.setCurrentSession(newTerminalSession);
                 startTermuxActivity();
                 break;
             case TERMUX_SERVICE.VALUE_EXTRA_SESSION_ACTION_KEEP_CURRENT_SESSION_AND_OPEN_ACTIVITY:
@@ -698,8 +700,8 @@ public final class TermuxService extends Service implements AppShell.AppShellCli
                 break;
             case TERMUX_SERVICE.VALUE_EXTRA_SESSION_ACTION_SWITCH_TO_NEW_SESSION_AND_DONT_OPEN_ACTIVITY:
                 setCurrentStoredTerminalSession(newTerminalSession);
-                if (mTermuxTerminalSessionActivityClient != null)
-                    mTermuxTerminalSessionActivityClient.setCurrentSession(newTerminalSession);
+                if (mTermuxSessionActivityClient != null)
+                    mTermuxSessionActivityClient.setCurrentSession(newTerminalSession);
                 break;
             case TERMUX_SERVICE.VALUE_EXTRA_SESSION_ACTION_KEEP_CURRENT_SESSION_AND_DONT_OPEN_ACTIVITY:
                 if (getTermuxSessionsSize() == 1)
@@ -718,7 +720,10 @@ public final class TermuxService extends Service implements AppShell.AppShellCli
         // from background (services). If it is not granted, then TermuxSessions that are started will
         // show in Termux notification but will not run until user manually clicks the notification.
         if (PermissionUtils.validateDisplayOverOtherAppsPermissionForPostAndroid10(this, true)) {
-            TermuxActivity.startTermuxActivity(this);
+            Intent activityIntent = new Intent();
+            activityIntent.setComponent(new ComponentName(this, "com.termux.app.TermuxActivity"));
+            activityIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(activityIntent);
         } else {
             TermuxAppSharedPreferences preferences = TermuxAppSharedPreferences.build(this);
             if (preferences == null) return;
@@ -735,7 +740,7 @@ public final class TermuxService extends Service implements AppShell.AppShellCli
      * interface functions requiring the activity should not be available to the terminal sessions,
      * so we just return the {@link #mTermuxTerminalSessionServiceClient}. Once {@link TermuxActivity} bind
      * callback is received, it should call {@link #setTermuxTerminalSessionClient} to set the
-     * {@link TermuxService#mTermuxTerminalSessionActivityClient} so that further terminal sessions are directly
+     * {@link TermuxService#mTermuxSessionActivityClient} so that further terminal sessions are directly
      * passed the {@link TermuxTerminalSessionActivityClient} object which fully implements the
      * {@link TerminalSessionClient} interface.
      *
@@ -743,25 +748,25 @@ public final class TermuxService extends Service implements AppShell.AppShellCli
      * {@link TermuxService}, otherwise {@link TermuxTerminalSessionServiceClient}.
      */
     public synchronized TermuxTerminalSessionClientBase getTermuxTerminalSessionClient() {
-        if (mTermuxTerminalSessionActivityClient != null)
-            return mTermuxTerminalSessionActivityClient;
+        if (mTermuxSessionActivityClient != null)
+            return mTermuxSessionActivityClient.asTerminalSessionClient();
         else
             return mTermuxTerminalSessionServiceClient;
     }
 
     /** This should be called when {@link TermuxActivity#onServiceConnected} is called to set the
-     * {@link TermuxService#mTermuxTerminalSessionActivityClient} variable and update the {@link TerminalSession}
+     * {@link TermuxService#mTermuxSessionActivityClient} variable and update the {@link TerminalSession}
      * and {@link TerminalEmulator} clients in case they were passed {@link TermuxTerminalSessionServiceClient}
      * earlier.
      *
      * @param termuxTerminalSessionActivityClient The {@link TermuxTerminalSessionActivityClient} object that fully
      * implements the {@link TerminalSessionClient} interface.
      */
-    public synchronized void setTermuxTerminalSessionClient(TermuxTerminalSessionActivityClient termuxTerminalSessionActivityClient) {
-        mTermuxTerminalSessionActivityClient = termuxTerminalSessionActivityClient;
+    public synchronized void setTermuxTerminalSessionClient(TermuxSessionActivityClient termuxSessionActivityClient) {
+        mTermuxSessionActivityClient = termuxSessionActivityClient;
 
         for (int i = 0; i < mShellManager.mTermuxSessions.size(); i++)
-            mShellManager.mTermuxSessions.get(i).getTerminalSession().updateTerminalSessionClient(mTermuxTerminalSessionActivityClient);
+            mShellManager.mTermuxSessions.get(i).getTerminalSession().updateTerminalSessionClient(mTermuxSessionActivityClient.asTerminalSessionClient());
     }
 
     /** This should be called when {@link TermuxActivity} has been destroyed and in {@link #onUnbind(Intent)}
@@ -772,7 +777,7 @@ public final class TermuxService extends Service implements AppShell.AppShellCli
         for (int i = 0; i < mShellManager.mTermuxSessions.size(); i++)
             mShellManager.mTermuxSessions.get(i).getTerminalSession().updateTerminalSessionClient(mTermuxTerminalSessionServiceClient);
 
-        mTermuxTerminalSessionActivityClient = null;
+        mTermuxSessionActivityClient = null;
     }
 
 
@@ -783,7 +788,9 @@ public final class TermuxService extends Service implements AppShell.AppShellCli
         Resources res = getResources();
 
         // Set pending intent to be launched when notification is clicked
-        Intent notificationIntent = TermuxActivity.newInstance(this);
+        Intent notificationIntent = new Intent();
+        notificationIntent.setComponent(new ComponentName(this, "com.termux.app.TermuxActivity"));
+        notificationIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         PendingIntent contentIntent = PendingIntent.getActivity(this, 0, notificationIntent, 0);
 
 

@@ -3,6 +3,17 @@ name: Perf (terminal emulator, x86_64 + aarch64)
 on:
   pull_request:
     branches: [ master ]
+    paths:
+      - 'terminal-emulator/**'
+      - 'terminal-view/**'
+      - 'buildSrc/**'
+      - 'scripts/**'
+      - '*.gradle'
+      - '*.properties'
+      - 'gradle/**'
+      - 'gradlew'
+      - 'gradlew.bat'
+      - '.github/workflows/perf.yml'
   workflow_dispatch:
 
 env:
@@ -69,6 +80,11 @@ jobs:
 
       - name: Extract timing from JUnit XML reports
         run: python3 .github/workflows/perf_extract_timing.py ${{ matrix.arch }} perf-timing-${{ matrix.arch }}.txt
+
+      # Fail the job on structural perf regressions (e.g. reintroducing the
+      # O(columns^2) row scans or per-code-point width binary search).
+      - name: Check tracked benchmark budgets
+        run: python3 .github/workflows/perf_check_thresholds.py perf-timing-${{ matrix.arch }}.txt
 
       - name: Upload timing artifact
         uses: actions/upload-artifact@v6

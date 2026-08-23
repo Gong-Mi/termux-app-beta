@@ -6,7 +6,6 @@ import android.content.ActivityNotFoundException;
 import android.content.BroadcastReceiver;
 import android.content.ComponentName;
 import android.content.Context;
-import android.content.pm.ApplicationInfo;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.ServiceConnection;
@@ -27,6 +26,7 @@ import android.widget.ListView;
 import android.widget.RelativeLayout;
 import android.widget.Toast;
 
+import com.termux.BuildConfig;
 import com.termux.R;
 import com.termux.app.api.file.FileReceiverActivity;
 import com.termux.app.terminal.TermuxActivityRootView;
@@ -36,7 +36,7 @@ import com.termux.shared.activities.ReportActivity;
 import com.termux.shared.activity.ActivityUtils;
 import com.termux.shared.activity.media.AppCompatActivityUtils;
 import com.termux.shared.data.IntentUtils;
-import com.termux.shared.android.PermissionUtils;
+import com.termux.app.permission.StoragePermissionUiCoordinator;
 import com.termux.shared.data.DataUtils;
 import com.termux.shared.termux.TermuxConstants;
 import com.termux.shared.termux.TermuxConstants.TERMUX_APP.TERMUX_ACTIVITY;
@@ -243,8 +243,9 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
 
         setTermuxTerminalViewAndClients();
 
-        if ((getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0
-            && getIntent().getBooleanExtra("com.termux.DEBUG_FRAME_INFO", false)) {
+        // This is a compile-time variant boundary: the debug implementation is present only
+        // in debug builds, while release builds cannot enable frame diagnostics through an Intent.
+        if (BuildConfig.DEBUG) {
             TerminalView.setDebugFrameInfoEnabled(true);
         }
 
@@ -797,29 +798,26 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
 
 
     /**
-     * For processes to access primary external storage (/sdcard, /storage/emulated/0, ~/storage/shared),
-     * termux needs to be granted legacy WRITE_EXTERNAL_STORAGE or MANAGE_EXTERNAL_STORAGE permissions
-     * if targeting targetSdkVersion 30 (android 11) and running on sdk 30 (android 11) and higher.
+     * Request access to primary external storage through the permission UI
+     * capability selected by StoragePermissionUiCoordinator.
      */
     public void requestStoragePermission(boolean isPermissionCallback) {
         new Thread() {
             @Override
             public void run() {
-                // Do not ask for permission again
-                int requestCode = isPermissionCallback ? -1 : PermissionUtils.REQUEST_GRANT_STORAGE_PERMISSION;
+                int requestCode = isPermissionCallback ? -1
+                    : StoragePermissionUiCoordinator.requestCodeFor(true);
 
-                // If permission is granted, then also setup storage symlinks.
-                if(PermissionUtils.checkAndRequestLegacyOrManageExternalStoragePermission(
+                if (StoragePermissionUiCoordinator.checkAndRequest(
                     TermuxActivity.this, requestCode, true, !isPermissionCallback)) {
                     if (isPermissionCallback)
                         Logger.logInfoAndShowToast(TermuxActivity.this, LOG_TAG,
-                            getString(com.termux.shared.R.string.msg_storage_permission_granted_on_request));
+                            getString(com.termux.supportui.R.string.msg_storage_permission_granted_on_request));
 
                     TermuxInstaller.setupStorageSymlinks(TermuxActivity.this);
-                } else {
-                    if (isPermissionCallback)
-                        Logger.logInfoAndShowToast(TermuxActivity.this, LOG_TAG,
-                            getString(com.termux.shared.R.string.msg_storage_permission_not_granted_on_request));
+                } else if (isPermissionCallback) {
+                    Logger.logInfoAndShowToast(TermuxActivity.this, LOG_TAG,
+                        getString(com.termux.supportui.R.string.msg_storage_permission_not_granted_on_request));
                 }
             }
         }.start();
@@ -828,19 +826,21 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
     @Override
     protected void onActivityResult(int requestCode, int resultCode, @Nullable Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
-        Logger.logVerbose(LOG_TAG, "onActivityResult: requestCode: " + requestCode + ", resultCode: "  + resultCode + ", data: "  + IntentUtils.getIntentString(data));
-        if (requestCode == PermissionUtils.REQUEST_GRANT_STORAGE_PERMISSION) {
+        Logger.logVerbose(LOG_TAG, "onActivityResult: requestCode: " + requestCode + ", resultCode: "
+            + resultCode + ", data: " + IntentUtils.getIntentString(data));
+        if (requestCode == StoragePermissionUiCoordinator.REQUEST_MANAGE_EXTERNAL_STORAGE_PERMISSION)
             requestStoragePermission(true);
-        }
     }
 
     @Override
-    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
+    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions,
+                                           @NonNull int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
-        Logger.logVerbose(LOG_TAG, "onRequestPermissionsResult: requestCode: " + requestCode + ", permissions: "  + Arrays.toString(permissions) + ", grantResults: "  + Arrays.toString(grantResults));
-        if (requestCode == PermissionUtils.REQUEST_GRANT_STORAGE_PERMISSION) {
+        Logger.logVerbose(LOG_TAG, "onRequestPermissionsResult: requestCode: " + requestCode
+            + ", permissions: " + Arrays.toString(permissions) + ", grantResults: "
+            + Arrays.toString(grantResults));
+        if (requestCode == StoragePermissionUiCoordinator.REQUEST_LEGACY_STORAGE_PERMISSION)
             requestStoragePermission(true);
-        }
     }
 
 

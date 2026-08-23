@@ -8,8 +8,12 @@ name: Pixel-loop prebuilt ELF integrity
 on:
   push:
     branches: [ master ]
+    paths:
+      - '.github/workflows/pixel-loop-prebuilt.yml'
   pull_request:
     branches: [ master ]
+    paths:
+      - '.github/workflows/pixel-loop-prebuilt.yml'
   workflow_dispatch:
 
 env:
@@ -25,14 +29,14 @@ jobs:
       matrix:
         include:
           - asset: pixel-loop
-            sha256: cfc4af475cc5ba8ebefd358d20563d9ed62f6b0cc3827c8c394631f7be8d1073
-            size: 1112712
+            sha256: 3c9620a8e339df860fa34772e08fb64840781a21bde35a2576b7fa4413476387
+            size: 1137624
             abi_name: arm64
             file_grep: 'ARM aarch64'
             abi_contract: aarch64-linux-android
           - asset: pixel-loop-x86_64
-            sha256: 611573282b5a44e9631975fa95bb34491ed8f27c3d235002a837a52d9598e43e
-            size: 1084200
+            sha256: 2c4c6bb62495d11933fb78e266f61dbeb6a8aaa59f9028ab30566d486ac449f8
+            size: 1106160
             abi_name: x86_64
             file_grep: 'x86-64'
             abi_contract: x86_64-linux-android

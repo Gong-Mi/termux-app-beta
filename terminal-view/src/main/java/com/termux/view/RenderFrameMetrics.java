@@ -71,9 +71,61 @@ public final class RenderFrameMetrics {
         return mLastAckedScreenRevision;
     }
 
-    /** Invariant check: published >= drawn + dropped, and acked <= lastPublishedRev. */
+    /**
+     * Return an atomic snapshot of all current counters under a single lock.
+     *
+     * <p>This is intended for diagnostics and tests. Reading individual getters
+     * back-to-back is unsafe under concurrency: the mailbox may publish and/or
+     * ack a frame between reads, producing transient states such as
+     * {@code lastAckedScreenRevision > lastPublishedScreenRevision}.</p>
+     */
+    public synchronized Snapshot snapshot() {
+        return new Snapshot(
+                mPublishedFrameCount,
+                mLastPublishedScreenRevision,
+                mDrawnFrameCount,
+                mLastDrawnScreenRevision,
+                mDroppedFrameCount,
+                mCoalescedRevisionCount,
+                mLastAckedScreenRevision);
+    }
+
+    /** Immutable snapshot of {@link RenderFrameMetrics} counters. */
+    public static final class Snapshot {
+        public final long publishedFrameCount;
+        public final long lastPublishedScreenRevision;
+        public final long drawnFrameCount;
+        public final long lastDrawnScreenRevision;
+        public final long droppedFrameCount;
+        public final long coalescedRevisionCount;
+        public final long lastAckedScreenRevision;
+
+        Snapshot(long publishedFrameCount, long lastPublishedScreenRevision,
+                 long drawnFrameCount, long lastDrawnScreenRevision,
+                 long droppedFrameCount, long coalescedRevisionCount,
+                 long lastAckedScreenRevision) {
+            this.publishedFrameCount = publishedFrameCount;
+            this.lastPublishedScreenRevision = lastPublishedScreenRevision;
+            this.drawnFrameCount = drawnFrameCount;
+            this.lastDrawnScreenRevision = lastDrawnScreenRevision;
+            this.droppedFrameCount = droppedFrameCount;
+            this.coalescedRevisionCount = coalescedRevisionCount;
+            this.lastAckedScreenRevision = lastAckedScreenRevision;
+        }
+    }
+
+    /**
+     * Invariant check for cumulative lifecycle metrics.
+     *
+     * <p>Drawn is a render-attempt count, so it may exceed published when a frame
+     * is redrawn. Dropped also includes mailbox replacement and renderer failures;
+     * it is therefore not an exclusive partition with drawn.</p>
+     */
     public synchronized boolean isConsistent() {
-        return mPublishedFrameCount >= mDrawnFrameCount + mDroppedFrameCount
+        return mPublishedFrameCount >= 0
+            && mDrawnFrameCount >= 0
+            && mDroppedFrameCount >= 0
+            && mCoalescedRevisionCount >= 0
             && mLastAckedScreenRevision <= mLastPublishedScreenRevision;
     }
 }

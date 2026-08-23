@@ -1,7 +1,5 @@
 package com.termux.shared.interact;
 
-import android.Manifest;
-import android.app.Activity;
 import android.content.ActivityNotFoundException;
 import android.content.ClipData;
 import android.content.ClipboardManager;
@@ -198,18 +196,9 @@ public class ShareUtils {
         // If path is under primary external storage directory, then check for missing permissions.
         if ((FileUtils.isPathInDirPath(filePath, Environment.getExternalStorageDirectory().getAbsolutePath(), true) ||
             FileUtils.isPathInDirPath(filePath, "/sdcard", true)) &&
-            !PermissionUtils.checkPermission(context, Manifest.permission.WRITE_EXTERNAL_STORAGE)) {
-            Logger.logErrorAndShowToast(context, LOG_TAG, context.getString(R.string.msg_storage_permission_not_granted));
-
-            if (storagePermissionRequestCode >= 0 && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                if (context instanceof AppCompatActivity)
-                    PermissionUtils.requestPermission(((AppCompatActivity) context), Manifest.permission.WRITE_EXTERNAL_STORAGE, storagePermissionRequestCode);
-                else if (context instanceof Activity)
-                    PermissionUtils.requestPermission(((Activity) context), Manifest.permission.WRITE_EXTERNAL_STORAGE, storagePermissionRequestCode);
-            }
-
-            return;
-        }
+            !PermissionUtils.checkAndRequestLegacyOrManageExternalStoragePermission(
+                context, storagePermissionRequestCode,
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU, true)) return;
 
         Error error = FileUtils.writeTextToFile(label, filePath,
             Charset.defaultCharset(), text, false);

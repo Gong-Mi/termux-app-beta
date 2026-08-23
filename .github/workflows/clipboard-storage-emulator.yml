@@ -1,0 +1,136 @@
+name: Clipboard and storage emulator regression
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ refactor/parser-worker-mailbox ]
+    paths:
+      - 'app/**'
+      - 'support_ui/**'
+      - 'termux-shared/**'
+      - 'terminal-view/**'
+      - 'build.gradle'
+      - '*.gradle'
+      - 'gradle/**'
+      - '.github/workflows/clipboard-storage-emulator.yml'
+
+env:
+  JAVA_VERSION: 21
+  BUNDLETOOL_VERSION: 1.18.2
+
+jobs:
+  instrumentation:
+    name: API ${{ matrix.api }} clipboard/storage instrumentation
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        api: [32, 36]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up JDK
+        uses: actions/setup-java@v5
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: temurin
+          cache: gradle
+
+      - name: Install SDK and emulator
+        run: |
+          SDK="$ANDROID_HOME"
+          yes | "$SDK/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
+          "$SDK/cmdline-tools/latest/bin/sdkmanager" \
+            "platforms;android-${{ matrix.api }}" \
+            "build-tools;34.0.0" "platform-tools" "emulator" \
+            "system-images;android-${{ matrix.api }};google_apis;x86_64" >/dev/null
+          echo "$SDK/platform-tools" >> "$GITHUB_PATH"
+          echo "$SDK/emulator" >> "$GITHUB_PATH"
+
+      - name: Enable KVM acceleration
+        run: |
+          test -e /dev/kvm
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          ls -l /dev/kvm
+
+      - name: Build app and instrumentation APK
+        env:
+          KS_PASSWORD: xrj45yWGLbsO7W0v
+        run: |
+          ./gradlew bundleDebug assembleDebugAndroidTest --no-daemon
+          curl --fail --location --retry 3 \
+            -o bundletool.jar \
+            "https://github.com/google/bundletool/releases/download/${BUNDLETOOL_VERSION}/bundletool-all-${BUNDLETOOL_VERSION}.jar"
+          java -jar bundletool.jar build-apks \
+            --bundle=app/build/outputs/bundle/debug/app-debug.aab \
+            --output=termux-debug-universal.apks \
+            --mode=universal \
+            --ks=app/testkey_untrusted.jks \
+            --ks-key-alias=alias \
+            --ks-pass=pass:${KS_PASSWORD} \
+            --key-pass=pass:${KS_PASSWORD}
+          mkdir -p universal-apk
+          unzip -o termux-debug-universal.apks universal.apk -d universal-apk
+          test -s app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+
+      - name: Create and boot emulator
+        env:
+          ANDROID_AVD_HOME: /home/runner/.android/avd
+        run: |
+          mkdir -p "$ANDROID_AVD_HOME"
+          echo no | "$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager" create avd \
+            -n permission-test --package "system-images;android-${{ matrix.api }};google_apis;x86_64" \
+            --device pixel_5
+          "$ANDROID_HOME/emulator/emulator" -avd permission-test \
+            -gpu swiftshader_indirect -no-window -no-audio -no-boot-anim \
+            -no-snapshot -wipe-data -memory 3072 -cores 3 -accel on \
+            >/tmp/permission-emulator.log 2>&1 &
+          for _ in $(seq 1 60); do
+            sleep 5
+            if [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = 1 ]; then break; fi
+            if ! pgrep -f 'emulator.*-avd permission-test' >/dev/null; then
+              echo EMULATOR_PROCESS_DIED
+              tail -80 /tmp/permission-emulator.log
+              exit 43
+            fi
+          done
+          if [ "$(adb shell getprop sys.boot_completed | tr -d '\r')" != 1 ]; then
+            echo BOOT_TIMEOUT
+            tail -80 /tmp/permission-emulator.log
+            adb devices
+            exit 44
+          fi
+          adb wait-for-device
+
+      - name: Install and grant capability under test
+        run: |
+          adb install -r universal-apk/universal.apk
+          adb install -r app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+          adb shell appops set com.termux MANAGE_EXTERNAL_STORAGE allow || true
+          adb shell pm grant com.termux android.permission.READ_EXTERNAL_STORAGE || true
+          adb shell pm grant com.termux android.permission.WRITE_EXTERNAL_STORAGE || true
+
+      - name: Run clipboard and storage tests
+        run: |
+          adb shell am force-stop com.termux
+          adb shell am start -W -n com.termux/.app.TermuxActivity
+          sleep 3
+          adb shell am instrument -w -r \
+            -e class com.termux.app.ClipboardAndStorageInstrumentedTest \
+            com.termux.test/androidx.test.runner.AndroidJUnitRunner \
+            | tee instrumentation-api-${{ matrix.api }}.txt
+          grep -q 'OK (4 tests)' instrumentation-api-${{ matrix.api }}.txt
+
+      - name: Upload instrumentation evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: clipboard-storage-api-${{ matrix.api }}
+          path: |
+            instrumentation-api-${{ matrix.api }}.txt
+            /tmp/permission-emulator.log
