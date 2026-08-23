@@ -800,9 +800,12 @@ public class TermuxTerminalViewClient extends TermuxTerminalViewClientBase {
         if (session == null) return;
         if (!session.isRunning()) return;
 
-        String text = ShareUtils.getTextStringFromClipboardIfSet(mActivity, true);
-        if (text != null)
-            session.paste(text);
+        // Route through the session's client so that the same ClipboardSessionResolver
+        // and clipboard-reading logic is used for keyboard/context-menu paste as for
+        // the floating action-bar paste. Previously doPaste() read the clipboard and
+        // called session.paste() directly, bypassing the resolver and the activity
+        // client's onPasteTextFromClipboard() hook.
+        session.onPasteTextFromClipboard();
     }
 
 }
