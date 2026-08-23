@@ -343,7 +343,7 @@ public final class TerminalView extends View {
                 if (!mSessionGate.isCurrent(sessionGeneration)) return;
                 boolean hadPending = mailbox.peek() != null;
                 mailbox.publish(frame);
-                if (!hadPending) mFrameInvalidationGate.request(this::invalidate);
+                if (!hadPending) mFrameInvalidationGate.request(TerminalView.this::invalidate);
             }
 
             @Override
