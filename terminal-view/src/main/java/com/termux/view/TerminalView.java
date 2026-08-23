@@ -1097,7 +1097,7 @@ public final class TerminalView extends View {
         int newColumns = Math.max(4, (int) (viewWidth / mRenderer.mFontWidth));
         int newRows = Math.max(4, (viewHeight - mRenderer.mFontLineSpacingAndAscent) / mRenderer.mFontLineSpacing);
 
-        if (mTermSession.getEmulator() == null || (newColumns != mTermSession.getScreenColumns() || newRows != mTermSession.getScreenRows())) {
+        if (!mTermSession.isEmulatorInitialized() || (newColumns != mTermSession.getScreenColumns() || newRows != mTermSession.getScreenRows())) {
             mTermSession.updateSize(newColumns, newRows, (int) mRenderer.getFontWidth(), mRenderer.getFontLineSpacing());
             mClient.onEmulatorSet();
 

@@ -225,6 +225,11 @@ public final class TerminalSession extends TerminalOutput {
         }
     }
 
+    /** Whether the terminal emulator has been initialized by {@link #updateSize(int, int, int, int)}. */
+    public boolean isEmulatorInitialized() {
+        return mEmulator != null;
+    }
+
     /** The terminal title as set through escape sequences or null if none set. */
     public String getTitle() {
         return (mEmulator == null) ? null : mEmulator.getTitle();
