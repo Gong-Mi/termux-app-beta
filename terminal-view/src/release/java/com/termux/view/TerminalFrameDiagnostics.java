@@ -11,7 +11,8 @@ final class TerminalFrameDiagnostics {
         // Intentionally empty in release builds.
     }
 
-    static void logIfEnabled(TerminalSession session, RenderFrameMetrics metrics, TerminalRenderFrame frame, int skippedRows) {
+    static void logIfEnabled(TerminalSession session, RenderFrameMetrics metrics, TerminalRenderFrame frame,
+                             TerminalRenderStepMetrics.Snapshot renderSteps) {
         // Intentionally empty in release builds.
     }
 }
