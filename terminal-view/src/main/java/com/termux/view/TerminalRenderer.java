@@ -32,6 +32,8 @@ public final class TerminalRenderer {
     final int mFontLineSpacingAndAscent;
 
     private final float[] asciiMeasures = new float[127];
+    /** Per-render step counters for diagnostics (no behavioral effect). */
+    private final TerminalRenderStepMetrics mRenderSteps = new TerminalRenderStepMetrics();
 
     /**
      * Lazily populated BMP (U+0000..U+FFFF) single-code-point advances.
@@ -54,12 +56,18 @@ public final class TerminalRenderer {
         return lastSkippedRowCount;
     }
 
+    /** Drain per-render step counters accumulated since the last call. */
+    public TerminalRenderStepMetrics.Snapshot getAndResetRenderStepDelta() {
+        return mRenderSteps.getAndResetDelta();
+    }
+
     /**
      * Measure a single code point, caching the result for the life of this renderer.
      * BMP code points hit {@link #bmpMeasures}; supplementary code points
      * (surrogate pairs) are measured directly since they cannot alias the table.
      */
     private float measureCodePoint(int codePoint, char[] line, int charIndex, int charsForCodePoint) {
+        mRenderSteps.recordGlyphMeasureCall();
         if (codePoint < bmpMeasures.length) {
             float cached = bmpMeasures[codePoint];
             if (cached != 0f) return cached;
@@ -142,8 +150,10 @@ public final class TerminalRenderer {
                 // projections, not buffer content, so they always redraw - including
                 // rows that held the cursor/selection in the previous frame.
                 skippedRows++;
+                mRenderSteps.recordSkippedRow();
                 continue;
             }
+            mRenderSteps.recordVisitedRow();
 
             final int cursorX = (row == cursorRow && cursorVisible) ? cursorCol : -1;
             int selx1 = -1, selx2 = -1;
@@ -167,11 +177,13 @@ public final class TerminalRenderer {
             float measuredWidthForRun = 0.f;
 
             for (int column = 0; column < columns; ) {
+                mRenderSteps.recordVisitedCell();
                 final char charAtIndex = line[currentCharIndex];
                 final boolean charIsHighsurrogate = Character.isHighSurrogate(charAtIndex);
                 final int charsForCodePoint = charIsHighsurrogate ? 2 : 1;
                 final int codePoint = charIsHighsurrogate ? Character.toCodePoint(charAtIndex, line[currentCharIndex + 1]) : charAtIndex;
                 final int codePointWcWidth = WcWidth.width(codePoint);
+                mRenderSteps.recordWcWidthCall();
                 final boolean insideCursor = (cursorX == column || (codePointWcWidth == 2 && cursorX == column + 1));
                 final boolean insideSelection = column >= selx1 && column <= selx2;
                 final long style = lineObject.getStyle(column);
@@ -248,6 +260,7 @@ public final class TerminalRenderer {
     private void drawTextRun(Canvas canvas, char[] text, int[] palette, float y, int startColumn, int runWidthColumns,
                              int startCharIndex, int runWidthChars, float mes, int cursor, int cursorStyle,
                              long textStyle, boolean reverseVideo) {
+        mRenderSteps.recordDrawTextRunCall();
         int foreColor = TextStyle.decodeForeColor(textStyle);
         final int effect = TextStyle.decodeEffect(textStyle);
         int backColor = TextStyle.decodeBackColor(textStyle);
@@ -292,6 +305,7 @@ public final class TerminalRenderer {
             // Only draw non-default background.
             mTextPaint.setColor(backColor);
             canvas.drawRect(left, y - mFontLineSpacingAndAscent + mFontAscent, right, y, mTextPaint);
+            mRenderSteps.recordDrawRectCall();
         }
 
         if (cursor != 0) {
@@ -300,6 +314,7 @@ public final class TerminalRenderer {
             if (cursorStyle == TerminalEmulator.TERMINAL_CURSOR_STYLE_UNDERLINE) cursorHeight /= 4.;
             else if (cursorStyle == TerminalEmulator.TERMINAL_CURSOR_STYLE_BAR) right -= ((right - left) * 3) / 4.;
             canvas.drawRect(left, y - cursorHeight, right, y, mTextPaint);
+            mRenderSteps.recordDrawRectCall();
         }
 
         if ((effect & TextStyle.CHARACTER_ATTRIBUTE_INVISIBLE) == 0) {

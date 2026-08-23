@@ -1174,7 +1174,8 @@ public final class TerminalView extends View {
                 } finally {
                     Trace.endSection();
                 }
-                TerminalFrameDiagnostics.logIfEnabled(mTermSession, mFrameMetrics, frame, mRenderer.getLastSkippedRowCount());
+                TerminalFrameDiagnostics.logIfEnabled(mTermSession, mFrameMetrics, frame,
+                    mRenderer.getAndResetRenderStepDelta());
 
                 // render the text selection handles
                 renderTextSelection();

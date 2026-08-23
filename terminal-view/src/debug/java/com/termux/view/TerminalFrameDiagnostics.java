@@ -16,7 +16,8 @@ final class TerminalFrameDiagnostics {
         sEnabled = enabled;
     }
 
-    static void logIfEnabled(TerminalSession session, RenderFrameMetrics metrics, TerminalRenderFrame frame, int skippedRows) {
+    static void logIfEnabled(TerminalSession session, RenderFrameMetrics metrics, TerminalRenderFrame frame,
+                             TerminalRenderStepMetrics.Snapshot renderSteps) {
         if (!sEnabled) return;
 
         TerminalParserMetrics.Snapshot parser = session.getParserMetricsSnapshot();
@@ -40,7 +41,10 @@ final class TerminalFrameDiagnostics {
             + " plainEmitted=" + parser.stepPlainEmitted + " setCharCalls=" + parser.stepSetCharCalls
             + " scrollOps=" + parser.stepScrollOperations + " sgrSequences=" + parser.stepSgrSequences
             + " mutations=" + frame.dirtyMutationCount
-            + " visible=" + (frame.endRow - frame.topRow) + " redrawWorthies=" + dirtyInView + " skipped=" + skippedRows
+            + " renderRows=" + renderSteps.visitedRows + " renderCells=" + renderSteps.visitedCells
+            + " wcwidthCalls=" + renderSteps.wcWidthCalls + " glyphMeasureCalls=" + renderSteps.glyphMeasureCalls
+            + " drawTextRunCalls=" + renderSteps.drawTextRunCalls + " drawRectCalls=" + renderSteps.drawRectCalls
+            + " visible=" + (frame.endRow - frame.topRow) + " redrawWorthies=" + dirtyInView + " skipped=" + renderSteps.skippedRows
             + " cursor=" + (frame.cursorVisible ? frame.cursorRow : "hidden")
             + " sel=" + frame.selectionY1 + ".." + frame.selectionY2);
     }
