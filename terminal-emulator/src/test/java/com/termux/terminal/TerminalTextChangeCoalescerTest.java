@@ -1,87 +1,86 @@
 package com.termux.terminal;
 
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
+
 import junit.framework.TestCase;
 
-import java.util.ArrayDeque;
-import java.util.Queue;
-
+/**
+ * Unit tests for {@link TerminalTextChangeCoalescer}.
+ */
 public class TerminalTextChangeCoalescerTest extends TestCase {
-    private static final class QueuePoster implements TerminalTextChangeCoalescer.Poster {
-        final Queue<Runnable> queue = new ArrayDeque<>();
-        boolean accept = true;
+
+    /** A poster that records posted runnables but does not run them until told. */
+    private static class RecordingPoster implements TerminalTextChangeCoalescer.Poster {
+        final AtomicReference<Runnable> pending = new AtomicReference<>();
+        final AtomicInteger postCount = new AtomicInteger(0);
 
         @Override
         public boolean post(Runnable runnable) {
-            if (!accept) return false;
-            queue.add(runnable);
+            pending.set(runnable);
+            postCount.incrementAndGet();
             return true;
         }
 
-        void runOne() {
-            assertFalse("Expected a queued runnable", queue.isEmpty());
-            queue.remove().run();
+        void runPending() {
+            Runnable r = pending.getAndSet(null);
+            if (r != null) r.run();
         }
     }
 
-    public void testRepeatedNotificationsQueueOneRunnable() {
-        QueuePoster poster = new QueuePoster();
+    public void testMultipleNotificationsCollapseToOnePost() {
+        RecordingPoster poster = new RecordingPoster();
         TerminalTextChangeCoalescer coalescer = new TerminalTextChangeCoalescer(poster);
-        int[] callbacks = {0};
+        AtomicInteger callbackCount = new AtomicInteger(0);
 
-        for (int i = 0; i < 1000; i++) {
-            coalescer.notify(() -> callbacks[0]++);
-        }
+        coalescer.notify(callbackCount::incrementAndGet);
+        coalescer.notify(callbackCount::incrementAndGet);
+        coalescer.notify(callbackCount::incrementAndGet);
 
-        assertEquals("Repeated notifications must share one posted runnable", 1, poster.queue.size());
-        assertEquals(0, callbacks[0]);
-        poster.runOne();
-        assertEquals(1, callbacks[0]);
-        assertTrue(poster.queue.isEmpty());
+        assertEquals("Only one runnable should be posted", 1, poster.postCount.get());
+        assertEquals("Callback must not run until posted runnable executes", 0, callbackCount.get());
+
+        poster.runPending();
+        assertEquals("Exactly one callback should execute after one run", 1, callbackCount.get());
+        assertEquals("No extra posts should appear", 1, poster.postCount.get());
     }
 
-    public void testNotificationCanQueueAgainAfterRunnableRuns() {
-        QueuePoster poster = new QueuePoster();
+    public void testNotificationAfterRunPostsAgain() {
+        RecordingPoster poster = new RecordingPoster();
         TerminalTextChangeCoalescer coalescer = new TerminalTextChangeCoalescer(poster);
-        int[] callbacks = {0};
+        AtomicInteger callbackCount = new AtomicInteger(0);
 
-        coalescer.notify(() -> callbacks[0]++);
-        poster.runOne();
-        coalescer.notify(() -> callbacks[0]++);
+        coalescer.notify(callbackCount::incrementAndGet);
+        poster.runPending();
+        assertEquals(1, callbackCount.get());
 
-        assertEquals(1, poster.queue.size());
-        poster.runOne();
-        assertEquals(2, callbacks[0]);
+        coalescer.notify(callbackCount::incrementAndGet);
+        coalescer.notify(callbackCount::incrementAndGet);
+        assertEquals("Second burst should collapse to one new post", 2, poster.postCount.get());
+
+        poster.runPending();
+        assertEquals("Only one callback should execute for the second burst", 2, callbackCount.get());
     }
 
-    public void testNotificationCanQueueAgainDuringCallback() {
-        QueuePoster poster = new QueuePoster();
+    public void testPostFailureReleasesPendingSlot() {
+        RecordingPoster poster = new RecordingPoster() {
+            int calls;
+            @Override
+            public boolean post(Runnable runnable) {
+                calls++;
+                // First call fails, second succeeds.
+                if (calls == 1) return false;
+                return super.post(runnable);
+            }
+        };
         TerminalTextChangeCoalescer coalescer = new TerminalTextChangeCoalescer(poster);
-        int[] callbacks = {0};
+        AtomicInteger callbackCount = new AtomicInteger(0);
 
-        coalescer.notify(() -> {
-            callbacks[0]++;
-            coalescer.notify(() -> callbacks[0]++);
-        });
-        poster.runOne();
+        coalescer.notify(callbackCount::incrementAndGet);
+        assertEquals("Failed post should not leave the slot locked", 0, callbackCount.get());
 
-        assertEquals("A notification raised by the callback must not lose its runnable",
-                1, poster.queue.size());
-        poster.runOne();
-        assertEquals(2, callbacks[0]);
-    }
-
-    public void testRejectedPostDoesNotPoisonGate() {
-        QueuePoster poster = new QueuePoster();
-        TerminalTextChangeCoalescer coalescer = new TerminalTextChangeCoalescer(poster);
-        int[] callbacks = {0};
-
-        poster.accept = false;
-        coalescer.notify(() -> callbacks[0]++);
-        assertEquals(0, poster.queue.size());
-
-        poster.accept = true;
-        coalescer.notify(() -> callbacks[0]++);
-        poster.runOne();
-        assertEquals(1, callbacks[0]);
+        coalescer.notify(callbackCount::incrementAndGet);
+        poster.runPending();
+        assertEquals(1, callbackCount.get());
     }
 }
