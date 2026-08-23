@@ -100,13 +100,13 @@ jobs:
     timeout-minutes: 45
     steps:
       - name: Download x86_64 timing
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@v6
         with:
           name: perf-timing-x86_64
           path: timings/x86_64
 
       - name: Download aarch64 timing
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@v6
         with:
           name: perf-timing-aarch64
           path: timings/aarch64
