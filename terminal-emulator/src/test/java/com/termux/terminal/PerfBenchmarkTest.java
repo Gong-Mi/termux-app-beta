@@ -163,6 +163,34 @@ public class PerfBenchmarkTest extends TerminalTestCase {
         feedTimed(buildPayload("\033[31mX\033[0m\033[32mY\033[0m", 2 * MB));
     }
 
+    /**
+     * Truecolor SGR storm shaped like full-screen RGB producers (pixel-loop):
+     * per cell a 38;2;r;g;b + 48;2;r;g;b pair and one UTF-8 block glyph, then
+     * a reset + CR LF per row. This is the dominant input shape on the target
+     * device stress runs.
+     */
+    public void testPerfTruecolorSgrBurst() {
+        withTerminalSized(80, 24);
+        StringBuilder sb = new StringBuilder(64 * 1024);
+        for (int y = 0; y < 24; y++) {
+            for (int x = 0; x < 80; x++) {
+                int r = (x * 37 + y * 13) % 256;
+                int g = (x * 11 + y * 71) % 256;
+                int b = (x * 53 + y * 3) % 256;
+                sb.append("\033[38;2;").append(r).append(';').append(g).append(';').append(b)
+                    .append("m\033[48;2;").append(255 - r).append(';').append(255 - g).append(';').append(255 - b)
+                    .append("m\u2580");
+            }
+            sb.append("\033[0m\r\n");
+        }
+        int bytes = sb.toString().getBytes(StandardCharsets.UTF_8).length;
+        int repeats = Math.max(1, (2 * MB) / bytes);
+        StringBuilder whole = new StringBuilder(bytes * repeats);
+        for (int i = 0; i < repeats; i++) whole.append(sb);
+        byte[] payload = whole.toString().getBytes(StandardCharsets.UTF_8);
+        feedTimed(payload);
+    }
+
     /** End-to-end parser/snapshot/latest-only mailbox benchmark on ASCII input. */
     public void testPerfWorkerSnapshotMailboxAsciiBurst() throws Exception {
         feedWorkerTimed(buildPayload("a", 4 * MB));

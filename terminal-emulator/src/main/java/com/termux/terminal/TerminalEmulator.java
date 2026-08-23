@@ -1571,6 +1571,16 @@ public final class TerminalEmulator {
 
     /** Following a CSI - Control Sequence Introducer, "\033[". {@link #ESC_CSI}. */
     private void doCsi(int b) {
+        // Fast path for CSI parameter bytes (digits, ';', ':'). Full-screen
+        // truecolor producers (pixel-loop) emit these for the vast majority of
+        // their input; routing them straight to parseArg avoids evaluating the
+        // large final-byte switch below for every digit. Semantics are
+        // identical: the original default case called exactly parseArg(b), and
+        // doCsi contains no cases for '0'..'9', ';' or ':'.
+        if ((b >= '0' && b <= '9') || b == ';' || b == ':') {
+            parseArg(b);
+            return;
+        }
         switch (b) {
             case '!':
                 continueSequence(ESC_CSI_EXCLAMATION);
