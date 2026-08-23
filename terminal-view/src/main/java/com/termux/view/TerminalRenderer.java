@@ -261,6 +261,7 @@ public final class TerminalRenderer {
                              int startCharIndex, int runWidthChars, float mes, int cursor, int cursorStyle,
                              long textStyle, boolean reverseVideo) {
         mRenderSteps.recordDrawTextRunCall();
+        long t0 = System.nanoTime();
         int foreColor = TextStyle.decodeForeColor(textStyle);
         final int effect = TextStyle.decodeEffect(textStyle);
         int backColor = TextStyle.decodeBackColor(textStyle);
@@ -301,6 +302,10 @@ public final class TerminalRenderer {
             savedMatrix = true;
         }
 
+        // Phase 1: paint setup (foreColor/backColor/effect → now)
+        long t1 = System.nanoTime();
+        mRenderSteps.recordPaintSetupNanos(t1 - t0);
+
         if (backColor != palette[TextStyle.COLOR_INDEX_BACKGROUND]) {
             // Only draw non-default background.
             mTextPaint.setColor(backColor);
@@ -316,6 +321,10 @@ public final class TerminalRenderer {
             canvas.drawRect(left, y - cursorHeight, right, y, mTextPaint);
             mRenderSteps.recordDrawRectCall();
         }
+
+        // Phase 2: drawRect calls complete
+        long t2 = System.nanoTime();
+        mRenderSteps.recordDrawRectNanos(t2 - t1);
 
         if ((effect & TextStyle.CHARACTER_ATTRIBUTE_INVISIBLE) == 0) {
             if (dim) {
@@ -341,6 +350,7 @@ public final class TerminalRenderer {
         }
 
         if (savedMatrix) canvas.restore();
+        mRenderSteps.recordDrawTextNanos(System.nanoTime() - t2);
     }
 
     public float getFontWidth() {
