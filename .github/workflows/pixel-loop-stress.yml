@@ -168,13 +168,27 @@ jobs:
           # Discard bootstrap/startup frames. The stress window must measure
           # producer -> PTY -> parser -> renderer, not app launch noise.
           adb shell dumpsys gfxinfo com.termux reset
+          TERMUX_PID=$(adb shell pidof com.termux | tr -d '\r' | awk '{print $1}')
+          test -n "$TERMUX_PID"
+          adb shell atrace --async_start -b 8192 -a com.termux gfx view sched freq idle \
+            > atrace-start.txt 2>&1
           adb shell input text "$PRODUCER --fit $FIT_MODE --fps $FPS"
           adb shell input keyevent KEYCODE_ENTER
           start=$(date +%s)
           date -Is > host-time-start.txt
           adb shell 'date +"%Y-%m-%dT%H:%M:%S.%3N%z"' > device-time-start.txt
           adb shell dumpsys package com.termux | grep -E 'versionCode|versionName|lastUpdateTime|codePath' > package-running.txt || true
+          (
+            for sample in $(seq 1 "$DURATION"); do
+              echo "===== SAMPLE $sample ====="
+              adb shell top -H -b -n 1 -p "$TERMUX_PID"
+              sleep 1
+            done
+          ) > top-thread-samples.txt 2>&1 &
+          sampler_pid=$!
           sleep "$DURATION"
+          wait "$sampler_pid" || true
+          adb shell atrace --async_stop > atrace.txt 2>&1
           end=$(date +%s)
           date -Is > host-time-running.txt
           adb shell 'date +"%Y-%m-%dT%H:%M:%S.%3N%z"' > device-time-running.txt
@@ -221,6 +235,9 @@ jobs:
           test -s meminfo-running.txt
           test -s meminfo-final.txt
           test -s gfxinfo-final.txt
+          test -s top-thread-samples.txt
+          test -s atrace.txt
+          grep -Eq 'RenderThread|TermSessionParserWorker' top-thread-samples.txt
           python3 scripts/parse_meminfo.py meminfo-running.txt meminfo-final.txt --json meminfo-summary.json
           python3 scripts/parse_gfxinfo.py gfxinfo-final.txt gfxinfo-summary.json
           grep -Eq '"total_pss_kb": [1-9][0-9]*' meminfo-summary.json
@@ -259,6 +276,9 @@ jobs:
             meminfo-final.txt
             meminfo-summary.json
             gfxinfo-summary.json
+            atrace-start.txt
+            atrace.txt
+            top-thread-samples.txt
             processes-final.txt
             activity-final.txt
             terminal-log-summary.txt
