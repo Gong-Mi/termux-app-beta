@@ -15,6 +15,10 @@ public final class TerminalParserMetrics {
     private long mPublishedFrames;
     private long mFinishCommands;
     private long mStopCommands;
+    private long mReadNanos;
+    private long mAppendNanos;
+    private long mSnapshotNanos;
+    private long mPublishNanos;
 
     public synchronized void recordAppendCommand() {
         mAppendCommands++;
@@ -40,9 +44,18 @@ public final class TerminalParserMetrics {
         mStopCommands++;
     }
 
+    public synchronized void recordPhaseNanos(long readNanos, long appendNanos,
+                                               long snapshotNanos, long publishNanos) {
+        if (readNanos > 0) mReadNanos += readNanos;
+        if (appendNanos > 0) mAppendNanos += appendNanos;
+        if (snapshotNanos > 0) mSnapshotNanos += snapshotNanos;
+        if (publishNanos > 0) mPublishNanos += publishNanos;
+    }
+
     public synchronized Snapshot snapshot() {
         return new Snapshot(mInputBytes, mAppendCommands, mControlCommands,
-            mPublishedFrames, mFinishCommands, mStopCommands);
+            mPublishedFrames, mFinishCommands, mStopCommands,
+            mReadNanos, mAppendNanos, mSnapshotNanos, mPublishNanos);
     }
 
     /** Immutable point-in-time parser pipeline counters. */
@@ -53,15 +66,24 @@ public final class TerminalParserMetrics {
         public final long publishedFrames;
         public final long finishCommands;
         public final long stopCommands;
+        public final long readNanos;
+        public final long appendNanos;
+        public final long snapshotNanos;
+        public final long publishNanos;
 
         private Snapshot(long inputBytes, long appendCommands, long controlCommands,
-                         long publishedFrames, long finishCommands, long stopCommands) {
+                         long publishedFrames, long finishCommands, long stopCommands,
+                         long readNanos, long appendNanos, long snapshotNanos, long publishNanos) {
             this.inputBytes = inputBytes;
             this.appendCommands = appendCommands;
             this.controlCommands = controlCommands;
             this.publishedFrames = publishedFrames;
             this.finishCommands = finishCommands;
             this.stopCommands = stopCommands;
+            this.readNanos = readNanos;
+            this.appendNanos = appendNanos;
+            this.snapshotNanos = snapshotNanos;
+            this.publishNanos = publishNanos;
         }
     }
 }

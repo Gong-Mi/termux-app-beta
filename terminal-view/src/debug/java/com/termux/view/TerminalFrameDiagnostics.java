@@ -32,6 +32,8 @@ final class TerminalFrameDiagnostics {
             + " parserBytes=" + parser.inputBytes + " appendCommands=" + parser.appendCommands
             + " controlCommands=" + parser.controlCommands + " parserFrames=" + parser.publishedFrames
             + " finishCommands=" + parser.finishCommands + " stopCommands=" + parser.stopCommands
+            + " readNanos=" + parser.readNanos + " appendNanos=" + parser.appendNanos
+            + " snapshotNanos=" + parser.snapshotNanos + " publishNanos=" + parser.publishNanos
             + " mutations=" + frame.dirtyMutationCount
             + " visible=" + (frame.endRow - frame.topRow) + " redrawWorthies=" + dirtyInView + " skipped=" + skippedRows
             + " cursor=" + (frame.cursorVisible ? frame.cursorRow : "hidden")

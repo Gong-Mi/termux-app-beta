@@ -75,6 +75,9 @@ public final class TerminalView extends View {
     private TerminalModelFrame mLastModelFrame;
     /** Immutable accounting object tracking publish/draw/ack lifecycle. */
     private final RenderFrameMetrics mFrameMetrics = new RenderFrameMetrics();
+    /** Parser callbacks must coalesce onto the View's UI thread before invalidating. */
+    private final TerminalFrameInvalidationGate mFrameInvalidationGate =
+        new TerminalFrameInvalidationGate(this::post);
     /** Last selection rectangle used to build mLastRenderFrame. */
     private int mLastRenderSelectionX1 = Integer.MIN_VALUE;
     private int mLastRenderSelectionY1 = Integer.MIN_VALUE;
@@ -340,7 +343,7 @@ public final class TerminalView extends View {
                 if (!mSessionGate.isCurrent(sessionGeneration)) return;
                 boolean hadPending = mailbox.peek() != null;
                 mailbox.publish(frame);
-                if (!hadPending) invalidate();
+                if (!hadPending) mFrameInvalidationGate.request(this::invalidate);
             }
 
             @Override

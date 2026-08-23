@@ -279,13 +279,19 @@ public final class TerminalParserWorker {
     }
 
     private void processAppend() {
+        long readNanos = 0;
+        long appendNanos = 0;
         try {
             int budgetRemaining = mMaxBytesPerBatch;
             while (budgetRemaining > 0 && !mStopped) {
                 int toRead = Math.min(budgetRemaining, mReceiveBuffer.length);
+                long readStart = System.nanoTime();
                 int read = mInputQueue.read(mReceiveBuffer, 0, toRead, false);
+                readNanos += System.nanoTime() - readStart;
                 if (read <= 0) break;
+                long appendStart = System.nanoTime();
                 mEmulator.append(mReceiveBuffer, read);
+                appendNanos += System.nanoTime() - appendStart;
                 mMetrics.recordInputBytes(read);
                 budgetRemaining -= read;
             }
@@ -303,6 +309,7 @@ public final class TerminalParserWorker {
             if (!mStopped && !mStopRequested.get() && mInputQueue.hasData()) {
                 scheduleAppendIfNeeded();
             }
+            mMetrics.recordPhaseNanos(readNanos, appendNanos, 0, 0);
         }
     }
 
@@ -356,12 +363,16 @@ public final class TerminalParserWorker {
         TerminalBuffer screen = mEmulator.getScreen();
         int dirtyCount = screen.getDirtyMutationCount();
         long[] dirtyBits = dirtyCount == 0 ? null : screen.getAndClearDirtyRowBits();
+        long snapshotStart = System.nanoTime();
         TerminalModelFrame frame = new TerminalModelFrame(mEmulator, safeTopRow, dirtyBits, dirtyCount,
             mPreviousScreenSnapshot);
+        long snapshotNanos = System.nanoTime() - snapshotStart;
         mPreviousScreenSnapshot = frame.screen;
         mMetrics.recordPublishedFrame();
+        long publishStart = System.nanoTime();
         if (sink != null) sink.publishFrame(frame);
         mClient.onTextChanged(mSession); // posted to main thread; triggers UI invalidate
+        mMetrics.recordPhaseNanos(0, 0, snapshotNanos, System.nanoTime() - publishStart);
         mDirty = false;
         mConsumedPending = false;
     }
