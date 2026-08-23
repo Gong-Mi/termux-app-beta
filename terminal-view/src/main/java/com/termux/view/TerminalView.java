@@ -1158,10 +1158,9 @@ public final class TerminalView extends View {
                     // Only skip rows whose pixels are guaranteed to survive on the canvas
                     // from the previous draw: a hardware/software view layer retains them,
                     // and reverseVideo clears the whole canvas before rows are drawn.
-                    boolean skipCleanRows = !frame.reverseVideo
-                        && mLastRenderedFrame != null
-                        && !frame.needsFullRedraw(mLastRenderedFrame)
-                        && (getLayerType() == View.LAYER_TYPE_HARDWARE || getLayerType() == View.LAYER_TYPE_SOFTWARE);
+                    boolean skipCleanRows = TerminalRenderPolicy.shouldSkipCleanRows(
+                        getLayerType(), frame.reverseVideo, mLastRenderedFrame != null,
+                        mLastRenderedFrame != null && frame.needsFullRedraw(mLastRenderedFrame));
                     mRenderer.render(frame, canvas, skipCleanRows, mLastRenderedFrame);
                     mLastRenderedFrame = frame;
                     mFrameMetrics.ack(frame.screenRevision);
