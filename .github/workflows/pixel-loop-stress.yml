@@ -165,6 +165,9 @@ jobs:
         run: |
           set -euxo pipefail
           PRODUCER=/data/data/com.termux/files/usr/tmp/$PIXEL_LOOP_ASSET
+          # Discard bootstrap/startup frames. The stress window must measure
+          # producer -> PTY -> parser -> renderer, not app launch noise.
+          adb shell dumpsys gfxinfo com.termux reset
           adb shell input text "$PRODUCER --fit $FIT_MODE --fps $FPS"
           adb shell input keyevent KEYCODE_ENTER
           start=$(date +%s)
