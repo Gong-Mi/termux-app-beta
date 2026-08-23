@@ -32,7 +32,8 @@ public class TextSelectionCursorController implements CursorController {
 
     private final int mHandleHeight;
     private int mSelX1 = -1, mSelX2 = -1, mSelY1 = -1, mSelY2 = -1;
-
+    /** Rendered viewport top row at the moment the selection was last updated. */
+    private int mSelectionRenderedTopRow;
     private ActionMode mActionMode;
     public final int ACTION_COPY = 1;
     public final int ACTION_PASTE = 2;
@@ -98,6 +99,7 @@ public class TextSelectionCursorController implements CursorController {
         int[] columnAndRow = terminalView.getColumnAndRow(event, true);
         mSelX1 = mSelX2 = columnAndRow[0];
         mSelY1 = mSelY2 = columnAndRow[1];
+        mSelectionRenderedTopRow = terminalView.getRenderedViewportTopRow();
 
         TerminalRenderFrame frame = terminalView.getCurrentRenderFrame();
         TerminalScreenSnapshot screen = null;
@@ -224,9 +226,10 @@ public class TextSelectionCursorController implements CursorController {
             public void onGetContentRect(ActionMode mode, View view, Rect outRect) {
                 int x1 = Math.round(mSelX1 * terminalView.mRenderer.getFontWidth());
                 int x2 = Math.round(mSelX2 * terminalView.mRenderer.getFontWidth());
-                // Anchor the floating ActionMode to the rendered frame's viewport so the bar lines
-                // up with the highlighted rows the renderer drew (issue #39).
-                int renderedTopRow = terminalView.getRenderedViewportTopRow();
+                // Anchor the floating ActionMode to the viewport that was current when the selection
+                // coordinates were computed. Re-querying getRenderedViewportTopRow() here can cross a
+                // frame publish and shift the toolbar away from the highlighted rows the user selected.
+                int renderedTopRow = mSelectionRenderedTopRow;
                 int y1 = Math.round((mSelY1 - 1 - renderedTopRow) * terminalView.mRenderer.getFontLineSpacing());
                 int y2 = Math.round((mSelY2 + 1 - renderedTopRow) * terminalView.mRenderer.getFontLineSpacing());
 
@@ -262,6 +265,7 @@ public class TextSelectionCursorController implements CursorController {
             mSelX1 = terminalView.getCursorX(x);
             mSelY1 = TerminalSelectionCoordinates.clampSelectionRow(terminalView.getCursorY(y),
                 scrollRows, screen.firstExternalRow(), screen.endExternalRow());
+            mSelectionRenderedTopRow = terminalView.getRenderedViewportTopRow();
             if (mSelX1 < 0) {
                 mSelX1 = 0;
             }
@@ -299,6 +303,7 @@ public class TextSelectionCursorController implements CursorController {
             mSelX2 = terminalView.getCursorX(x);
             mSelY2 = TerminalSelectionCoordinates.clampSelectionRow(terminalView.getCursorY(y),
                 scrollRows, screen.firstExternalRow(), screen.endExternalRow());
+            mSelectionRenderedTopRow = terminalView.getRenderedViewportTopRow();
             if (mSelX2 < 0) {
                 mSelX2 = 0;
             }
