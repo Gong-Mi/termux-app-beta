@@ -54,6 +54,9 @@ jobs:
       - name: Validate device smoke scripts
         run: bash -n scripts/android_compat_log_smoke.sh
 
+      - name: Test CI evidence parsers
+        run: PYTHONPATH=scripts python3 -m unittest discover -s scripts -p 'test_*.py' -v
+
       - name: Validate PTY FD ownership contract
         run: python3 scripts/verify_pty_fd_ownership.py
 

@@ -28,6 +28,7 @@ on:
 
 env:
   JAVA_VERSION: 21
+  BUNDLETOOL_VERSION: 1.18.2
   PIXEL_LOOP_ASSET: pixel-loop-x86_64
 
 jobs:
@@ -69,8 +70,31 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Build debug APK
-        run: ./gradlew assembleDebug --no-daemon --console=plain
+      - name: Build installable fused debug APK from AAB
+        env:
+          KS_PASSWORD: xrj45yWGLbsO7W0v
+        run: |
+          set -euxo pipefail
+          ./gradlew bundleDebug --no-daemon --console=plain
+          test -s app/build/outputs/bundle/debug/app-debug.aab
+          curl --fail --location --retry 3 \
+            -o bundletool.jar \
+            "https://github.com/google/bundletool/releases/download/${BUNDLETOOL_VERSION}/bundletool-all-${BUNDLETOOL_VERSION}.jar"
+          test -s bundletool.jar
+          java -jar bundletool.jar build-apks \
+            --bundle=app/build/outputs/bundle/debug/app-debug.aab \
+            --output=termux-app-debug-universal.apks \
+            --mode=universal \
+            --ks=app/testkey_untrusted.jks \
+            --ks-key-alias=alias \
+            --ks-pass=pass:${KS_PASSWORD} \
+            --key-pass=pass:${KS_PASSWORD}
+          unzip -t termux-app-debug-universal.apks
+          mkdir -p debug-universal
+          unzip -o termux-app-debug-universal.apks universal.apk -d debug-universal
+          test -s debug-universal/universal.apk
+          sha256sum app/build/outputs/bundle/debug/app-debug.aab \
+            debug-universal/universal.apk | tee debug-artifacts.sha256
 
       - name: Download and verify x86_64 producer from latest release
         env:
@@ -116,11 +140,7 @@ jobs:
       - name: Install Termux and stage producer inside app UID
         run: |
           set -euxo pipefail
-          BASE_APK=$(ls app/build/outputs/apk/debug/termux-app_*universal*.apk 2>/dev/null \
-                || ls app/build/outputs/apk/debug/termux-app_*x86_64*.apk)
-          FEATURE_APK=$(ls support_ui/build/outputs/apk/debug/support_ui-debug.apk)
-          # support_ui is a dynamic-feature module; TermuxActivity lives there.
-          adb install-multiple -r "$BASE_APK" "$FEATURE_APK"
+          adb install -r debug-universal/universal.apk
           adb shell am start -W -n com.termux/.app.TermuxActivity
           for i in $(seq 1 24); do
             if adb shell run-as com.termux test -x /data/data/com.termux/files/usr/bin/sh; then
@@ -192,6 +212,18 @@ jobs:
             cat stress-metrics.txt 2>/dev/null
           } > stress-evidence.txt
 
+      - name: Require non-empty structured stress evidence
+        run: |
+          set -euo pipefail
+          test -s meminfo-running.txt
+          test -s meminfo-final.txt
+          test -s gfxinfo-final.txt
+          python3 scripts/parse_meminfo.py meminfo-running.txt meminfo-final.txt --json meminfo-summary.json
+          python3 scripts/parse_gfxinfo.py gfxinfo-final.txt gfxinfo-summary.json
+          grep -Eq '"total_pss_kb": [1-9][0-9]*' meminfo-summary.json
+          grep -Eq '"total_frames_rendered": [1-9][0-9]*' gfxinfo-summary.json
+          grep -Eq '"janky_frames": [0-9]+' gfxinfo-summary.json
+
       - name: Verify frame metrics invariants
         run: |
           set -euo pipefail
@@ -206,6 +238,9 @@ jobs:
           path: |
             pixel-loop-file.txt
             pixel-loop-dynamic.txt
+            debug-artifacts.sha256
+            app/build/outputs/bundle/debug/app-debug.aab
+            debug-universal/universal.apk
             pixel-loop-running.png
             pixel-loop-after-stop.png
             package-running.txt

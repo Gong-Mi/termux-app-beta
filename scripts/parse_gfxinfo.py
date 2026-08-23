@@ -53,10 +53,16 @@ def parse(path):
         if m:
             result[key] = int(m.group(1))
 
-    if result["total_frames_rendered"] and result["janky_frames"] is not None:
-        total = result["total_frames_rendered"]
-        if total > 0:
-            result["janky_ratio"] = round(result["janky_frames"] / total, 4)
+    total = result["total_frames_rendered"]
+    janky = result["janky_frames"]
+    if total is None or janky is None:
+        raise ValueError(
+            f"missing required gfxinfo frame counters in {path}: "
+            "expected Total frames rendered and Janky frames"
+        )
+    if total <= 0:
+        raise ValueError(f"gfxinfo reported no rendered frames in {path}")
+    result["janky_ratio"] = round(janky / total, 4)
 
     return result
 
