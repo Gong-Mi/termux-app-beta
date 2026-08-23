@@ -1899,6 +1899,31 @@ public final class TerminalEmulator {
 
     /** Select Graphic Rendition (SGR) - see http://en.wikipedia.org/wiki/ANSI_escape_code#graphics. */
     private void selectGraphicRendition() {
+        // Fast path for the dominant truecolor SGR forms (emitted per cell by
+        // full-screen RGB producers): ESC[38;2;r;g;bm / ESC[48;2;r;g;bm /
+        // ESC[58;2;r;g;bm. The slow path below handles every other SGR form;
+        // this shortcut must be behavior-identical to it:
+        //  - omitted parameters (mArgs[] == -1) read as 0 via getArg(...,0,false);
+        //  - out-of-range RGB must fall through to the slow path (it logs/finishes);
+        //  - colon sub-parameters must fall through (38:2:... is a different grammar);
+        //  - a trailing 6th parameter (e.g. ";1" bold) must fall through.
+        if (mArgIndex == 4 && (mArgsSubParamsBitSet & 0x1F) == 0
+                && (mArgs[0] == 38 || mArgs[0] == 48 || mArgs[0] == 58) && mArgs[1] == 2) {
+            int red = mArgs[2] < 0 ? 0 : mArgs[2];
+            int green = mArgs[3] < 0 ? 0 : mArgs[3];
+            int blue = mArgs[4] < 0 ? 0 : mArgs[4];
+            if (red <= 255 && green <= 255 && blue <= 255) {
+                int argbColor = 0xff_00_00_00 | (red << 16) | (green << 8) | blue;
+                switch (mArgs[0]) {
+                    case 38: mForeColor = argbColor; break;
+                    case 48: mBackColor = argbColor; break;
+                    case 58: mUnderlineColor = argbColor; break;
+                }
+                return;
+            }
+            // Out-of-range RGB: fall through to the slow path which logs and
+            // finishes the sequence exactly as before.
+        }
         if (mArgIndex >= mArgs.length) mArgIndex = mArgs.length - 1;
         for (int i = 0; i <= mArgIndex; i++) {
             // Skip leading sub parameters:
