@@ -34,6 +34,11 @@ final class TerminalFrameDiagnostics {
             + " finishCommands=" + parser.finishCommands + " stopCommands=" + parser.stopCommands
             + " readNanos=" + parser.readNanos + " appendNanos=" + parser.appendNanos
             + " snapshotNanos=" + parser.snapshotNanos + " publishNanos=" + parser.publishNanos
+            + " utf8Steps=" + parser.stepUtf8ContinuationBytes + " escapeSteps=" + parser.stepEscapeBytes
+            + " csiSteps=" + parser.stepCsiBytes + " oscDcsSteps=" + parser.stepOscOrDcsBytes
+            + " controlSteps=" + parser.stepControlBytes + " codePointCalls=" + parser.stepCodePointCalls
+            + " plainEmitted=" + parser.stepPlainEmitted + " setCharCalls=" + parser.stepSetCharCalls
+            + " scrollOps=" + parser.stepScrollOperations + " sgrSequences=" + parser.stepSgrSequences
             + " mutations=" + frame.dirtyMutationCount
             + " visible=" + (frame.endRow - frame.topRow) + " redrawWorthies=" + dirtyInView + " skipped=" + skippedRows
             + " cursor=" + (frame.cursorVisible ? frame.cursorRow : "hidden")

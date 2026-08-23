@@ -25,4 +25,22 @@ public class TerminalParserMetricsTest extends TestCase {
         assertEquals(0, snapshot.snapshotNanos);
         assertEquals(0, snapshot.publishNanos);
     }
+
+    public void testAppendStepsAccumulateSeparately() {
+        TerminalParserMetrics metrics = new TerminalParserMetrics();
+        TerminalAppendStepMetrics steps = new TerminalAppendStepMetrics();
+        steps.recordInputBytes(64);
+        steps.recordCsiByte();
+        steps.recordSgrSequence();
+        metrics.recordAppendSteps(steps.getAndResetDelta());
+        steps.recordCsiByte();
+        steps.recordSetCharCall();
+        metrics.recordAppendSteps(steps.getAndResetDelta());
+
+        TerminalParserMetrics.Snapshot snapshot = metrics.snapshot();
+        assertEquals(2, snapshot.stepCsiBytes);
+        assertEquals(1, snapshot.stepSgrSequences);
+        assertEquals(1, snapshot.stepSetCharCalls);
+        assertEquals(0, snapshot.stepUtf8ContinuationBytes);
+    }
 }

@@ -310,6 +310,7 @@ public final class TerminalParserWorker {
                 scheduleAppendIfNeeded();
             }
             mMetrics.recordPhaseNanos(readNanos, appendNanos, 0, 0);
+            mMetrics.recordAppendSteps(mEmulator.getAndResetAppendStepDelta());
         }
     }
 

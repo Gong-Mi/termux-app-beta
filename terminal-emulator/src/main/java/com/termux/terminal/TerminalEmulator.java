@@ -272,6 +272,9 @@ public final class TerminalEmulator {
     /** Monotonic parser/model batch revision. It identifies append and actual-resize batches, not individual mutations. */
     private long mScreenRevision;
 
+    /** Per-append step classification for parser worker attribution. */
+    private final TerminalAppendStepMetrics mAppendStepMetrics = new TerminalAppendStepMetrics();
+
     public final TerminalColors mColors = new TerminalColors();
 
     private static final String LOG_TAG = "TerminalEmulator";
@@ -508,12 +511,18 @@ public final class TerminalEmulator {
      */
     public void append(byte[] buffer, int length) {
         if (length > 0) mScreenRevision++;
+        mAppendStepMetrics.recordInputBytes(length);
         // Process in smaller chunks to avoid JIT OSR storms (identified by simpleperf)
         final int chunkSize = 1024;
         for (int i = 0; i < length; i += chunkSize) {
             int end = Math.min(i + chunkSize, length);
             processChunk(buffer, i, end);
         }
+    }
+
+    /** Drain per-append step counters accumulated since the last call. */
+    public TerminalAppendStepMetrics.Snapshot getAndResetAppendStepDelta() {
+        return mAppendStepMetrics.getAndResetDelta();
     }
 
     private void processChunk(byte[] buffer, int start, int end) {
@@ -526,6 +535,7 @@ public final class TerminalEmulator {
         if (mUtf8ToFollow > 0) {
             if ((byteToProcess & 0b11000000) == 0b10000000) {
                 // 10xxxxxx, a continuation byte.
+                mAppendStepMetrics.recordUtf8ContinuationByte();
                 mUtf8InputBuffer[mUtf8Index++] = byteToProcess;
                 if (--mUtf8ToFollow == 0) {
                     byte firstByteMask = (byte) (mUtf8Index == 2 ? 0b00011111 : (mUtf8Index == 3 ? 0b00001111 : 0b00000111));
@@ -588,6 +598,20 @@ public final class TerminalEmulator {
     }
 
     public void processCodePoint(int b) {
+        mAppendStepMetrics.recordCodePointCall();
+        if (mEscapeState == ESC_NONE) {
+            if (b < 32) mAppendStepMetrics.recordControlByte();
+        } else if (mEscapeState == ESC_OSC || mEscapeState == ESC_OSC_ESC
+                || mEscapeState == ESC_P || mEscapeState == ESC_APC || mEscapeState == ESC_APC_ESCAPE) {
+            mAppendStepMetrics.recordOscOrDcsByte();
+        } else if ((mEscapeState >= ESC_CSI && mEscapeState <= ESC_CSI_EXCLAMATION
+                && mEscapeState != ESC_PERCENT)
+                || mEscapeState == ESC_CSI_UNSUPPORTED_PARAMETER_BYTE
+                || mEscapeState == ESC_CSI_UNSUPPORTED_INTERMEDIATE_BYTE) {
+            mAppendStepMetrics.recordCsiByte();
+        } else {
+            mAppendStepMetrics.recordEscapeByte();
+        }
         // The Application Program-Control (APC) string might be arbitrary non-printable characters, so handle that early.
         if (mEscapeState == ESC_APC) {
             doApc(b);
@@ -1768,6 +1792,7 @@ public final class TerminalEmulator {
                 doSetMode(false);
                 break;
             case 'm': // Esc [ Pn m - character attributes. (can have up to 16 numerical arguments)
+                mAppendStepMetrics.recordSgrSequence();
                 selectGraphicRendition();
                 break;
             case 'n': // Esc [ Pn n - ECMA-48 Status Report Commands
@@ -2224,6 +2249,7 @@ public final class TerminalEmulator {
     }
 
     private void scrollDownOneLine() {
+        mAppendStepMetrics.recordScrollOperation();
         mScrollCounter++;
         long currentStyle = getStyle();
         if (mLeftMargin != 0 || mRightMargin != mColumns) {
@@ -2367,6 +2393,7 @@ public final class TerminalEmulator {
      */
     private void emitCodePoint(int codePoint) {
         mLastEmittedCodePoint = codePoint;
+        mAppendStepMetrics.recordPlainEmitted();
         if (mUseLineDrawingUsesG0 ? mUseLineDrawingG0 : mUseLineDrawingG1) {
             // http://www.vt100.net/docs/vt102-ug/table5-15.html.
             switch (codePoint) {
@@ -2507,6 +2534,7 @@ public final class TerminalEmulator {
         // so was mCursorCol changed after the offsetDueToCombiningChar conditional by another thread?
         // TODO: Check if there are thread synchronization issues with mCursorCol and mCursorRow, possibly causing others bugs too.
         if (column < 0) column = 0;
+        mAppendStepMetrics.recordSetCharCall();
         mScreen.setChar(column, mCursorRow, codePoint, getStyle());
 
         if (autoWrap && displayWidth > 0)

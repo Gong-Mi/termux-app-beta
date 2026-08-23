@@ -19,6 +19,16 @@ public final class TerminalParserMetrics {
     private long mAppendNanos;
     private long mSnapshotNanos;
     private long mPublishNanos;
+    private long mStepUtf8ContinuationBytes;
+    private long mStepEscapeBytes;
+    private long mStepCsiBytes;
+    private long mStepOscOrDcsBytes;
+    private long mStepControlBytes;
+    private long mStepCodePointCalls;
+    private long mStepPlainEmitted;
+    private long mStepSetCharCalls;
+    private long mStepScrollOperations;
+    private long mStepSgrSequences;
 
     public synchronized void recordAppendCommand() {
         mAppendCommands++;
@@ -52,10 +62,27 @@ public final class TerminalParserMetrics {
         if (publishNanos > 0) mPublishNanos += publishNanos;
     }
 
+    public synchronized void recordAppendSteps(TerminalAppendStepMetrics.Snapshot step) {
+        mStepUtf8ContinuationBytes += step.utf8ContinuationBytes;
+        mStepEscapeBytes += step.escapeBytes;
+        mStepCsiBytes += step.csiBytes;
+        mStepOscOrDcsBytes += step.oscOrDcsBytes;
+        mStepControlBytes += step.controlBytes;
+        mStepCodePointCalls += step.codePointCalls;
+        mStepPlainEmitted += step.plainEmitted;
+        mStepSetCharCalls += step.setCharCalls;
+        mStepScrollOperations += step.scrollOperations;
+        mStepSgrSequences += step.sgrSequences;
+    }
+
     public synchronized Snapshot snapshot() {
         return new Snapshot(mInputBytes, mAppendCommands, mControlCommands,
             mPublishedFrames, mFinishCommands, mStopCommands,
-            mReadNanos, mAppendNanos, mSnapshotNanos, mPublishNanos);
+            mReadNanos, mAppendNanos, mSnapshotNanos, mPublishNanos,
+            mStepUtf8ContinuationBytes, mStepEscapeBytes, mStepCsiBytes,
+            mStepOscOrDcsBytes, mStepControlBytes, mStepCodePointCalls,
+            mStepPlainEmitted, mStepSetCharCalls, mStepScrollOperations,
+            mStepSgrSequences);
     }
 
     /** Immutable point-in-time parser pipeline counters. */
@@ -70,10 +97,24 @@ public final class TerminalParserMetrics {
         public final long appendNanos;
         public final long snapshotNanos;
         public final long publishNanos;
+        public final long stepUtf8ContinuationBytes;
+        public final long stepEscapeBytes;
+        public final long stepCsiBytes;
+        public final long stepOscOrDcsBytes;
+        public final long stepControlBytes;
+        public final long stepCodePointCalls;
+        public final long stepPlainEmitted;
+        public final long stepSetCharCalls;
+        public final long stepScrollOperations;
+        public final long stepSgrSequences;
 
         private Snapshot(long inputBytes, long appendCommands, long controlCommands,
                          long publishedFrames, long finishCommands, long stopCommands,
-                         long readNanos, long appendNanos, long snapshotNanos, long publishNanos) {
+                         long readNanos, long appendNanos, long snapshotNanos, long publishNanos,
+                         long stepUtf8ContinuationBytes, long stepEscapeBytes, long stepCsiBytes,
+                         long stepOscOrDcsBytes, long stepControlBytes, long stepCodePointCalls,
+                         long stepPlainEmitted, long stepSetCharCalls, long stepScrollOperations,
+                         long stepSgrSequences) {
             this.inputBytes = inputBytes;
             this.appendCommands = appendCommands;
             this.controlCommands = controlCommands;
@@ -84,6 +125,16 @@ public final class TerminalParserMetrics {
             this.appendNanos = appendNanos;
             this.snapshotNanos = snapshotNanos;
             this.publishNanos = publishNanos;
+            this.stepUtf8ContinuationBytes = stepUtf8ContinuationBytes;
+            this.stepEscapeBytes = stepEscapeBytes;
+            this.stepCsiBytes = stepCsiBytes;
+            this.stepOscOrDcsBytes = stepOscOrDcsBytes;
+            this.stepControlBytes = stepControlBytes;
+            this.stepCodePointCalls = stepCodePointCalls;
+            this.stepPlainEmitted = stepPlainEmitted;
+            this.stepSetCharCalls = stepSetCharCalls;
+            this.stepScrollOperations = stepScrollOperations;
+            this.stepSgrSequences = stepSgrSequences;
         }
     }
 }
