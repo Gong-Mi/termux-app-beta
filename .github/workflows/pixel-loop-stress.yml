@@ -281,12 +281,16 @@ jobs:
         run: |
           set +e
           adb shell dumpsys gfxinfo com.termux > gfxinfo-final.txt
+          adb shell dumpsys gfxinfo com.termux framestats > framestats.txt || true
           adb shell dumpsys meminfo com.termux > meminfo-final.txt
           adb shell ps -A > processes-final.txt
           adb logcat -d > logcat-final.txt
           adb shell dumpsys activity activities > activity-final.txt
           python3 scripts/parse_meminfo.py meminfo-running.txt meminfo-final.txt --json meminfo-summary.json
           python3 scripts/parse_gfxinfo.py gfxinfo-final.txt gfxinfo-summary.json
+          if [ -s framestats.txt ]; then
+            python3 scripts/parse_framestats.py framestats.txt framestats-summary.json
+          fi
           grep -iE 'FATAL EXCEPTION|AndroidRuntime|Termux|TerminalView|frame rev=|published=|lastDrawnRev=' logcat-final.txt | tail -200 > terminal-log-summary.txt
           {
             echo '== producer hash inside app UID =='
@@ -338,6 +342,9 @@ jobs:
             echo '### Graphics summary'
             cat gfxinfo-summary.json 2>/dev/null || true
             echo
+            echo '### Frame stage summary (gfxinfo framestats)'
+            cat framestats-summary.json 2>/dev/null || true
+            echo
             echo '### Frame metrics'
             cat terminal-log-summary.txt 2>/dev/null || true
           } | tee emulator-stress-summary.txt >> "$GITHUB_STEP_SUMMARY"
@@ -359,6 +366,8 @@ jobs:
             terminal-log-summary.txt
             top-thread-samples.txt
             gfxinfo-final.txt
+            framestats.txt
+            framestats-summary.json
             atrace.txt
             emulator-stress-summary.txt
           if-no-files-found: warn
@@ -389,6 +398,8 @@ jobs:
             meminfo-final.txt
             meminfo-summary.json
             gfxinfo-summary.json
+            framestats.txt
+            framestats-summary.json
             atrace-start.txt
             atrace.txt
             top-thread-samples.txt

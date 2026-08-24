@@ -51,6 +51,23 @@ public final class TerminalRenderer {
     /** Number of rows skipped by the last render (diagnostics/observability only). */
     private int lastSkippedRowCount;
 
+    /**
+     * Effect flags currently applied to {@link #mTextPaint}, as the
+     * EFFECT_FLAG_* mask last passed to the paint setters. {@code -1} forces the
+     * first run to apply. {@link #mTextPaint} is private and only mutated by
+     * {@link #drawTextRun}, so skipping a setter when the target value already
+     * matches the applied state cannot change any drawn pixel.
+     */
+    private int mAppliedTextEffectFlags = -1;
+    /** Color currently set on {@link #mTextPaint}; valid only when {@link #mAppliedColorSet}. */
+    private int mAppliedColor;
+    private boolean mAppliedColorSet;
+
+    private static final int EFFECT_FLAG_BOLD = 1;
+    private static final int EFFECT_FLAG_UNDERLINE = 2;
+    private static final int EFFECT_FLAG_ITALIC = 4;
+    private static final int EFFECT_FLAG_STRIKE_THROUGH = 8;
+
     /** Rows skipped by the most recent render; 0 when skipCleanRows was not enabled. */
     public int getLastSkippedRowCount() {
         return lastSkippedRowCount;
@@ -308,13 +325,13 @@ public final class TerminalRenderer {
 
         if (backColor != palette[TextStyle.COLOR_INDEX_BACKGROUND]) {
             // Only draw non-default background.
-            mTextPaint.setColor(backColor);
+            setPaintColor(backColor);
             canvas.drawRect(left, y - mFontLineSpacingAndAscent + mFontAscent, right, y, mTextPaint);
             mRenderSteps.recordDrawRectCall();
         }
 
         if (cursor != 0) {
-            mTextPaint.setColor(cursor);
+            setPaintColor(cursor);
             float cursorHeight = mFontLineSpacingAndAscent - mFontAscent;
             if (cursorStyle == TerminalEmulator.TERMINAL_CURSOR_STYLE_UNDERLINE) cursorHeight /= 4.;
             else if (cursorStyle == TerminalEmulator.TERMINAL_CURSOR_STYLE_BAR) right -= ((right - left) * 3) / 4.;
@@ -339,11 +356,18 @@ public final class TerminalRenderer {
                 foreColor = 0xFF000000 + (red << 16) + (green << 8) + blue;
             }
 
-            mTextPaint.setFakeBoldText(bold);
-            mTextPaint.setUnderlineText(underline);
-            mTextPaint.setTextSkewX(italic ? -0.35f : 0.f);
-            mTextPaint.setStrikeThruText(strikeThrough);
-            mTextPaint.setColor(foreColor);
+            int effectFlags = (bold ? EFFECT_FLAG_BOLD : 0)
+                | (underline ? EFFECT_FLAG_UNDERLINE : 0)
+                | (italic ? EFFECT_FLAG_ITALIC : 0)
+                | (strikeThrough ? EFFECT_FLAG_STRIKE_THROUGH : 0);
+            if (effectFlags != mAppliedTextEffectFlags) {
+                mTextPaint.setFakeBoldText(bold);
+                mTextPaint.setUnderlineText(underline);
+                mTextPaint.setTextSkewX(italic ? -0.35f : 0.f);
+                mTextPaint.setStrikeThruText(strikeThrough);
+                mAppliedTextEffectFlags = effectFlags;
+            }
+            setPaintColor(foreColor);
 
             // The text alignment is the default Paint.Align.LEFT.
             canvas.drawTextRun(text, startCharIndex, runWidthChars, startCharIndex, runWidthChars, left, y - mFontLineSpacingAndAscent, false, mTextPaint);
@@ -359,5 +383,19 @@ public final class TerminalRenderer {
 
     public int getFontLineSpacing() {
         return mFontLineSpacing;
+    }
+
+    /**
+     * Set {@link #mTextPaint} color, skipping the native setter when the paint
+     * already holds the requested value. Exact-equivalence: mTextPaint is only
+     * mutated through this method and the effect-flag block in drawTextRun, so
+     * the cached value always reflects the live paint state.
+     */
+    private void setPaintColor(int color) {
+        if (!mAppliedColorSet || mAppliedColor != color) {
+            mTextPaint.setColor(color);
+            mAppliedColor = color;
+            mAppliedColorSet = true;
+        }
     }
 }
