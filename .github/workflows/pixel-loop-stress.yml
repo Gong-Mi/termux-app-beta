@@ -33,6 +33,14 @@ on:
         options:
           - system
           - hwui_gpu
+      producer_mode:
+        description: "Stress producer"
+        required: false
+        default: "pixel_loop"
+        type: choice
+        options:
+          - pixel_loop
+          - sparse_ansi
 
 env:
   JAVA_VERSION: 21
@@ -186,12 +194,37 @@ jobs:
           done
           adb shell run-as com.termux test -x /data/data/com.termux/files/usr/bin/sh
 
+      - name: Stage sparse ANSI producer
+        if: inputs.producer_mode == 'sparse_ansi'
+        env:
+          DURATION: ${{ inputs.duration_seconds }}
+        run: |
+          set -euxo pipefail
+          cat > /tmp/sparse-producer.sh <<EOF
+          #!/system/bin/sh
+          end=\$((\$(date +%s) + ${DURATION}))
+          i=0
+          while [ \$(date +%s) -lt \$end ]; do
+            r=\$((i % 255))
+            g=\$(((i * 3) % 255))
+            b=\$(((i * 7) % 255))
+            printf '\033[1;1H\033[38;2;%s;%s;%smS%06d\033[0m\033[2;1H\033[38;2;%s;%s;%smLOCAL\033[0m' \"\$r\" \"\$g\" \"\$b\" \"\$i\" \"\$b\" \"\$r\" \"\$g\"
+            i=\$((i + 1))
+            sleep 0.016
+          done
+          EOF
+          adb push /tmp/sparse-producer.sh /data/local/tmp/sparse-producer.sh
+          adb shell run-as com.termux cp /data/local/tmp/sparse-producer.sh /data/data/com.termux/files/usr/tmp/sparse-producer.sh
+          adb shell run-as com.termux chmod 755 /data/data/com.termux/files/usr/tmp/sparse-producer.sh
+          adb shell run-as com.termux sha256sum /data/data/com.termux/files/usr/tmp/sparse-producer.sh
+
       - name: Run producer through the real Termux terminal session
         env:
           DURATION: ${{ inputs.duration_seconds }}
           FIT_MODE: ${{ inputs.fit_mode }}
           FPS: ${{ inputs.fps }}
           RENDERING_MODE: ${{ inputs.rendering_mode }}
+          PRODUCER_MODE: ${{ inputs.producer_mode }}
         run: |
           set -euxo pipefail
           PRODUCER=/data/data/com.termux/files/usr/tmp/$PIXEL_LOOP_ASSET
@@ -202,7 +235,12 @@ jobs:
           test -n "$TERMUX_PID"
           adb shell atrace --async_start -b 8192 -a com.termux gfx view sched freq idle \
             > atrace-start.txt 2>&1
-          adb shell input text "$PRODUCER --fit $FIT_MODE --fps $FPS"
+          if [ "$PRODUCER_MODE" = "sparse_ansi" ]; then
+            COMMAND=/data/data/com.termux/files/usr/tmp/sparse-producer.sh
+          else
+            COMMAND="$PRODUCER --fit $FIT_MODE --fps $FPS"
+          fi
+          adb shell input text "$COMMAND"
           adb shell input keyevent KEYCODE_ENTER
           start=$(date +%s)
           date -Is > host-time-start.txt
@@ -226,6 +264,7 @@ jobs:
           echo "PRODUCER_FIT_MODE=$FIT_MODE" | tee -a stress-metrics.txt
           echo "PRODUCER_FPS=$FPS" | tee -a stress-metrics.txt
           echo "PRODUCER_RENDERING_MODE=$RENDERING_MODE" | tee -a stress-metrics.txt
+          echo "PRODUCER_MODE=$PRODUCER_MODE" | tee -a stress-metrics.txt
           echo "PRODUCER_WALL_SECONDS=$((end-start))" | tee -a stress-metrics.txt
           adb exec-out screencap -p > pixel-loop-running.png
           adb shell ps -A | grep -E 'com.termux|pixel-loop' | tee -a stress-metrics.txt || true
