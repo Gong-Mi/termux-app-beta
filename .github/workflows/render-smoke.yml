@@ -288,6 +288,65 @@ jobs:
           python3 .github/workflows/assert_render.py render_hwui.png
           adb logcat -d | grep -iE 'FATAL|AndroidRuntime.*com.termux' | tail -20 || true
 
+      # The row_cache mode keeps LAYER_TYPE_NONE and retains row pixels in
+      # software bitmaps keyed by immutable row identity. Prove the cache both
+      # fills (misses) and is reused (hits), and that pixels still render
+      # correctly through the bitmap path.
+      - name: Row bitmap cache path (layer-free dirty-row rendering)
+        if: matrix.gpu == 'swiftshader_indirect'
+        run: |
+          set -euo pipefail
+          cat > /tmp/termux_prefs.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8" standalone="yes" ?>
+          <map>
+              <string name="terminal_rendering_mode">row_cache</string>
+          </map>
+          EOF
+          adb push /tmp/termux_prefs.xml /data/local/tmp/termux_prefs.xml
+          adb shell run-as com.termux mkdir -p shared_prefs
+          adb shell run-as com.termux cp /data/local/tmp/termux_prefs.xml shared_prefs/com.termux_preferences.xml
+          adb shell am force-stop com.termux
+          adb logcat -c
+          adb shell am start -W -S -n com.termux/.app.TermuxActivity
+          frame_seen=0
+          for _ in $(seq 1 40); do
+            if adb logcat -d | grep -q 'Termux:TerminalView.*frame rev='; then
+              frame_seen=1
+              break
+            fi
+            sleep 1
+          done
+          if [ "$frame_seen" -ne 1 ]; then
+            echo 'Timed out waiting for frame diagnostics under row_cache'
+            adb logcat -d | tail -100
+            exit 1
+          fi
+          # Idle frames reuse unchanged rows (hits); typed input creates new row
+          # content (misses). Both must be observed.
+          sleep 3
+          adb shell input keyevent KEYCODE_MOVE_END
+          adb shell input text "cache"
+          sleep 3
+          adb exec-out screencap -p > render_rowcache.png
+          adb logcat -d > logcat-rowcache.txt
+          grep -E 'Termux:TerminalView.*frame rev=' logcat-rowcache.txt > frame-info-rowcache.txt \
+            || { echo 'NO_FRAME_INFO_LINES under row_cache'; tail -50 logcat-rowcache.txt; exit 1; }
+          python3 - <<'PY'
+          import re, sys
+          hits = misses = 0
+          for line in open('frame-info-rowcache.txt'):
+              m = re.search(r'rowCacheHits=(\d+) rowCacheMisses=(\d+)', line)
+              if m:
+                  hits += int(m.group(1))
+                  misses += int(m.group(2))
+          print(f'rowCache totals: hits={hits} misses={misses}')
+          if misses == 0 or hits == 0:
+              print('FAIL: expected both cache misses (bitmap fill) and hits (reuse) under row_cache')
+              sys.exit(1)
+          PY
+          python3 .github/workflows/assert_render.py render_rowcache.png
+          adb logcat -d | grep -iE 'FATAL|AndroidRuntime.*com.termux' | tail -20 || true
+
       - name: Upload render evidence
         if: always()
         uses: actions/upload-artifact@v6
@@ -297,10 +356,13 @@ jobs:
             render_initial.png
             render_after_input.png
             render_hwui.png
+            render_rowcache.png
             logcat-smoke.txt
             logcat-hwui.txt
+            logcat-rowcache.txt
             frame-info-lines.txt
             frame-info-hwui.txt
+            frame-info-rowcache.txt
             /tmp/emu.log
           if-no-files-found: warn
 
