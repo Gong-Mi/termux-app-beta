@@ -17,7 +17,6 @@ import com.termux.terminal.TerminalScreenSnapshot;
 import com.termux.terminal.TerminalSession;
 import com.termux.terminal.WcWidth;
 import com.termux.view.R;
-import com.termux.view.TerminalActionModePolicy;
 import com.termux.view.TerminalRenderFrame;
 import com.termux.view.TerminalSelectionCoordinates;
 import com.termux.view.TerminalView;
@@ -247,7 +246,7 @@ public class TextSelectionCursorController implements CursorController {
 
                 outRect.set(x1, top, x2, bottom);
             }
-        }, TerminalActionModePolicy.typeFor(Build.MANUFACTURER, Build.BRAND));
+        }, ActionMode.TYPE_FLOATING);
     }
 
     @Override
