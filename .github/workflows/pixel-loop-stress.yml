@@ -359,6 +359,7 @@ jobs:
             terminal-log-summary.txt
             top-thread-samples.txt
             gfxinfo-final.txt
+            atrace.txt
             emulator-stress-summary.txt
           if-no-files-found: warn
 
