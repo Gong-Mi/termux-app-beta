@@ -591,10 +591,23 @@ public final class TerminalView extends View {
      *
      * @param textSize the new font size, in density-independent pixels.
      */
+    /** Row bitmap cache flag, re-applied whenever a new TerminalRenderer is created. */
+    private boolean mRowBitmapCacheEnabled;
+
+    /**
+     * Enable/disable the renderer's row bitmap cache (row_cache experiment).
+     * Survives renderer recreation on font changes; drawn output is unchanged.
+     */
+    public void setRowBitmapCacheEnabled(boolean enabled) {
+        mRowBitmapCacheEnabled = enabled;
+        if (mRenderer != null) mRenderer.setRowBitmapCacheEnabled(enabled);
+    }
+
     public void setTextSize(int textSize) {
         mRenderer = new TerminalRenderer(textSize, mRenderer == null ? Typeface.MONOSPACE : mRenderer.mTypeface);
         // New font metrics invalidate every pixel of the previous layer rendering.
         mLastRenderedFrame = null;
+        mRenderer.setRowBitmapCacheEnabled(mRowBitmapCacheEnabled);
         updateSize();
     }
 
@@ -602,6 +615,7 @@ public final class TerminalView extends View {
         mRenderer = new TerminalRenderer(mRenderer.mTextSize, newTypeface);
         // New font metrics invalidate every pixel of the previous layer rendering.
         mLastRenderedFrame = null;
+        mRenderer.setRowBitmapCacheEnabled(mRowBitmapCacheEnabled);
         updateSize();
         invalidate();
     }

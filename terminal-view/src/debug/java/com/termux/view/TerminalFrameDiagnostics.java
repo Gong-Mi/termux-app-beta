@@ -44,6 +44,7 @@ final class TerminalFrameDiagnostics {
             + " renderRows=" + renderSteps.visitedRows + " renderCells=" + renderSteps.visitedCells
             + " wcwidthCalls=" + renderSteps.wcWidthCalls + " glyphMeasureCalls=" + renderSteps.glyphMeasureCalls
             + " drawTextRunCalls=" + renderSteps.drawTextRunCalls + " drawRectCalls=" + renderSteps.drawRectCalls
+            + " rowCacheHits=" + renderSteps.rowCacheHits + " rowCacheMisses=" + renderSteps.rowCacheMisses
             + " paintSetupNs=" + renderSteps.paintSetupNanos + " drawRectNs=" + renderSteps.drawRectNanos
             + " drawTextNs=" + renderSteps.drawTextNanos
             + " visible=" + (frame.endRow - frame.topRow) + " redrawWorthies=" + dirtyInView + " skipped=" + renderSteps.skippedRows

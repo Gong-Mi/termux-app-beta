@@ -1,5 +1,6 @@
 package com.termux.view;
 
+import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Paint;
 import android.graphics.PorterDuff;
@@ -10,6 +11,10 @@ import com.termux.terminal.TerminalRenderRow;
 import com.termux.terminal.TerminalScreenSnapshot;
 import com.termux.terminal.TextStyle;
 import com.termux.terminal.WcWidth;
+
+import java.util.Arrays;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 /**
  * Renderer of a {@link TerminalEmulator} into a {@link Canvas}.
@@ -50,6 +55,53 @@ public final class TerminalRenderer {
     private final float[] bmpMeasures = new float[0x10000];
     /** Number of rows skipped by the last render (diagnostics/observability only). */
     private int lastSkippedRowCount;
+
+    /**
+     * Row bitmap cache (row_cache experiment): maps an immutable
+     * {@link TerminalRenderRow} to the software bitmap produced by drawing that
+     * row once. Identity semantics: the snapshot row-reuse machinery returns the
+     * same row object for untouched rows across frames, so object identity is the
+     * authoritative unchanged signal (see
+     * {@link TerminalRenderFrame#rowUnchangedFrom}). Cache entries are never
+     * mutated after insertion. Access-order LRU bounded by {@link #mRowCacheCapacity}.
+     *
+     * <p>Equivalence contract: a cached bitmap contains exactly what the direct
+     * path draws into the row band {@code [heightOffset - mFontLineSpacing, heightOffset)}
+     * — the non-default background rects and the text runs. Default-background
+     * pixels stay transparent, matching the direct path where they are not drawn
+     * (the view background shows through in both modes). Rows are drawn back in
+     * increasing row order, identical to the direct interleaving, so overlaps
+     * resolve the same way. Rows intersecting the cursor or the selection are
+     * view projections, not buffer content: they bypass the cache entirely and
+     * are drawn directly, so no projection pixel is ever baked into a bitmap.
+     * Palette or column-count changes clear the whole cache; font changes
+     * recreate this renderer and hence the cache.</p>
+     */
+    private final LinkedHashMap<TerminalRenderRow, Bitmap> mRowBitmapCache =
+        new LinkedHashMap<TerminalRenderRow, Bitmap>(64, 0.75f, true) {
+            @Override
+            protected boolean removeEldestEntry(Map.Entry<TerminalRenderRow, Bitmap> eldest) {
+                return size() > mRowCacheCapacity;
+            }
+        };
+    private int mRowCacheCapacity = 128;
+    private boolean mRowCacheEnabled;
+    /** Palette in effect when the cache was filled; null when the cache is empty/invalid. */
+    private int[] mRowCachePalette;
+    private int mRowCacheColumns = -1;
+
+    /**
+     * Enable/disable the row bitmap cache. Drawn output is unchanged either way;
+     * disabling clears the cache so no stale bitmap can survive the transition.
+     */
+    public void setRowBitmapCacheEnabled(boolean enabled) {
+        if (mRowCacheEnabled != enabled) {
+            mRowBitmapCache.clear();
+            mRowCachePalette = null;
+            mRowCacheColumns = -1;
+        }
+        mRowCacheEnabled = enabled;
+    }
 
     /** Rows skipped by the most recent render; 0 when skipCleanRows was not enabled. */
     public int getLastSkippedRowCount() {
@@ -134,6 +186,20 @@ public final class TerminalRenderer {
         if (reverseVideo)
             canvas.drawColor(palette[TextStyle.COLOR_INDEX_FOREGROUND], PorterDuff.Mode.SRC);
 
+        // Row bitmap cache (row_cache experiment). reverseVideo frames bypass the
+        // cache entirely, so cached bitmaps only ever hold non-reversed content.
+        // Palette or column changes invalidate everything cached so far.
+        final boolean useRowCache = mRowCacheEnabled && !reverseVideo;
+        if (mRowCacheEnabled) {
+            if (mRowCacheColumns != columns || mRowCachePalette == null
+                    || !Arrays.equals(mRowCachePalette, palette)) {
+                mRowBitmapCache.clear();
+                mRowCacheColumns = columns;
+                mRowCachePalette = Arrays.copyOf(palette, palette.length);
+            }
+            mRowCacheCapacity = Math.max(64, (endRow - topRow) * 3);
+        }
+
         float heightOffset = mFontLineSpacingAndAscent;
         int skippedRows = 0;
         for (int row = topRow; row < endRow; row++) {
@@ -167,6 +233,58 @@ public final class TerminalRenderer {
             final char[] line = lineObject.textForRenderer();
             final int charsUsedInLine = lineObject.getSpaceUsed();
 
+            if (useRowCache && cursorX < 0 && !(row >= selectionY1 && row <= selectionY2)) {
+                // Row has no cursor/selection projection: serve it from the row
+                // bitmap cache, rendering into a fresh bitmap on a miss. The band
+                // drawn by the direct path is [heightOffset - mFontLineSpacing,
+                // heightOffset), so the bitmap is anchored at its top edge.
+                Bitmap rowBitmap = mRowBitmapCache.get(lineObject);
+                if (rowBitmap == null) {
+                    mRenderSteps.recordRowCacheMiss();
+                    rowBitmap = renderRowToBitmap(lineObject, line, charsUsedInLine, columns,
+                        palette, heightOffset, reverseVideo, cursorShape);
+                    mRowBitmapCache.put(lineObject, rowBitmap);
+                } else {
+                    mRenderSteps.recordRowCacheHit();
+                }
+                canvas.drawBitmap(rowBitmap, 0.f, heightOffset - mFontLineSpacing, null);
+                continue;
+            }
+
+            drawRowContent(canvas, lineObject, line, charsUsedInLine, columns, palette,
+                heightOffset, reverseVideo, cursorShape, cursorX, selx1, selx2);
+        }
+        lastSkippedRowCount = skippedRows;
+    }
+
+    /**
+     * Render one row into a software bitmap for the row cache. The bitmap covers
+     * exactly the band the direct path touches: {@code [heightOffset - mFontLineSpacing,
+     * heightOffset)}; the canvas is translated so the row code below runs with the
+     * same absolute coordinates as in the direct path. Cursor and selection are
+     * excluded (callers guarantee the row has no projection): passing cursorX=-1
+     * and selx1=-1 reproduces the no-cursor/no-selection control flow exactly.
+     */
+    private Bitmap renderRowToBitmap(TerminalRenderRow lineObject, char[] line, int charsUsedInLine,
+                                     int columns, int[] palette, float heightOffset,
+                                     boolean reverseVideo, int cursorShape) {
+        int width = Math.max(1, (int) Math.ceil(columns * mFontWidth));
+        Bitmap bitmap = Bitmap.createBitmap(width, mFontLineSpacing, Bitmap.Config.ARGB_8888);
+        Canvas rowCanvas = new Canvas(bitmap);
+        rowCanvas.translate(0.f, -(heightOffset - mFontLineSpacing));
+        drawRowContent(rowCanvas, lineObject, line, charsUsedInLine, columns, palette,
+            heightOffset, reverseVideo, cursorShape, -1, -1, -1);
+        return bitmap;
+    }
+
+    /**
+     * Draw a single row: scan style runs and emit the background rects and text
+     * runs. This is the exact body of the direct render path, shared by the
+     * normal path and the row-cache fill path so both produce identical output.
+     */
+    private void drawRowContent(Canvas canvas, TerminalRenderRow lineObject, char[] line,
+                                int charsUsedInLine, int columns, int[] palette, float heightOffset,
+                                boolean reverseVideo, int cursorShape, int cursorX, int selx1, int selx2) {
             long lastRunStyle = 0;
             boolean lastRunInsideCursor = false;
             boolean lastRunInsideSelection = false;
@@ -238,8 +356,6 @@ public final class TerminalRenderer {
             }
             drawTextRun(canvas, line, palette, heightOffset, lastRunStartColumn, columnWidthSinceLastRun, lastRunStartIndex, charsSinceLastRun,
                 measuredWidthForRun, cursorColor, cursorShape, lastRunStyle, reverseVideo || invertCursorTextColor || lastRunInsideSelection);
-        }
-        lastSkippedRowCount = skippedRows;
     }
 
     /**

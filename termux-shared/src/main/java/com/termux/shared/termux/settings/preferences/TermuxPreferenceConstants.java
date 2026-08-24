@@ -104,6 +104,7 @@ public final class TermuxPreferenceConstants {
         public static final String TERMINAL_RENDERING_MODE_SYSTEM = "system";
         public static final String TERMINAL_RENDERING_MODE_HWUI_GPU = "hwui_gpu";
         public static final String TERMINAL_RENDERING_MODE_SOFTWARE = "software";
+        public static final String TERMINAL_RENDERING_MODE_ROW_CACHE = "row_cache";
         public static final String DEFAULT_TERMINAL_RENDERING_MODE = TERMINAL_RENDERING_MODE_SYSTEM;
 
         /** Last rendering state reported by the Canvas passed to TerminalView.onDraw(). */

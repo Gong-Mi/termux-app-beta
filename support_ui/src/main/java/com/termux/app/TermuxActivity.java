@@ -515,15 +515,19 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
 
         String mode = mPreferences.getTerminalRenderingMode();
         int layerType;
+        boolean rowBitmapCache = TermuxPreferenceConstants.TERMUX_APP.TERMINAL_RENDERING_MODE_ROW_CACHE.equals(mode);
         if (TermuxPreferenceConstants.TERMUX_APP.TERMINAL_RENDERING_MODE_HWUI_GPU.equals(mode)) {
             getWindow().addFlags(WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED);
             layerType = View.LAYER_TYPE_HARDWARE;
         } else if (TermuxPreferenceConstants.TERMUX_APP.TERMINAL_RENDERING_MODE_SOFTWARE.equals(mode)) {
             layerType = View.LAYER_TYPE_SOFTWARE;
         } else {
+            // row_cache intentionally keeps LAYER_TYPE_NONE: the row bitmap cache
+            // retains content itself, without paying the full-view layer composite.
             layerType = View.LAYER_TYPE_NONE;
         }
 
+        mTerminalView.setRowBitmapCacheEnabled(rowBitmapCache);
         if (mTerminalView.getLayerType() != layerType) {
             mTerminalView.setLayerType(layerType, null);
             mTerminalView.invalidate();
