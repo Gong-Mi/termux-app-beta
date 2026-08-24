@@ -250,7 +250,47 @@ jobs:
           echo '== frame metric invariant check (all lines) =='
           python3 .github/workflows/verify_frame_metrics.py terminal-log-summary.txt --min-lines 1
 
-      - name: Upload pixel-loop stress evidence
+      - name: Publish lightweight stress summary
+        if: always()
+        run: |
+          {
+            echo '## Pixel-loop emulator stress summary'
+            echo
+            echo '### Producer and runtime identity'
+            cat stress-evidence.txt 2>/dev/null || true
+            echo
+            echo '### Requested workload'
+            cat stress-metrics.txt 2>/dev/null || true
+            echo
+            echo '### Memory summary'
+            cat meminfo-summary.json 2>/dev/null || true
+            echo
+            echo '### Graphics summary'
+            cat gfxinfo-summary.json 2>/dev/null || true
+            echo
+            echo '### Frame metrics'
+            cat terminal-log-summary.txt 2>/dev/null || true
+          } | tee emulator-stress-summary.txt >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload lightweight stress summary
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: pixel-loop-stress-summary-x86_64
+          path: |
+            pixel-loop-file.txt
+            pixel-loop-dynamic.txt
+            debug-artifacts.sha256
+            package-running.txt
+            stress-metrics.txt
+            stress-evidence.txt
+            meminfo-summary.json
+            gfxinfo-summary.json
+            terminal-log-summary.txt
+            emulator-stress-summary.txt
+          if-no-files-found: warn
+
+      - name: Upload full pixel-loop stress evidence
         if: always()
         uses: actions/upload-artifact@v6
         with:
