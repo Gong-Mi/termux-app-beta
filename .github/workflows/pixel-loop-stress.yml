@@ -33,6 +33,7 @@ on:
         options:
           - system
           - hwui_gpu
+          - row_cache
       producer_mode:
         description: "Stress producer"
         required: false
@@ -174,13 +175,13 @@ jobs:
           adb shell run-as com.termux sha256sum /data/data/com.termux/files/usr/tmp/$PIXEL_LOOP_ASSET
 
       - name: Select rendering mode
-        if: inputs.rendering_mode == 'hwui_gpu'
+        if: inputs.rendering_mode != 'system'
         run: |
           set -euxo pipefail
-          cat > /tmp/termux_prefs.xml <<'EOF'
+          cat > /tmp/termux_prefs.xml <<EOF
           <?xml version="1.0" encoding="utf-8" standalone="yes" ?>
           <map>
-              <string name="terminal_rendering_mode">hwui_gpu</string>
+              <string name="terminal_rendering_mode">${{ inputs.rendering_mode }}</string>
           </map>
           EOF
           adb push /tmp/termux_prefs.xml /data/local/tmp/termux_prefs.xml

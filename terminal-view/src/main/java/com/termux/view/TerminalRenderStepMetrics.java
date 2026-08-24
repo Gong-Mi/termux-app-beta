@@ -18,6 +18,8 @@ public final class TerminalRenderStepMetrics {
     private long mGlyphMeasureCalls;
     private long mDrawTextRunCalls;
     private long mDrawRectCalls;
+    private long mRowCacheHits;
+    private long mRowCacheMisses;
     private long mPaintSetupNanos;
     private long mDrawRectNanos;
     private long mDrawTextNanos;
@@ -36,6 +38,10 @@ public final class TerminalRenderStepMetrics {
 
     public void recordDrawRectCall() { mDrawRectCalls++; }
 
+    public void recordRowCacheHit() { mRowCacheHits++; }
+
+    public void recordRowCacheMiss() { mRowCacheMisses++; }
+
     public void recordPaintSetupNanos(long nanos) { mPaintSetupNanos += nanos; }
     public void recordDrawRectNanos(long nanos) { mDrawRectNanos += nanos; }
     public void recordDrawTextNanos(long nanos) { mDrawTextNanos += nanos; }
@@ -44,6 +50,7 @@ public final class TerminalRenderStepMetrics {
     public Snapshot getAndResetDelta() {
         Snapshot snapshot = new Snapshot(mVisitedRows, mSkippedRows, mVisitedCells,
             mWcWidthCalls, mGlyphMeasureCalls, mDrawTextRunCalls, mDrawRectCalls,
+            mRowCacheHits, mRowCacheMisses,
             mPaintSetupNanos, mDrawRectNanos, mDrawTextNanos);
         mVisitedRows = 0;
         mSkippedRows = 0;
@@ -52,6 +59,8 @@ public final class TerminalRenderStepMetrics {
         mGlyphMeasureCalls = 0;
         mDrawTextRunCalls = 0;
         mDrawRectCalls = 0;
+        mRowCacheHits = 0;
+        mRowCacheMisses = 0;
         mPaintSetupNanos = 0;
         mDrawRectNanos = 0;
         mDrawTextNanos = 0;
@@ -67,13 +76,16 @@ public final class TerminalRenderStepMetrics {
         public final long glyphMeasureCalls;
         public final long drawTextRunCalls;
         public final long drawRectCalls;
+        public final long rowCacheHits;
+        public final long rowCacheMisses;
         public final long paintSetupNanos;
         public final long drawRectNanos;
         public final long drawTextNanos;
 
         Snapshot(long visitedRows, long skippedRows, long visitedCells,
                  long wcWidthCalls, long glyphMeasureCalls, long drawTextRunCalls,
-                 long drawRectCalls, long paintSetupNanos, long drawRectNanos,
+                 long drawRectCalls, long rowCacheHits, long rowCacheMisses,
+                 long paintSetupNanos, long drawRectNanos,
                  long drawTextNanos) {
             this.visitedRows = visitedRows;
             this.skippedRows = skippedRows;
@@ -82,6 +94,8 @@ public final class TerminalRenderStepMetrics {
             this.glyphMeasureCalls = glyphMeasureCalls;
             this.drawTextRunCalls = drawTextRunCalls;
             this.drawRectCalls = drawRectCalls;
+            this.rowCacheHits = rowCacheHits;
+            this.rowCacheMisses = rowCacheMisses;
             this.paintSetupNanos = paintSetupNanos;
             this.drawRectNanos = drawRectNanos;
             this.drawTextNanos = drawTextNanos;
