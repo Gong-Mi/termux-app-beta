@@ -357,6 +357,8 @@ jobs:
             meminfo-summary.json
             gfxinfo-summary.json
             terminal-log-summary.txt
+            top-thread-samples.txt
+            gfxinfo-final.txt
             emulator-stress-summary.txt
           if-no-files-found: warn
 
