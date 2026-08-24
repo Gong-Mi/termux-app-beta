@@ -25,6 +25,14 @@ on:
         required: false
         default: "60"
         type: string
+      rendering_mode:
+        description: "Terminal rendering mode"
+        required: false
+        default: "system"
+        type: choice
+        options:
+          - system
+          - hwui_gpu
 
 env:
   JAVA_VERSION: 21
@@ -157,11 +165,33 @@ jobs:
           adb shell run-as com.termux chmod 755 /data/data/com.termux/files/usr/tmp/$PIXEL_LOOP_ASSET
           adb shell run-as com.termux sha256sum /data/data/com.termux/files/usr/tmp/$PIXEL_LOOP_ASSET
 
+      - name: Select rendering mode
+        if: inputs.rendering_mode == 'hwui_gpu'
+        run: |
+          set -euxo pipefail
+          cat > /tmp/termux_prefs.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8" standalone="yes" ?>
+          <map>
+              <string name="terminal_rendering_mode">hwui_gpu</string>
+          </map>
+          EOF
+          adb push /tmp/termux_prefs.xml /data/local/tmp/termux_prefs.xml
+          adb shell run-as com.termux mkdir -p shared_prefs
+          adb shell run-as com.termux cp /data/local/tmp/termux_prefs.xml shared_prefs/com.termux_preferences.xml
+          adb shell am force-stop com.termux
+          adb shell am start -W -n com.termux/.app.TermuxActivity
+          for i in $(seq 1 24); do
+            if adb shell run-as com.termux test -x /data/data/com.termux/files/usr/bin/sh; then break; fi
+            sleep 5
+          done
+          adb shell run-as com.termux test -x /data/data/com.termux/files/usr/bin/sh
+
       - name: Run producer through the real Termux terminal session
         env:
           DURATION: ${{ inputs.duration_seconds }}
           FIT_MODE: ${{ inputs.fit_mode }}
           FPS: ${{ inputs.fps }}
+          RENDERING_MODE: ${{ inputs.rendering_mode }}
         run: |
           set -euxo pipefail
           PRODUCER=/data/data/com.termux/files/usr/tmp/$PIXEL_LOOP_ASSET
@@ -195,6 +225,7 @@ jobs:
           echo "PRODUCER_REQUESTED_SECONDS=$DURATION" | tee stress-metrics.txt
           echo "PRODUCER_FIT_MODE=$FIT_MODE" | tee -a stress-metrics.txt
           echo "PRODUCER_FPS=$FPS" | tee -a stress-metrics.txt
+          echo "PRODUCER_RENDERING_MODE=$RENDERING_MODE" | tee -a stress-metrics.txt
           echo "PRODUCER_WALL_SECONDS=$((end-start))" | tee -a stress-metrics.txt
           adb exec-out screencap -p > pixel-loop-running.png
           adb shell ps -A | grep -E 'com.termux|pixel-loop' | tee -a stress-metrics.txt || true
