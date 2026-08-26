@@ -38,6 +38,22 @@ public interface TerminalFrameConsumer {
      */
     void detach(long renderGeneration);
 
+    /**
+     * Detach and wait for any in-flight frames of this generation to complete.
+     *
+     * <p>Synchronous backends (Canvas) can return immediately. Asynchronous
+     * backends must block until the previously submitted frame has been fully
+     * processed or the timeout elapses.</p>
+     *
+     * @param renderGeneration the generation this consumer was attached with.
+     * @param timeoutMs        maximum time to wait for in-flight work.
+     * @return true if the consumer detached cleanly and no frames are in flight.
+     */
+    default boolean detachAndJoin(long renderGeneration, long timeoutMs) {
+        detach(renderGeneration);
+        return true;
+    }
+
     /** Return a snapshot of rendering counters. */
     RenderStats snapshot();
 }
