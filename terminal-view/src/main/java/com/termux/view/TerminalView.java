@@ -1703,7 +1703,7 @@ public final class TerminalView extends View {
         super.onDetachedFromWindow();
 
         if (mCanvasFrameConsumer != null) {
-            mCanvasFrameConsumer.detach(mCanvasFrameConsumerGeneration);
+            mCanvasFrameConsumer.detachAndJoin(mCanvasFrameConsumerGeneration, 250L);
             mCanvasFrameConsumer = null;
             mCanvasFrameConsumerRenderer = null;
         }
