@@ -65,8 +65,10 @@ public final class CanvasFrameConsumer implements TerminalFrameConsumer {
             || mView.getLayerType() == View.LAYER_TYPE_SOFTWARE;
         boolean skipCleanRows = !damage.fullRedraw && layered;
 
-        mRasteredCount++;
         mRenderer.render(frame, mCanvas, skipCleanRows, mLastSubmittedFrame);
+        // The reference Canvas render has completed successfully. For a hardware
+        // Canvas this is still command generation, not physical presentation.
+        mRasteredCount++;
         mSubmittedCount++;
         mLastSubmittedFrame = frame;
         mLastSubmittedIdentity = identity;
