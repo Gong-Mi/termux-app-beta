@@ -1186,7 +1186,7 @@ public final class TerminalView extends View {
 
             TerminalFrameConsumerMailbox.Entry<TerminalRenderFrame> entry =
                 mFrameConsumerMailbox != null ? mFrameConsumerMailbox.acquireLatest() : null;
-            TerminalRenderFrame frame = entry != null ? entry.frame : null;
+            TerminalRenderFrame frame = frameForDraw(entry, mLastRenderFrame);
             if (frame != null) mLastRenderFrame = frame;
             final TerminalModelFrame model = frame != null ? frame.getModelFrame() : null;
             if (frame == null) {
@@ -1230,6 +1230,18 @@ public final class TerminalView extends View {
         } finally {
             Trace.endSection();
         }
+    }
+
+    /**
+     * Select the frame to draw after a mailbox acquire. An empty mailbox after the
+     * first successful draw means "no new frame", not "no frame exists"; system
+     * redraws and view-only invalidations must redraw the last valid frame rather
+     * than clear the terminal to black.
+     */
+    static TerminalRenderFrame frameForDraw(
+            TerminalFrameConsumerMailbox.Entry<TerminalRenderFrame> entry,
+            TerminalRenderFrame lastRenderedFrame) {
+        return entry != null ? entry.frame : lastRenderedFrame;
     }
 
     public TerminalSession getCurrentSession() {
