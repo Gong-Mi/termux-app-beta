@@ -14,6 +14,7 @@ import android.view.View;
 public final class CanvasFrameConsumer implements TerminalFrameConsumer {
 
     private final TerminalRenderer mRenderer;
+    private final RenderFrameMetrics mMetrics;
     private final View mView;
 
     private long mGeneration;
@@ -25,8 +26,9 @@ public final class CanvasFrameConsumer implements TerminalFrameConsumer {
     private long mRasteredCount;
     private long mSubmittedCount;
 
-    public CanvasFrameConsumer(TerminalRenderer renderer, View view) {
+    public CanvasFrameConsumer(TerminalRenderer renderer, RenderFrameMetrics metrics, View view) {
         mRenderer = renderer;
+        mMetrics = metrics;
         mView = view;
     }
 
@@ -68,6 +70,7 @@ public final class CanvasFrameConsumer implements TerminalFrameConsumer {
         mSubmittedCount++;
         mLastSubmittedFrame = frame;
         mLastSubmittedIdentity = identity;
+        mMetrics.ack(frame.screenRevision);
     }
 
     @Override
@@ -81,11 +84,20 @@ public final class CanvasFrameConsumer implements TerminalFrameConsumer {
 
     @Override
     public RenderStats snapshot() {
-        // Canvas backend has no mailbox and no evidence of presented frames.
+        // Canvas backend has no evidence of presented frames.
+        // Keep legacy published/drawn/dropped counters from RenderFrameMetrics for
+        // compatibility with existing diagnostics/smoke verifiers while also exposing
+        // the new stage counters.
         return new RenderStats(
-            0L, 0L, 0L,
-            mRasteredCount, mSubmittedCount, 0L,
-            0L, 0L, 0L);
+            mMetrics.getPublishedFrameCount(),
+            mMetrics.getDrawnFrameCount(),
+            mMetrics.getDroppedFrameCount(),
+            mRasteredCount,
+            mSubmittedCount,
+            0L,
+            mMetrics.getLastPublishedScreenRevision(),
+            mMetrics.getLastDrawnScreenRevision(),
+            mMetrics.getCoalescedRevisionCount());
     }
 
     public long getGeneration() {

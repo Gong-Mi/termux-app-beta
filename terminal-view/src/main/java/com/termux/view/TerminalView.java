@@ -1134,7 +1134,7 @@ public final class TerminalView extends View {
 
     private CanvasFrameConsumer getOrCreateCanvasFrameConsumer() {
         if (mCanvasFrameConsumer == null || mCanvasFrameConsumerRenderer != mRenderer) {
-            mCanvasFrameConsumer = new CanvasFrameConsumer(mRenderer, this);
+            mCanvasFrameConsumer = new CanvasFrameConsumer(mRenderer, mFrameMetrics, this);
             mCanvasFrameConsumerRenderer = mRenderer;
             mCanvasFrameConsumerGeneration = -1;
         }
