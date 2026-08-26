@@ -1766,6 +1766,18 @@ public final class TerminalView extends View {
      */
     public void notifySelectionChanged() {
         if (!mRenderTargetAttached || mLastModelFrame == null) return;
+        int[] sel = mDefaultSelectors;
+        if (mTextSelectionCursorController != null) {
+            mTextSelectionCursorController.getSelectors(sel);
+        }
+        if (mLastRenderFrame != null
+            && sel[0] == mLastRenderFrame.selectionY1
+            && sel[1] == mLastRenderFrame.selectionY2
+            && sel[2] == mLastRenderFrame.selectionX1
+            && sel[3] == mLastRenderFrame.selectionX2) {
+            // Selection has not actually changed relative to the last published projection.
+            return;
+        }
         mProjectionRevision.incrementAndGet();
         buildAndPublishProjectionFrame();
         invalidate();
