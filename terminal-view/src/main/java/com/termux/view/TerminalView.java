@@ -358,7 +358,7 @@ public final class TerminalView extends View {
             public void publishFrame(TerminalModelFrame frame) {
                 if (!mSessionGate.isCurrent(sessionGeneration)) return;
                 mLastModelFrame = frame;
-                publishProjectionFrameLocked(frame);
+                mFrameInvalidationGate.request(TerminalView.this::buildAndPublishProjectionFrame);
             }
 
             @Override
@@ -383,13 +383,14 @@ public final class TerminalView extends View {
     }
 
     /**
-     * Build a {@link TerminalRenderFrame} from the given model frame and current view
+     * Build a {@link TerminalRenderFrame} from the latest stored model frame and current view
      * projection (top row + selection), then submit it to the consumer mailbox.
      *
      * <p>Must run on the UI thread because it reads view selection and topRow.</p>
      */
-    private void publishProjectionFrameLocked(TerminalModelFrame model) {
-        if (mFrameConsumerMailbox == null) return;
+    private void buildAndPublishProjectionFrame() {
+        TerminalModelFrame model = mLastModelFrame;
+        if (model == null || mFrameConsumerMailbox == null) return;
         int[] selectors = mDefaultSelectors;
         if (mTextSelectionCursorController != null) {
             mTextSelectionCursorController.getSelectors(selectors);
@@ -402,7 +403,7 @@ public final class TerminalView extends View {
         boolean hadPending = mFrameConsumerMailbox.peekLatest() != null;
         TerminalFrameConsumerMailbox.SubmitResult result = mFrameConsumerMailbox.submit(render, identity);
         if (result == TerminalFrameConsumerMailbox.SubmitResult.ACCEPTED && !hadPending) {
-            mFrameInvalidationGate.request(this::invalidate);
+            invalidate();
         }
     }
 
@@ -616,7 +617,7 @@ public final class TerminalView extends View {
 
         if (mTopRow != previousTopRow) {
             mProjectionRevision.incrementAndGet();
-            if (mLastModelFrame != null) publishProjectionFrameLocked(mLastModelFrame);
+            buildAndPublishProjectionFrame();
         }
         invalidate();
         if (mAccessibilityEnabled) setContentDescription(getText());
@@ -1154,7 +1155,7 @@ public final class TerminalView extends View {
             mTopRow = 0;
             scrollTo(0, 0);
             mProjectionRevision.incrementAndGet();
-            if (mLastModelFrame != null) publishProjectionFrameLocked(mLastModelFrame);
+            buildAndPublishProjectionFrame();
             invalidate();
         }
     }
