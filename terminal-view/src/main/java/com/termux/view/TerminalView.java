@@ -1202,16 +1202,20 @@ public final class TerminalView extends View {
                         mCanvasFrameConsumerGeneration = mTargetGeneration;
                     }
                     RenderDamage damage = RenderDamage.compute(frame, consumer.getLastSubmittedFrame());
-                    if (entry != null && mFrameConsumerMailbox != null) {
-                        // RASTERED means CPU raster / command generation is about to begin.
-                        mFrameConsumerMailbox.recordAck(entry.identity, TerminalFrameConsumerMailbox.AckStage.RASTERED);
-                    }
                     consumer.setCanvas(canvas);
-                    consumer.submit(frame, damage, entry != null ? entry.identity : null, mTargetGeneration);
+                    TerminalFrameRenderCompletion.run(
+                        () -> consumer.submit(frame, damage, entry != null ? entry.identity : null, mTargetGeneration),
+                        () -> {
+                            if (entry != null && mFrameConsumerMailbox != null) {
+                                // This is the end of reference Canvas command generation;
+                                // it is not physical GPU/SF presentation.
+                                mFrameConsumerMailbox.recordAck(entry.identity,
+                                    TerminalFrameConsumerMailbox.AckStage.RASTERED);
+                                mFrameConsumerMailbox.recordAck(entry.identity,
+                                    TerminalFrameConsumerMailbox.AckStage.SUBMITTED);
+                            }
+                        });
                     mLastRenderedFrame = frame;
-                    if (entry != null && mFrameConsumerMailbox != null) {
-                        mFrameConsumerMailbox.recordAck(entry.identity, TerminalFrameConsumerMailbox.AckStage.SUBMITTED);
-                    }
                     if (model != null) {
                         mTermSession.onFrameConsumed(model);
                     }
