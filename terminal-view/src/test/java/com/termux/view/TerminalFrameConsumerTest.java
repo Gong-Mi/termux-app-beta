@@ -98,4 +98,13 @@ public class TerminalFrameConsumerTest {
         assertEquals(99L, snapshot.lastDrawnScreenRevision);
         assertEquals(5L, snapshot.coalescedRevisions);
     }
+
+    @Test
+    public void defaultDetachAndJoinDelegatesToDetachAndReturnsTrue() {
+        StubConsumer consumer = new StubConsumer();
+        consumer.attach(3L, new RenderGeometry(80, 24, 1080, 1920));
+        boolean joined = consumer.detachAndJoin(3L, 250L);
+        assertTrue(joined);
+        assertTrue(consumer.detached);
+    }
 }
