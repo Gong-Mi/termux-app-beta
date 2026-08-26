@@ -81,7 +81,7 @@ public final class TerminalView extends View {
     /** Projection revision: bumps when selection, topRow or view geometry changes without a new model frame. */
     private final AtomicLong mProjectionRevision = new AtomicLong();
     /** Most recently acquired model frame, reused for View-only projection changes. */
-    private TerminalModelFrame mLastModelFrame;
+    private volatile TerminalModelFrame mLastModelFrame;
     /** Immutable accounting object tracking publish/draw/ack lifecycle. */
     private final RenderFrameMetrics mFrameMetrics = new RenderFrameMetrics();
     /** Parser callbacks must coalesce onto the View's UI thread before invalidating. */
