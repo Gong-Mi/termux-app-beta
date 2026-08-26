@@ -146,6 +146,24 @@ public final class TerminalFrameConsumerMailbox<T extends FrameRevision> {
         return mRejectedAckOrder.get();
     }
 
+    /** Return a snapshot of mailbox-side counters. Stage counters are zero because the
+     * mailbox does not observe raster/submit/present; it only tracks published/dropped
+     * and the four rejection categories. */
+    public RenderStats snapshot() {
+        return new RenderStats(
+            mMetrics.getPublishedFrameCount(),
+            mMetrics.getDrawnFrameCount(),
+            mMetrics.getDroppedFrameCount(),
+            0L, 0L, 0L,
+            mRejectedIncompatible.get(),
+            mRejectedStale.get(),
+            mRejectedAckIncompatible.get(),
+            mRejectedAckOrder.get(),
+            mMetrics.getLastPublishedScreenRevision(),
+            mMetrics.getLastDrawnScreenRevision(),
+            mMetrics.getCoalescedRevisionCount());
+    }
+
     /** Acquire and clear the latest accepted frame and its identity. */
     public synchronized Entry<T> acquireLatest() {
         Entry<T> entry = mSlot.getAndSet(null);

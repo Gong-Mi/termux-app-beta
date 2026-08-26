@@ -95,6 +95,7 @@ public final class CanvasFrameConsumer implements TerminalFrameConsumer {
             mRasteredCount,
             mSubmittedCount,
             0L,
+            0L, 0L, 0L, 0L,
             mMetrics.getLastPublishedScreenRevision(),
             mMetrics.getLastDrawnScreenRevision(),
             mMetrics.getCoalescedRevisionCount());

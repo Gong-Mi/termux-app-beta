@@ -14,12 +14,18 @@ public final class RenderStats {
     public final long rasteredFrames;
     public final long submittedFrames;
     public final long presentedFrames;
+    public final long rejectedIncompatibleFrames;
+    public final long rejectedStaleFrames;
+    public final long rejectedAckIncompatibleFrames;
+    public final long rejectedAckOrderFrames;
     public final long lastPublishedScreenRevision;
     public final long lastDrawnScreenRevision;
     public final long coalescedRevisions;
 
     public RenderStats(long publishedFrames, long drawnFrames, long droppedFrames,
                        long rasteredFrames, long submittedFrames, long presentedFrames,
+                       long rejectedIncompatibleFrames, long rejectedStaleFrames,
+                       long rejectedAckIncompatibleFrames, long rejectedAckOrderFrames,
                        long lastPublishedScreenRevision, long lastDrawnScreenRevision,
                        long coalescedRevisions) {
         this.publishedFrames = publishedFrames;
@@ -28,6 +34,10 @@ public final class RenderStats {
         this.rasteredFrames = rasteredFrames;
         this.submittedFrames = submittedFrames;
         this.presentedFrames = presentedFrames;
+        this.rejectedIncompatibleFrames = rejectedIncompatibleFrames;
+        this.rejectedStaleFrames = rejectedStaleFrames;
+        this.rejectedAckIncompatibleFrames = rejectedAckIncompatibleFrames;
+        this.rejectedAckOrderFrames = rejectedAckOrderFrames;
         this.lastPublishedScreenRevision = lastPublishedScreenRevision;
         this.lastDrawnScreenRevision = lastDrawnScreenRevision;
         this.coalescedRevisions = coalescedRevisions;
@@ -35,13 +45,14 @@ public final class RenderStats {
 
     /**
      * Convenience constructor for callers that only track the legacy
-     * published/drawn/dropped counters. Stage counters are zeroed.
+     * published/drawn/dropped counters. Stage and rejection counters are zeroed.
      */
     public RenderStats(long publishedFrames, long drawnFrames, long droppedFrames,
                        long lastPublishedScreenRevision, long lastDrawnScreenRevision,
                        long coalescedRevisions) {
         this(publishedFrames, drawnFrames, droppedFrames,
              0L, 0L, 0L,
+             0L, 0L, 0L, 0L,
              lastPublishedScreenRevision, lastDrawnScreenRevision, coalescedRevisions);
     }
 
@@ -56,6 +67,10 @@ public final class RenderStats {
             && rasteredFrames == other.rasteredFrames
             && submittedFrames == other.submittedFrames
             && presentedFrames == other.presentedFrames
+            && rejectedIncompatibleFrames == other.rejectedIncompatibleFrames
+            && rejectedStaleFrames == other.rejectedStaleFrames
+            && rejectedAckIncompatibleFrames == other.rejectedAckIncompatibleFrames
+            && rejectedAckOrderFrames == other.rejectedAckOrderFrames
             && lastPublishedScreenRevision == other.lastPublishedScreenRevision
             && lastDrawnScreenRevision == other.lastDrawnScreenRevision
             && coalescedRevisions == other.coalescedRevisions;
@@ -69,6 +84,10 @@ public final class RenderStats {
         result = 31 * result + Long.hashCode(rasteredFrames);
         result = 31 * result + Long.hashCode(submittedFrames);
         result = 31 * result + Long.hashCode(presentedFrames);
+        result = 31 * result + Long.hashCode(rejectedIncompatibleFrames);
+        result = 31 * result + Long.hashCode(rejectedStaleFrames);
+        result = 31 * result + Long.hashCode(rejectedAckIncompatibleFrames);
+        result = 31 * result + Long.hashCode(rejectedAckOrderFrames);
         result = 31 * result + Long.hashCode(lastPublishedScreenRevision);
         result = 31 * result + Long.hashCode(lastDrawnScreenRevision);
         result = 31 * result + Long.hashCode(coalescedRevisions);
@@ -84,6 +103,10 @@ public final class RenderStats {
             + ", rastered=" + rasteredFrames
             + ", submitted=" + submittedFrames
             + ", presented=" + presentedFrames
+            + ", rejectedIncompatible=" + rejectedIncompatibleFrames
+            + ", rejectedStale=" + rejectedStaleFrames
+            + ", rejectedAckIncompatible=" + rejectedAckIncompatibleFrames
+            + ", rejectedAckOrder=" + rejectedAckOrderFrames
             + ", lastPublishedRevision=" + lastPublishedScreenRevision
             + ", lastDrawnRevision=" + lastDrawnScreenRevision
             + ", coalesced=" + coalescedRevisions
