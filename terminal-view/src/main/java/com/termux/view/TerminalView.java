@@ -1134,7 +1134,7 @@ public final class TerminalView extends View {
 
     private CanvasFrameConsumer getOrCreateCanvasFrameConsumer() {
         if (mCanvasFrameConsumer == null || mCanvasFrameConsumerRenderer != mRenderer) {
-            mCanvasFrameConsumer = new CanvasFrameConsumer(mRenderer, mFrameMetrics, this);
+            mCanvasFrameConsumer = new CanvasFrameConsumer(mRenderer, this);
             mCanvasFrameConsumerRenderer = mRenderer;
             mCanvasFrameConsumerGeneration = -1;
         }
@@ -1197,6 +1197,10 @@ public final class TerminalView extends View {
                         mCanvasFrameConsumerGeneration = mTargetGeneration;
                     }
                     RenderDamage damage = RenderDamage.compute(frame, consumer.getLastSubmittedFrame());
+                    if (entry != null && mFrameConsumerMailbox != null) {
+                        // RASTERED means CPU raster / command generation is about to begin.
+                        mFrameConsumerMailbox.recordAck(entry.identity, TerminalFrameConsumerMailbox.AckStage.RASTERED);
+                    }
                     consumer.setCanvas(canvas);
                     consumer.submit(frame, damage, entry != null ? entry.identity : null, mTargetGeneration);
                     mLastRenderedFrame = frame;
@@ -1697,6 +1701,12 @@ public final class TerminalView extends View {
     @Override
     protected void onDetachedFromWindow() {
         super.onDetachedFromWindow();
+
+        if (mCanvasFrameConsumer != null) {
+            mCanvasFrameConsumer.detach(mCanvasFrameConsumerGeneration);
+            mCanvasFrameConsumer = null;
+            mCanvasFrameConsumerRenderer = null;
+        }
 
         if (mTextSelectionCursorController != null) {
             // Might solve the following exception

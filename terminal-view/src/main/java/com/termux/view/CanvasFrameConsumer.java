@@ -14,7 +14,6 @@ import android.view.View;
 public final class CanvasFrameConsumer implements TerminalFrameConsumer {
 
     private final TerminalRenderer mRenderer;
-    private final RenderFrameMetrics mMetrics;
     private final View mView;
 
     private long mGeneration;
@@ -23,9 +22,11 @@ public final class CanvasFrameConsumer implements TerminalFrameConsumer {
     private TerminalRenderFrame mLastSubmittedFrame;
     private TerminalFrameIdentity mLastSubmittedIdentity;
 
-    public CanvasFrameConsumer(TerminalRenderer renderer, RenderFrameMetrics metrics, View view) {
+    private long mRasteredCount;
+    private long mSubmittedCount;
+
+    public CanvasFrameConsumer(TerminalRenderer renderer, View view) {
         mRenderer = renderer;
-        mMetrics = metrics;
         mView = view;
     }
 
@@ -40,6 +41,8 @@ public final class CanvasFrameConsumer implements TerminalFrameConsumer {
         mAttached = true;
         mLastSubmittedFrame = null;
         mLastSubmittedIdentity = null;
+        mRasteredCount = 0;
+        mSubmittedCount = 0;
     }
 
     @Override
@@ -52,7 +55,7 @@ public final class CanvasFrameConsumer implements TerminalFrameConsumer {
             throw new IllegalStateException("Canvas not set");
         }
         if (renderGeneration != mGeneration) {
-            // Belongs to a detached generation; ignore.
+            // Frame belongs to a detached generation; ignore.
             return;
         }
 
@@ -60,10 +63,11 @@ public final class CanvasFrameConsumer implements TerminalFrameConsumer {
             || mView.getLayerType() == View.LAYER_TYPE_SOFTWARE;
         boolean skipCleanRows = !damage.fullRedraw && layered;
 
+        mRasteredCount++;
         mRenderer.render(frame, mCanvas, skipCleanRows, mLastSubmittedFrame);
+        mSubmittedCount++;
         mLastSubmittedFrame = frame;
         mLastSubmittedIdentity = identity;
-        mMetrics.ack(frame.screenRevision);
     }
 
     @Override
@@ -77,13 +81,11 @@ public final class CanvasFrameConsumer implements TerminalFrameConsumer {
 
     @Override
     public RenderStats snapshot() {
+        // Canvas backend has no mailbox and no evidence of presented frames.
         return new RenderStats(
-            mMetrics.getPublishedFrameCount(),
-            mMetrics.getDrawnFrameCount(),
-            mMetrics.getDroppedFrameCount(),
-            mMetrics.getLastPublishedScreenRevision(),
-            mMetrics.getLastDrawnScreenRevision(),
-            mMetrics.getCoalescedRevisionCount());
+            0L, 0L, 0L,
+            mRasteredCount, mSubmittedCount, 0L,
+            0L, 0L, 0L);
     }
 
     public long getGeneration() {
