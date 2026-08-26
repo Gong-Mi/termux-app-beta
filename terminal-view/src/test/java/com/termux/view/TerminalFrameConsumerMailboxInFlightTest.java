@@ -27,8 +27,8 @@ public class TerminalFrameConsumerMailboxInFlightTest {
         mailbox.submit(new TestFrame(13L), newer);
 
         assertEquals(TerminalFrameConsumerMailbox.AckResult.RECORDED,
-            mailbox.recordAck(older, TerminalFrameConsumerMailbox.AckStage.ACCEPTED));
-        assertEquals(TerminalFrameConsumerMailbox.AckResult.RECORDED,
             mailbox.recordAck(older, TerminalFrameConsumerMailbox.AckStage.RASTERED));
+        assertEquals(TerminalFrameConsumerMailbox.AckResult.RECORDED,
+            mailbox.recordAck(older, TerminalFrameConsumerMailbox.AckStage.SUBMITTED));
     }
 }

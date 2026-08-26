@@ -32,10 +32,10 @@ public class TerminalFrameConsumerMailboxMetricsTest {
             new TerminalFrameConsumerMailbox<>(new RenderFrameMetrics(), 7L, 3L);
         TerminalFrameIdentity identity = new TerminalFrameIdentity(7L, 3L, 1L, 1L);
         mailbox.submit(new TestFrame(1L), identity);
-        mailbox.recordAck(identity, TerminalFrameConsumerMailbox.AckStage.ACCEPTED);
-        mailbox.recordAck(identity, TerminalFrameConsumerMailbox.AckStage.ACCEPTED);
+        mailbox.recordAck(identity, TerminalFrameConsumerMailbox.AckStage.RASTERED);
+        mailbox.recordAck(identity, TerminalFrameConsumerMailbox.AckStage.RASTERED);
         mailbox.recordAck(new TerminalFrameIdentity(6L, 3L, 1L, 1L),
-            TerminalFrameConsumerMailbox.AckStage.RASTERED);
+            TerminalFrameConsumerMailbox.AckStage.SUBMITTED);
 
         assertEquals(1L, mailbox.getRejectedAckOrderCount());
         assertEquals(1L, mailbox.getRejectedAckIncompatibleCount());

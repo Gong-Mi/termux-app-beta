@@ -85,7 +85,8 @@ public final class TerminalFrameConsumerMailbox<T extends FrameRevision> {
         Entry<T> entry = new Entry<>(frame, identity);
         Entry<T> replaced = mSlot.getAndSet(entry);
         mLastAccepted.set(identity);
-        mAckStages.put(identity, null);
+        // ACCEPTED is implicit upon submission; recordAck advances from here.
+        mAckStages.put(identity, AckStage.ACCEPTED);
         if (replaced != null) mAckStages.remove(replaced.identity);
         if (replaced != null) mMetrics.drop();
         mMetrics.publish(frame.getScreenRevision());
@@ -93,8 +94,11 @@ public final class TerminalFrameConsumerMailbox<T extends FrameRevision> {
     }
 
     /**
-     * Record a milestone for the latest accepted identity.
-     * The consumer must not report a later stage without recording earlier ones.
+     * Record the next evidence-based milestone for an identity.
+     *
+     * <p>Stages must advance contiguously: ACCEPTED is set by submit; the first
+     * call must be RASTERED, then SUBMITTED. PRESENTED is not allowed without
+     * FrameTimeline/present-fence evidence and is rejected as unknown.</p>
      */
     public synchronized AckResult recordAck(TerminalFrameIdentity identity, AckStage stage) {
         if (identity == null || stage == null
@@ -107,13 +111,22 @@ public final class TerminalFrameConsumerMailbox<T extends FrameRevision> {
             mRejectedAckOrder.incrementAndGet();
             return AckResult.REJECTED_ORDER;
         }
-        AckStage previous = mAckStages.get(identity);
-        if (previous != null && stage.ordinal() <= previous.ordinal()) {
+        // PRESENTED requires external evidence; do not infer it.
+        if (stage == AckStage.PRESENTED) {
+            mRejectedAckOrder.incrementAndGet();
+            return AckResult.REJECTED_ORDER;
+        }
+        AckStage current = mAckStages.get(identity);
+        if (current == AckStage.SUBMITTED) {
+            mRejectedAckOrder.incrementAndGet();
+            return AckResult.REJECTED_ORDER;
+        }
+        AckStage expected = AckStage.values()[current.ordinal() + 1];
+        if (stage != expected) {
             mRejectedAckOrder.incrementAndGet();
             return AckResult.REJECTED_ORDER;
         }
         mAckStages.put(identity, stage);
-        if (stage == AckStage.PRESENTED) mAckStages.remove(identity);
         return AckResult.RECORDED;
     }
 

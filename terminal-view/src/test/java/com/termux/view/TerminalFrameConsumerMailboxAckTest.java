@@ -23,27 +23,40 @@ public class TerminalFrameConsumerMailboxAckTest {
         mailbox.submit(new TestFrame(12L), identity);
 
         assertEquals(TerminalFrameConsumerMailbox.AckResult.RECORDED,
-            mailbox.recordAck(identity, TerminalFrameConsumerMailbox.AckStage.ACCEPTED));
-        assertEquals(TerminalFrameConsumerMailbox.AckResult.RECORDED,
             mailbox.recordAck(identity, TerminalFrameConsumerMailbox.AckStage.RASTERED));
         assertEquals(TerminalFrameConsumerMailbox.AckResult.RECORDED,
             mailbox.recordAck(identity, TerminalFrameConsumerMailbox.AckStage.SUBMITTED));
-        assertEquals(TerminalFrameConsumerMailbox.AckResult.RECORDED,
+        // PRESENTED requires FrameTimeline/present-fence evidence; unknown here.
+        assertEquals(TerminalFrameConsumerMailbox.AckResult.REJECTED_ORDER,
             mailbox.recordAck(identity, TerminalFrameConsumerMailbox.AckStage.PRESENTED));
     }
 
     @Test
-    public void rejectsAckFromAnotherTargetAndStageRegression() {
+    public void rejectsSkippingAndRegressingStages() {
         RenderFrameMetrics metrics = new RenderFrameMetrics();
         TerminalFrameConsumerMailbox<TestFrame> mailbox =
             new TerminalFrameConsumerMailbox<>(metrics, 7L, 3L);
         TerminalFrameIdentity identity = new TerminalFrameIdentity(7L, 3L, 12L, 4L);
         mailbox.submit(new TestFrame(12L), identity);
 
-        assertEquals(TerminalFrameConsumerMailbox.AckResult.RECORDED,
-            mailbox.recordAck(identity, TerminalFrameConsumerMailbox.AckStage.ACCEPTED));
         assertEquals(TerminalFrameConsumerMailbox.AckResult.REJECTED_ORDER,
             mailbox.recordAck(identity, TerminalFrameConsumerMailbox.AckStage.ACCEPTED));
+        assertEquals(TerminalFrameConsumerMailbox.AckResult.REJECTED_ORDER,
+            mailbox.recordAck(identity, TerminalFrameConsumerMailbox.AckStage.SUBMITTED));
+        assertEquals(TerminalFrameConsumerMailbox.AckResult.RECORDED,
+            mailbox.recordAck(identity, TerminalFrameConsumerMailbox.AckStage.RASTERED));
+        assertEquals(TerminalFrameConsumerMailbox.AckResult.REJECTED_ORDER,
+            mailbox.recordAck(identity, TerminalFrameConsumerMailbox.AckStage.RASTERED));
+    }
+
+    @Test
+    public void rejectsAckFromIncompatibleTarget() {
+        RenderFrameMetrics metrics = new RenderFrameMetrics();
+        TerminalFrameConsumerMailbox<TestFrame> mailbox =
+            new TerminalFrameConsumerMailbox<>(metrics, 7L, 3L);
+        TerminalFrameIdentity identity = new TerminalFrameIdentity(7L, 3L, 12L, 4L);
+        mailbox.submit(new TestFrame(12L), identity);
+
         assertEquals(TerminalFrameConsumerMailbox.AckResult.REJECTED_INCOMPATIBLE,
             mailbox.recordAck(new TerminalFrameIdentity(6L, 3L, 12L, 4L),
                 TerminalFrameConsumerMailbox.AckStage.RASTERED));
