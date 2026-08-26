@@ -85,6 +85,10 @@ public final class TerminalView extends View {
     /** Parser callbacks must coalesce onto the View's UI thread before invalidating. */
     private final TerminalFrameInvalidationGate mFrameInvalidationGate =
         new TerminalFrameInvalidationGate(this::post);
+    /** Canvas backend consumer; recreated when the renderer changes. */
+    private CanvasFrameConsumer mCanvasFrameConsumer;
+    private TerminalRenderer mCanvasFrameConsumerRenderer;
+    private long mCanvasFrameConsumerGeneration = -1;
     /** Last selection rectangle used to build mLastRenderFrame. */
     private int mLastRenderSelectionX1 = Integer.MIN_VALUE;
     private int mLastRenderSelectionY1 = Integer.MIN_VALUE;
@@ -1128,6 +1132,15 @@ public final class TerminalView extends View {
         }
     }
 
+    private CanvasFrameConsumer getOrCreateCanvasFrameConsumer() {
+        if (mCanvasFrameConsumer == null || mCanvasFrameConsumerRenderer != mRenderer) {
+            mCanvasFrameConsumer = new CanvasFrameConsumer(mRenderer, mFrameMetrics, this);
+            mCanvasFrameConsumerRenderer = mRenderer;
+            mCanvasFrameConsumerGeneration = -1;
+        }
+        return mCanvasFrameConsumer;
+    }
+
     @Override
     protected void onDraw(Canvas canvas) {
         Trace.beginSection("Termux:TerminalView.onDraw");
@@ -1176,19 +1189,17 @@ public final class TerminalView extends View {
             } else {
                 Trace.beginSection("Termux:TerminalRenderer.render");
                 try {
-                    if (entry != null && mFrameConsumerMailbox != null) {
-                        // RASTERED means CPU raster / command generation is about to begin.
-                        mFrameConsumerMailbox.recordAck(entry.identity, TerminalFrameConsumerMailbox.AckStage.RASTERED);
+                    CanvasFrameConsumer consumer = getOrCreateCanvasFrameConsumer();
+                    if (mCanvasFrameConsumerGeneration != mTargetGeneration) {
+                        consumer.attach(mTargetGeneration,
+                            new RenderGeometry(mTermSession.getScreenColumns(), mTermSession.getScreenRows(),
+                                getWidth(), getHeight()));
+                        mCanvasFrameConsumerGeneration = mTargetGeneration;
                     }
-                    RenderDamage damage = RenderDamage.compute(frame, mLastRenderedFrame);
-                    // Only skip rows whose pixels are guaranteed to survive on the canvas
-                    // from the previous draw: a hardware/software view layer retains them,
-                    // and reverseVideo clears the whole canvas before rows are drawn.
-                    boolean skipCleanRows = !damage.fullRedraw
-                        && (getLayerType() == View.LAYER_TYPE_HARDWARE || getLayerType() == View.LAYER_TYPE_SOFTWARE);
-                    mRenderer.render(frame, canvas, skipCleanRows, mLastRenderedFrame);
+                    RenderDamage damage = RenderDamage.compute(frame, consumer.getLastSubmittedFrame());
+                    consumer.setCanvas(canvas);
+                    consumer.submit(frame, damage);
                     mLastRenderedFrame = frame;
-                    mFrameMetrics.ack(frame.screenRevision);
                     if (entry != null && mFrameConsumerMailbox != null) {
                         mFrameConsumerMailbox.recordAck(entry.identity, TerminalFrameConsumerMailbox.AckStage.SUBMITTED);
                     }
@@ -1229,6 +1240,11 @@ public final class TerminalView extends View {
     /** Current render frame used by the latest onDraw. May be null before first draw. */
     public TerminalRenderFrame getCurrentRenderFrame() {
         return mLastRenderFrame;
+    }
+
+    /** Canvas backend consumer used by this view. Exposed for diagnostics and tests. */
+    public CanvasFrameConsumer getCanvasFrameConsumer() {
+        return getOrCreateCanvasFrameConsumer();
     }
 
     public long getPublishedFrameCount() {
