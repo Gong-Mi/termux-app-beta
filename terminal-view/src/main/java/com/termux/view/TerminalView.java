@@ -46,6 +46,8 @@ import com.termux.terminal.TerminalModelFrame;
 import com.termux.terminal.TerminalSession;
 import com.termux.view.textselection.TextSelectionCursorController;
 
+import java.util.concurrent.atomic.AtomicLong;
+
 /** View displaying and interacting with a {@link TerminalSession}. */
 public final class TerminalView extends View {
 
@@ -68,9 +70,12 @@ public final class TerminalView extends View {
     /** The frame that was actually drawn in the previous onDraw, used to decide whether clean rows can be skipped. */
     private TerminalRenderFrame mLastRenderedFrame;
     /** Latest-only mailbox from the parser worker to the render thread. */
-    private TerminalRenderMailbox<TerminalModelFrame> mRenderMailbox;
+    private TerminalFrameConsumerMailbox<TerminalModelFrame> mFrameConsumerMailbox;
     /** Rejects callbacks from a session that was detached while they were in flight. */
     private final TerminalRenderSessionGate mSessionGate = new TerminalRenderSessionGate();
+    /** Rejects frames from a view target that was detached/recreated. */
+    private final AtomicLong mTargetGate = new AtomicLong();
+    private long mTargetGeneration;
     /** Most recently acquired model frame, reused for View-only projection changes. */
     private TerminalModelFrame mLastModelFrame;
     /** Immutable accounting object tracking publish/draw/ack lifecycle. */
@@ -327,6 +332,7 @@ public final class TerminalView extends View {
         if (previousSession != null) previousSession.detachFrameSink();
 
         final long sessionGeneration = mSessionGate.advance();
+        mTargetGeneration = mTargetGate.incrementAndGet();
         mTermSession = session;
         mEmulator = null;
         mCombiningAccent = 0;
@@ -335,21 +341,25 @@ public final class TerminalView extends View {
         mLastRenderedFrame = null;
         mLastModelFrame = null;
 
-        final TerminalRenderMailbox<TerminalModelFrame> mailbox = new TerminalRenderMailbox<>(mFrameMetrics);
-        mRenderMailbox = mailbox;
+        final TerminalFrameConsumerMailbox<TerminalModelFrame> mailbox =
+            new TerminalFrameConsumerMailbox<>(mFrameMetrics, sessionGeneration, mTargetGeneration);
+        mFrameConsumerMailbox = mailbox;
         session.setFrameSink(new TerminalFrameSink() {
             @Override
             public void publishFrame(TerminalModelFrame frame) {
                 if (!mSessionGate.isCurrent(sessionGeneration)) return;
-                boolean hadPending = mailbox.peek() != null;
-                mailbox.publish(frame);
+                TerminalFrameIdentity identity = new TerminalFrameIdentity(
+                    sessionGeneration, mTargetGeneration, frame.getScreenRevision(), 0L);
+                boolean hadPending = mailbox.peekLatest() != null;
+                TerminalFrameConsumerMailbox.SubmitResult result = mailbox.submit(frame, identity);
+                if (result != TerminalFrameConsumerMailbox.SubmitResult.ACCEPTED) return;
                 if (!hadPending) mFrameInvalidationGate.request(TerminalView.this::invalidate);
             }
 
             @Override
             public boolean shouldCaptureSnapshot() {
                 if (!mSessionGate.isCurrent(sessionGeneration)) return false;
-                return mailbox.peek() == null;
+                return mailbox.peekLatest() == null;
             }
 
             @Override
@@ -1125,9 +1135,14 @@ public final class TerminalView extends View {
                 mClient.onTerminalRenderingStateChanged(canvasHardwareAccelerated, layerType);
             }
 
-            TerminalModelFrame model = mRenderMailbox != null ? mRenderMailbox.acquireLatest() : null;
+            TerminalFrameConsumerMailbox.Entry<TerminalModelFrame> entry =
+                mFrameConsumerMailbox != null ? mFrameConsumerMailbox.acquireLatest() : null;
+            TerminalModelFrame model = entry != null ? entry.frame : null;
             if (model != null) mLastModelFrame = model;
             if (mLastModelFrame != null) {
+                if (entry != null && mFrameConsumerMailbox != null) {
+                    mFrameConsumerMailbox.recordAck(entry.identity, TerminalFrameConsumerMailbox.AckStage.RASTERED);
+                }
                 // render the terminal view and highlight any selected text
                 int[] selectors = mDefaultSelectors;
                 if (mTextSelectionCursorController != null) {
@@ -1165,6 +1180,9 @@ public final class TerminalView extends View {
                     mRenderer.render(frame, canvas, skipCleanRows, mLastRenderedFrame);
                     mLastRenderedFrame = frame;
                     mFrameMetrics.ack(frame.screenRevision);
+                    if (entry != null && mFrameConsumerMailbox != null) {
+                        mFrameConsumerMailbox.recordAck(entry.identity, TerminalFrameConsumerMailbox.AckStage.SUBMITTED);
+                    }
                     if (model != null) {
                         mTermSession.onFrameConsumed(model);
                     }
