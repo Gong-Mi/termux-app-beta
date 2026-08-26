@@ -1786,6 +1786,20 @@ public final class TerminalView extends View {
 
 
     /**
+     * Return a unified snapshot of mailbox and consumer counters. The mailbox owns the
+     * published/drawn/dropped and rejection counts; the consumer owns the stage counters
+     * (rastered/submitted/presented).
+     */
+    public RenderStats snapshotRenderStats() {
+        RenderStats mailboxStats = mFrameConsumerMailbox != null ? mFrameConsumerMailbox.snapshot() : null;
+        RenderStats consumerStats = mCanvasFrameConsumer != null ? mCanvasFrameConsumer.snapshot() : null;
+        if (mailboxStats != null && consumerStats != null) {
+            return RenderStats.merge(mailboxStats, consumerStats);
+        }
+        return mailboxStats != null ? mailboxStats : (consumerStats != null ? consumerStats : new RenderStats(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0));
+    }
+
+    /**
      * Define functions required for long hold toolbar.
      */
     private final Runnable mShowFloatingToolbar = new Runnable() {
