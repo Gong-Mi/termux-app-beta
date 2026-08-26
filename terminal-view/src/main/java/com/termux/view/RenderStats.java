@@ -112,4 +112,26 @@ public final class RenderStats {
             + ", coalesced=" + coalescedRevisions
             + '}';
     }
+
+    /**
+     * Merge a mailbox-side snapshot (published/drawn/dropped/rejected) with a consumer-side
+     * snapshot (rastered/submitted/presented). The legacy counters and revision fields are taken
+     * from the mailbox side because it owns the authoritative {@link RenderFrameMetrics}.
+     */
+    public static RenderStats merge(RenderStats mailbox, RenderStats consumer) {
+        return new RenderStats(
+            mailbox.publishedFrames,
+            mailbox.drawnFrames,
+            mailbox.droppedFrames,
+            consumer.rasteredFrames,
+            consumer.submittedFrames,
+            consumer.presentedFrames,
+            mailbox.rejectedIncompatibleFrames,
+            mailbox.rejectedStaleFrames,
+            mailbox.rejectedAckIncompatibleFrames,
+            mailbox.rejectedAckOrderFrames,
+            mailbox.lastPublishedScreenRevision,
+            mailbox.lastDrawnScreenRevision,
+            mailbox.coalescedRevisions);
+    }
 }
