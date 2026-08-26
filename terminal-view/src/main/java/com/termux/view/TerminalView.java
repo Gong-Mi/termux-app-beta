@@ -76,7 +76,9 @@ public final class TerminalView extends View {
     /** Current session generation; used when building projection-only frames. */
     private long mSessionGeneration;
     /** Rejects frames from a view target that was detached/recreated. */
-    private final AtomicLong mTargetGate = new AtomicLong();
+    private final TerminalRenderTargetGate mTargetGate = new TerminalRenderTargetGate();
+    /** Whether this View currently owns a live render target/window attachment. */
+    private boolean mRenderTargetAttached;
     private long mTargetGeneration;
     /** Projection revision: bumps when selection, topRow or view geometry changes without a new model frame. */
     private final AtomicLong mProjectionRevision = new AtomicLong();
@@ -341,7 +343,7 @@ public final class TerminalView extends View {
 
         final long sessionGeneration = mSessionGate.advance();
         mSessionGeneration = sessionGeneration;
-        mTargetGeneration = mTargetGate.incrementAndGet();
+        mTargetGeneration = mTargetGate.attach();
         mTermSession = session;
         mEmulator = null;
         mCombiningAccent = 0;
@@ -363,8 +365,8 @@ public final class TerminalView extends View {
 
             @Override
             public boolean shouldCaptureSnapshot() {
-                if (!mSessionGate.isCurrent(sessionGeneration)) return false;
-                return mailbox.peekLatest() == null;
+                if (!mRenderTargetAttached || !mSessionGate.isCurrent(sessionGeneration)) return false;
+                return mFrameConsumerMailbox != null && mFrameConsumerMailbox.peekLatest() == null;
             }
 
             @Override
@@ -1713,6 +1715,19 @@ public final class TerminalView extends View {
     @Override
     protected void onAttachedToWindow() {
         super.onAttachedToWindow();
+        mRenderTargetAttached = true;
+        mTargetGeneration = mTargetGate.attach();
+        mLastRenderFrame = null;
+        mLastRenderedFrame = null;
+        mCanvasFrameConsumer = null;
+        mCanvasFrameConsumerRenderer = null;
+        mCanvasFrameConsumerGeneration = -1;
+        if (mTermSession != null) {
+            mFrameConsumerMailbox = new TerminalFrameConsumerMailbox<>(
+                mFrameMetrics, mSessionGeneration, mTargetGeneration);
+            buildAndPublishProjectionFrame();
+            invalidate();
+        }
 
         if (mTextSelectionCursorController != null) {
             getViewTreeObserver().addOnTouchModeChangeListener(mTextSelectionCursorController);
@@ -1722,6 +1737,9 @@ public final class TerminalView extends View {
     @Override
     protected void onDetachedFromWindow() {
         super.onDetachedFromWindow();
+        mRenderTargetAttached = false;
+        mTargetGeneration = mTargetGate.detach();
+        mFrameConsumerMailbox = null;
 
         if (mCanvasFrameConsumer != null) {
             mCanvasFrameConsumer.detachAndJoin(mCanvasFrameConsumerGeneration, 250L);
