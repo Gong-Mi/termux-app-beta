@@ -1760,6 +1760,20 @@ public final class TerminalView extends View {
 
 
     /**
+     * Called by the selection controller when the text selection changes. This is a
+     * View-only projection change: it bumps the projection revision and publishes a new
+     * render frame from the latest model frame without waiting for a new model frame.
+     */
+    public void notifySelectionChanged() {
+        if (!mRenderTargetAttached || mLastModelFrame == null) return;
+        mProjectionRevision.incrementAndGet();
+        buildAndPublishProjectionFrame();
+        invalidate();
+    }
+
+
+
+    /**
      * Define functions required for long hold toolbar.
      */
     private final Runnable mShowFloatingToolbar = new Runnable() {
