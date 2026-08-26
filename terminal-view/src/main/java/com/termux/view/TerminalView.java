@@ -1198,7 +1198,7 @@ public final class TerminalView extends View {
                     }
                     RenderDamage damage = RenderDamage.compute(frame, consumer.getLastSubmittedFrame());
                     consumer.setCanvas(canvas);
-                    consumer.submit(frame, damage);
+                    consumer.submit(frame, damage, entry != null ? entry.identity : null, mTargetGeneration);
                     mLastRenderedFrame = frame;
                     if (entry != null && mFrameConsumerMailbox != null) {
                         mFrameConsumerMailbox.recordAck(entry.identity, TerminalFrameConsumerMailbox.AckStage.SUBMITTED);

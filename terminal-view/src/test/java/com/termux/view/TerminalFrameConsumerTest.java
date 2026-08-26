@@ -15,6 +15,8 @@ public class TerminalFrameConsumerTest {
         RenderGeometry attachedGeometry;
         TerminalRenderFrame lastFrame;
         RenderDamage lastDamage;
+        TerminalFrameIdentity lastIdentity;
+        long lastSubmitGeneration = -1;
         boolean detached;
         RenderStats stats = new RenderStats(0, 0, 0, 0, 0, 0);
 
@@ -26,9 +28,12 @@ public class TerminalFrameConsumerTest {
         }
 
         @Override
-        public void submit(TerminalRenderFrame frame, RenderDamage damage) {
+        public void submit(TerminalRenderFrame frame, RenderDamage damage,
+                           TerminalFrameIdentity identity, long renderGeneration) {
             this.lastFrame = frame;
             this.lastDamage = damage;
+            this.lastIdentity = identity;
+            this.lastSubmitGeneration = renderGeneration;
         }
 
         @Override
@@ -61,10 +66,13 @@ public class TerminalFrameConsumerTest {
 
         TerminalRenderFrame frame = null; // no render needed for stub
         RenderDamage damage = new RenderDamage(false, false, false, false, false, false, 0, 24, 80);
-        consumer.submit(frame, damage);
+        TerminalFrameIdentity identity = new TerminalFrameIdentity(1L, 2L, 3L, 4L);
+        consumer.submit(frame, damage, identity, 1L);
 
         assertNull(consumer.lastFrame);
         assertEquals(damage, consumer.lastDamage);
+        assertEquals(identity, consumer.lastIdentity);
+        assertEquals(1L, consumer.lastSubmitGeneration);
     }
 
     @Test

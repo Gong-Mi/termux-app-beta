@@ -22,10 +22,13 @@ public interface TerminalFrameConsumer {
     /**
      * Submit a frame and its damage for rendering.
      *
-     * @param frame  immutable frame to render.
-     * @param damage immutable damage relative to the previously submitted frame.
+     * @param frame            immutable frame to render.
+     * @param damage           immutable damage relative to the previously submitted frame.
+     * @param identity         frame identity used to correlate ack stages.
+     * @param renderGeneration generation this consumer was attached with.
      */
-    void submit(TerminalRenderFrame frame, RenderDamage damage);
+    void submit(TerminalRenderFrame frame, RenderDamage damage,
+                TerminalFrameIdentity identity, long renderGeneration);
 
     /**
      * Detach from the current render target. After this call the consumer must
