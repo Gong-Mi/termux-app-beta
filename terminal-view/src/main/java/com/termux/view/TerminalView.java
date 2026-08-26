@@ -1180,12 +1180,11 @@ public final class TerminalView extends View {
                         // RASTERED means CPU raster / command generation is about to begin.
                         mFrameConsumerMailbox.recordAck(entry.identity, TerminalFrameConsumerMailbox.AckStage.RASTERED);
                     }
+                    RenderDamage damage = RenderDamage.compute(frame, mLastRenderedFrame);
                     // Only skip rows whose pixels are guaranteed to survive on the canvas
                     // from the previous draw: a hardware/software view layer retains them,
                     // and reverseVideo clears the whole canvas before rows are drawn.
-                    boolean skipCleanRows = !frame.reverseVideo
-                        && mLastRenderedFrame != null
-                        && !frame.needsFullRedraw(mLastRenderedFrame)
+                    boolean skipCleanRows = !damage.fullRedraw
                         && (getLayerType() == View.LAYER_TYPE_HARDWARE || getLayerType() == View.LAYER_TYPE_SOFTWARE);
                     mRenderer.render(frame, canvas, skipCleanRows, mLastRenderedFrame);
                     mLastRenderedFrame = frame;
