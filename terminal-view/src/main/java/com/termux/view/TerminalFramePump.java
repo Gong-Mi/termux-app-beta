@@ -2,8 +2,11 @@ package com.termux.view;
 
 import com.termux.terminal.FrameRevision;
 
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executor;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Push-style consumer pump: forwards the latest accepted entry from a
@@ -36,6 +39,10 @@ public final class TerminalFramePump<T extends FrameRevision> {
     private final Executor mExecutor;
     private final AtomicBoolean mScheduled = new AtomicBoolean(false);
     private volatile boolean mAttached = true;
+    /** Number of drain tasks currently RUNNING on the executor. */
+    private final AtomicInteger mInFlightDrains = new AtomicInteger();
+    /** Signals one completed drain; swapped under join so concurrent drains re-arm it. */
+    private CountDownLatch mDrainDone = new CountDownLatch(1);
 
     public TerminalFramePump(TerminalFrameConsumerMailbox<T> mailbox, Sink<T> sink, Executor executor) {
         mMailbox = mailbox;
@@ -62,16 +69,52 @@ public final class TerminalFramePump<T extends FrameRevision> {
     }
 
     private void drain() {
-        // Clear before acquiring: a producer during delivery schedules exactly one
-        // follow-up cycle instead of being swallowed by our own flag.
-        mScheduled.set(false);
-        if (!mAttached) return;
-        TerminalFrameConsumerMailbox.Entry<T> entry = mMailbox.acquireLatest();
-        if (entry == null) return;
-        mSink.accept(entry);
+        mInFlightDrains.incrementAndGet();
+        try {
+            // Clear before acquiring: a producer during delivery schedules exactly one
+            // follow-up cycle instead of being swallowed by our own flag.
+            mScheduled.set(false);
+            if (!mAttached) return;
+            TerminalFrameConsumerMailbox.Entry<T> entry = mMailbox.acquireLatest();
+            if (entry == null) return;
+            mSink.accept(entry);
+        } finally {
+            mInFlightDrains.decrementAndGet();
+            mDrainDone.countDown();
+        }
     }
 
-    /** Stop pushing frames to the sink. Idempotent; deterministic w.r.t. queued tasks. */
+    /**
+     * Stop pushing frames to the sink and wait until no drain task is running.
+     *
+     * <p>The detach flag is flipped FIRST, so after a {@code true} return the sink
+     * is guaranteed to receive nothing more from this pump: queued-but-unstarted
+     * drains observe the flag and exit, and any in-flight accept has completed
+     * before join returns. Idempotent with plain {@link #detach()}.</p>
+     *
+     * @return true if joined cleanly within the timeout; false if drains were
+     *         still running when the timeout expired (retryable).
+     */
+    public boolean detachAndJoin(long timeoutMs) {
+        mAttached = false;
+        mScheduled.set(false);
+        long deadlineNanos = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMs);
+        while (true) {
+            CountDownLatch latch = mDrainDone;   // snapshot before checking the count
+            if (mInFlightDrains.get() == 0) return true;
+            long remainingNanos = deadlineNanos - System.nanoTime();
+            if (remainingNanos <= 0L) return mInFlightDrains.get() == 0;
+            try {
+                latch.await(TimeUnit.NANOSECONDS.toMillis(remainingNanos),
+                    TimeUnit.NANOSECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return mInFlightDrains.get() == 0;
+            }
+        }
+    }
+
+    /** Stop pushing frames to the sink without waiting. Idempotent. */
     public void detach() {
         mAttached = false;
         mScheduled.set(false);
