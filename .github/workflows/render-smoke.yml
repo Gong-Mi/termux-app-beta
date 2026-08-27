@@ -296,10 +296,11 @@ jobs:
           GFX=$(adb shell dumpsys gfxinfo com.termux)
           TOTAL_FRAMES=$(echo "$GFX" | grep -oE 'Total frames rendered: [0-9]+' | grep -oE '[0-9]+' | head -1 || echo 0)
           JANKY=$(echo "$GFX" | grep -oE 'Janky frames: [0-9]+ \(' | grep -oE '[0-9]+' | head -1 || echo 0)
-          P50=$(echo "$GFX" | grep -oE '50th percentile: [0-9]+ms' | grep -oE '[0-9]+' | head -1 || echo -1)
-          P90=$(echo "$GFX" | grep -oE '90th percentile: [0-9]+ms' | grep -oE '[0-9]+' | head -1 || echo -1)
-          P95=$(echo "$GFX" | grep -oE '95th percentile: [0-9]+ms' | grep -oE '[0-9]+' | head -1 || echo -1)
-          P99=$(echo "$GFX" | grep -oE '99th percentile: [0-9]+ms' | grep -oE '[0-9]+' | head -1 || echo -1)
+          # Take the VALUE after "percentile:", not the percentile label itself.
+          P50=$(echo "$GFX" | grep -oE '50th percentile: [0-9]+ms' | awk '{print $3}' | tr -d 'ms' | head -1 || echo -1)
+          P90=$(echo "$GFX" | grep -oE '90th percentile: [0-9]+ms' | awk '{print $3}' | tr -d 'ms' | head -1 || echo -1)
+          P95=$(echo "$GFX" | grep -oE '95th percentile: [0-9]+ms' | awk '{print $3}' | tr -d 'ms' | head -1 || echo -1)
+          P99=$(echo "$GFX" | grep -oE '99th percentile: [0-9]+ms' | awk '{print $3}' | tr -d 'ms' | head -1 || echo -1)
           echo "$GFX" > perf-emulator-gfx.txt
           {
             echo "## HWUI gfxinfo probe (hardware layer, SwiftShader software stack)"
@@ -351,8 +352,11 @@ jobs:
             exit 1
           fi
           # Live input must flow producer -> surface mailbox -> backbuffer present.
+          # 20 injections give the raster aggregates a usable sample size.
           adb shell input keyevent KEYCODE_MOVE_END
-          adb shell input text "surf"
+          for i in $(seq 1 20); do
+            adb shell input text "s$i"
+          done
           sleep 3
           adb exec-out screencap -p > render_surface.png
           adb logcat -d > logcat-surface.txt
