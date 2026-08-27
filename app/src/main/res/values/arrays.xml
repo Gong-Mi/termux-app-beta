@@ -3,11 +3,13 @@
         <item>System automatic</item>
         <item>HWUI GPU hardware layer</item>
         <item>Software Canvas (CPU raster)</item>
+        <item>SurfaceView backbuffer (spike #52)</item>
     </string-array>
 
     <string-array name="terminal_rendering_mode_values">
         <item>system</item>
         <item>hwui_gpu</item>
         <item>software</item>
+        <item>surface</item>
     </string-array>
 </resources>

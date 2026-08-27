@@ -288,6 +288,61 @@ jobs:
           python3 .github/workflows/assert_render.py render_hwui.png
           adb logcat -d | grep -iE 'FATAL|AndroidRuntime.*com.termux' | tail -20 || true
 
+      # #52 spike 3b: the surface route moves pixels to a dedicated render thread +
+      # persistent backbuffer presented through a SurfaceView. Prove the route
+      # actually executes: frame diagnostics must come from the backbuffer path
+      # (published keeps advancing while drawn stays pinned at the view's last
+      # reference-path frame), pixels must still assert, and the SurfaceView must
+      # own a live surface.
+      - name: Surface backbuffer route (#52 spike 3b)
+        if: matrix.gpu == 'swiftshader_indirect'
+        run: |
+          set -euo pipefail
+          # Write the rendering mode preference through run-as (debug build is debuggable).
+          cat > /tmp/termux_prefs_surface.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8" standalone="yes" ?>
+          <map>
+              <string name="terminal_rendering_mode">surface</string>
+          </map>
+          EOF
+          adb push /tmp/termux_prefs_surface.xml /data/local/tmp/termux_prefs_surface.xml
+          adb shell run-as com.termux mkdir -p shared_prefs
+          adb shell run-as com.termux cp /data/local/tmp/termux_prefs_surface.xml shared_prefs/com.termux_preferences.xml
+          adb shell am force-stop com.termux
+          adb logcat -c
+          adb shell am start -W -S -n com.termux/.app.TermuxActivity
+          frame_seen=0
+          for _ in $(seq 1 40); do
+            if adb logcat -d | grep -q 'Termux:SurfaceBackbuffer.*frame rev='; then
+              frame_seen=1
+              break
+            fi
+            sleep 1
+          done
+          if [ "$frame_seen" -ne 1 ]; then
+            echo 'Timed out waiting for surface backbuffer frame diagnostics'
+            adb logcat -d | tail -100
+            exit 1
+          fi
+          # Live input must flow producer -> surface mailbox -> backbuffer present.
+          adb shell input keyevent KEYCODE_MOVE_END
+          adb shell input text "surf"
+          sleep 3
+          adb exec-out screencap -p > render_surface.png
+          adb logcat -d > logcat-surface.txt
+          grep -E 'Termux:SurfaceBackbuffer.*frame rev=' logcat-surface.txt > frame-info-surface.txt \
+            || { echo 'NO_SURFACE_FRAME_LINES'; tail -50 logcat-surface.txt; exit 1; }
+          wc -l frame-info-surface.txt
+          # Reuse the standard frame contract: revisions non-decreasing, counters
+          # sane, drawn/published ratio >= 0.3 (backbuffer acks every present).
+          python3 .github/workflows/verify_frame_metrics.py frame-info-surface.txt --min-lines 3 --min-drawn-ratio 0.3
+          python3 .github/workflows/assert_render.py render_surface.png
+          # Route evidence: the surface mode must have been applied at activity
+          # startup (logged via Logger.logInfo into logcat).
+          grep -m1 'Terminal rendering mode=surface' logcat-surface.txt \
+            || { echo 'SURFACE_MODE_NOT_APPLIED'; exit 1; }
+          adb logcat -d | grep -iE 'FATAL|AndroidRuntime.*com.termux' | tail -20 || true
+
       - name: Upload render evidence
         if: always()
         uses: actions/upload-artifact@v6
@@ -297,10 +352,13 @@ jobs:
             render_initial.png
             render_after_input.png
             render_hwui.png
+            render_surface.png
             logcat-smoke.txt
             logcat-hwui.txt
+            logcat-surface.txt
             frame-info-lines.txt
             frame-info-hwui.txt
+            frame-info-surface.txt
             /tmp/emu.log
           if-no-files-found: warn
 

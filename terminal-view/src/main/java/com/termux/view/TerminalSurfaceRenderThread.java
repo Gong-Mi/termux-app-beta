@@ -32,9 +32,9 @@ public final class TerminalSurfaceRenderThread {
     }
 
     private final TerminalSurfaceGenerationGate mGate = new TerminalSurfaceGenerationGate();
-    private final TerminalFrameConsumerMailbox<TerminalRenderFrame> mMailbox;
+    private volatile TerminalFrameConsumerMailbox<TerminalRenderFrame> mMailbox;
     private final Backbuffer mBackbuffer;
-    private final TerminalBackbufferSequencer mSequencer;
+    private volatile TerminalBackbufferSequencer mSequencer;
     private final Thread mThread;
     private final Object mLock = new Object();
 
@@ -60,6 +60,12 @@ public final class TerminalSurfaceRenderThread {
         synchronized (mLock) {
             if (!mRunning) return;
             mCurrentEpoch = mGate.created();
+            // A fresh Surface buffer starts undefined; if the persistent backbuffer
+            // already holds content (activity pause/resume), re-blit it so the
+            // screen is never black until the next terminal output. This is a pure
+            // re-present: the mailbox slot is left intact and presented markers do
+            // not advance — a cycle will still serve the newest pending frame.
+            if (mCurrentEpoch != 0L) mBackbuffer.present();
         }
     }
 
@@ -72,10 +78,13 @@ public final class TerminalSurfaceRenderThread {
             } catch (IllegalArgumentException staleCallback) {
                 return;
             }
-        }
-        // Resize belongs to the pixel target and must be serialized with draws.
-        synchronized (mLock) {
-            if (mCurrentEpoch != 0L) mBackbuffer.resizeTo(widthPx, heightPx);
+            if (mCurrentEpoch == 0L) return;
+            // Resize belongs to the pixel target and must be serialized with draws.
+            mBackbuffer.resizeTo(widthPx, heightPx);
+            // Geometry refresh: re-present existing content onto the resized
+            // surface (pure re-present, markers untouched — see onSurfaceCreated);
+            // the next cycle re-rasters at full resolution anyway.
+            mBackbuffer.present();
         }
     }
 
@@ -135,6 +144,40 @@ public final class TerminalSurfaceRenderThread {
             if (!mRunning || mCyclePending) return;
             mCyclePending = true;
             mLock.notifyAll();
+        }
+    }
+
+    /**
+     * Swap in the mailbox of a newly attached session without killing the loop
+     * thread (surface render thread is view-scoped, sessions come and go).
+     *
+     * <p>Any frame still pending in the OLD mailbox is dropped untouched: it
+     * belongs to the previous session/target generation and the sequencer would
+     * reject it as stale anyway. The swap is serialized with cycle execution,
+     * so no partially-acquired frame can straddle the rebind.</p>
+     *
+     * @return false after shutdown (rebind refused).
+     */
+    public boolean rebind(TerminalFrameConsumerMailbox<TerminalRenderFrame> mailbox) {
+        if (mailbox == null) throw new IllegalArgumentException("mailbox");
+        synchronized (mLock) {
+            if (!mRunning) return false;
+            // Wait out an in-flight cycle so acquireLatest cannot race the swap;
+            // cycles are short (full-frame raster) and this only happens on
+            // session re-attach.
+            while (mCycleOwner != null && mCycleOwner != Thread.currentThread()) {
+                try {
+                    mLock.wait(50);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return false;
+                }
+            }
+            mMailbox = mailbox;
+            mSequencer = new TerminalBackbufferSequencer(mailbox,
+                () -> synchronizedLiveEpoch(), new OpsAdapter());
+            mCyclePending = false;
+            return true;
         }
     }
 

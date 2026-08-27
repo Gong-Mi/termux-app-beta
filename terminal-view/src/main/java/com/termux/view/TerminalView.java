@@ -7,6 +7,7 @@ import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
 import android.graphics.Canvas;
+import android.graphics.PorterDuff;
 import android.graphics.Typeface;
 import android.os.Build;
 import android.os.Handler;
@@ -24,6 +25,7 @@ import android.view.KeyCharacterMap;
 import android.view.KeyEvent;
 import android.view.Menu;
 import android.view.MotionEvent;
+import android.view.SurfaceView;
 import android.view.View;
 import android.view.ViewConfiguration;
 import android.view.ViewTreeObserver;
@@ -93,6 +95,10 @@ public final class TerminalView extends View {
     private CanvasFrameConsumer mCanvasFrameConsumer;
     private TerminalRenderer mCanvasFrameConsumerRenderer;
     private long mCanvasFrameConsumerGeneration = -1;
+    /** #52 spike surface route: view-scoped render bridge (null unless enabled + ready). */
+    private volatile TerminalViewSurfaceBridge mSurfaceBridge;
+    private SurfaceView mSurfaceHost;
+    private boolean mSurfaceRenderingEnabled;
     /** Last selection rectangle used to build mLastRenderFrame. */
     private int mLastRenderSelectionX1 = Integer.MIN_VALUE;
     private int mLastRenderSelectionY1 = Integer.MIN_VALUE;
@@ -355,6 +361,10 @@ public final class TerminalView extends View {
         final TerminalFrameConsumerMailbox<TerminalRenderFrame> mailbox =
             new TerminalFrameConsumerMailbox<>(mFrameMetrics, sessionGeneration, mTargetGeneration);
         mFrameConsumerMailbox = mailbox;
+        // #52 spike: the surface render thread is view-scoped; swap its mailbox
+        // to the new session instead of tearing the thread down.
+        TerminalViewSurfaceBridge existingBridge = mSurfaceBridge;
+        if (existingBridge != null) existingBridge.rebind(sessionGeneration, mTargetGeneration);
         session.setFrameSink(new TerminalFrameSink() {
             @Override
             public void publishFrame(TerminalModelFrame frame) {
@@ -407,6 +417,58 @@ public final class TerminalView extends View {
         if (result == TerminalFrameConsumerMailbox.SubmitResult.ACCEPTED && !hadPending) {
             invalidate();
         }
+        // #52 spike surface route: fan out the same projection to the dedicated
+        // surface mailbox when the bridge is active.
+        TerminalViewSurfaceBridge bridge = mSurfaceBridge;
+        if (bridge != null) bridge.publish(render, identity);
+    }
+
+    /**
+     * Enable the #52 spike surface render route. When enabled, a SurfaceView host
+     * drives a dedicated render thread + persistent backbuffer; UI onDraw skips
+     * full-frame terminal rasterization while the bridge is attached to a live
+     * surface. Reference Canvas path stays intact when disabled (default).
+     *
+     * <p>UI thread only, before the view is attached to a session.</p>
+     */
+    public void setSurfaceRenderingEnabled(boolean enabled) {
+        mSurfaceRenderingEnabled = enabled;
+        if (!enabled) detachSurfaceBridge();
+    }
+
+    /** Whether the surface route is active with a live bridge. Exposed for diagnostics. */
+    public boolean isSurfaceRenderingActive() {
+        return mSurfaceBridge != null;
+    }
+
+    /**
+     * Register the SurfaceView host that presents the surface route's backbuffer.
+     * The host is a sibling of this view in the view hierarchy; this view stays
+     * the producer and input/selection owner. UI thread only.
+     */
+    public void setSurfaceRenderingHost(SurfaceView host) {
+        mSurfaceHost = host;
+        if (mSurfaceRenderingEnabled && mSurfaceHost != null && isAttachedToWindow()) {
+            ensureSurfaceBridge();
+        }
+    }
+
+    /** Ensure the surface bridge exists (idempotent). Returns null when disabled. */
+    private TerminalViewSurfaceBridge ensureSurfaceBridge() {
+        if (!mSurfaceRenderingEnabled) return null;
+        if (mSurfaceBridge != null) return mSurfaceBridge;
+        if (mSurfaceHost == null) return null;
+        if (mRenderer == null) return null;
+        mSurfaceBridge = TerminalViewSurfaceBridge.create(mSurfaceHost,
+            mRenderer, mFrameMetrics, mSessionGeneration, mTargetGeneration,
+            () -> mTermSession);
+        return mSurfaceBridge;
+    }
+
+    private void detachSurfaceBridge() {
+        TerminalViewSurfaceBridge bridge = mSurfaceBridge;
+        mSurfaceBridge = null;
+        if (bridge != null) bridge.detachAndJoin();
     }
 
     /**
@@ -642,6 +704,7 @@ public final class TerminalView extends View {
         mRenderer = new TerminalRenderer(textSize, mRenderer == null ? Typeface.MONOSPACE : mRenderer.mTypeface);
         // New font metrics invalidate every pixel of the previous layer rendering.
         mLastRenderedFrame = null;
+        rebuildSurfaceBridgeForRendererChange();
         updateSize();
     }
 
@@ -649,8 +712,22 @@ public final class TerminalView extends View {
         mRenderer = new TerminalRenderer(mRenderer.mTextSize, newTypeface);
         // New font metrics invalidate every pixel of the previous layer rendering.
         mLastRenderedFrame = null;
+        rebuildSurfaceBridgeForRendererChange();
         updateSize();
         invalidate();
+    }
+
+    /**
+     * The surface route's backbuffer captures a {@link TerminalRenderer}; when the
+     * view swaps its renderer (font size / typeface), rebuild the bridge so the
+     * render thread rasters with the new font metrics. UI thread only.
+     */
+    private void rebuildSurfaceBridgeForRendererChange() {
+        TerminalViewSurfaceBridge bridge = mSurfaceBridge;
+        if (bridge == null) return;
+        mSurfaceBridge = null;
+        bridge.detachAndJoin();
+        ensureSurfaceBridge();
     }
 
     @Override
@@ -1191,6 +1268,21 @@ public final class TerminalView extends View {
             TerminalRenderFrame frame = frameForDraw(entry, mLastRenderFrame);
             if (frame != null) mLastRenderFrame = frame;
             final TerminalModelFrame model = frame != null ? frame.getModelFrame() : null;
+            // #52 spike surface route (checked AFTER the acquire above so the view
+            // mailbox never accumulates): while the SurfaceView route owns pixels,
+            // skip UI-thread terminal rasterization entirely; diagnostics lines are
+            // produced by the backbuffer path. When the surface is not live
+            // (pre-create gap, post-destroy), fall through to the reference path so
+            // this view still paints itself.
+            TerminalViewSurfaceBridge surfaceBridge = mSurfaceBridge;
+            if (surfaceBridge != null && surfaceBridge.isSurfaceLive()) {
+                // TerminalView sits BEHIND the SurfaceView host in the hierarchy
+                // (setZOrderedOnTop(false)); its canvas is a punch-through hole in
+                // SurfaceView's window. Opaque black would paint OVER the surface
+                // content; transparent CLEAR lets it show through.
+                canvas.drawColor(0, PorterDuff.Mode.CLEAR);
+                return;
+            }
             if (frame == null) {
                 canvas.drawColor(0XFF000000);
             } else {
@@ -1722,6 +1814,9 @@ public final class TerminalView extends View {
         mCanvasFrameConsumer = null;
         mCanvasFrameConsumerRenderer = null;
         mCanvasFrameConsumerGeneration = -1;
+        if (mSurfaceRenderingEnabled && mSurfaceHost != null) {
+            ensureSurfaceBridge();
+        }
         if (mTermSession != null) {
             mFrameConsumerMailbox = new TerminalFrameConsumerMailbox<>(
                 mFrameMetrics, mSessionGeneration, mTargetGeneration);
@@ -1740,6 +1835,9 @@ public final class TerminalView extends View {
         mRenderTargetAttached = false;
         mTargetGeneration = mTargetGate.detach();
         mFrameConsumerMailbox = null;
+        // #52 spike: stop the view-scoped render thread; onAttachedToWindow
+        // recreates the bridge with fresh target generations.
+        detachSurfaceBridge();
 
         if (mCanvasFrameConsumer != null) {
             mCanvasFrameConsumer.detachAndJoin(mCanvasFrameConsumerGeneration, 250L);

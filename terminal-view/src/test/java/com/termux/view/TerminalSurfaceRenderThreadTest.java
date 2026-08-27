@@ -96,8 +96,14 @@ public class TerminalSurfaceRenderThreadTest {
 
     private static void submit(TerminalFrameConsumerMailbox<TerminalRenderFrame> mbox,
                                TerminalRenderFrame frame) {
+        submit(mbox, frame, 7L);
+    }
+
+    private static void submit(TerminalFrameConsumerMailbox<TerminalRenderFrame> mbox,
+                               TerminalRenderFrame frame, long sessionGeneration) {
         assertEquals(TerminalFrameConsumerMailbox.SubmitResult.ACCEPTED, mbox.submit(frame,
-            new TerminalFrameIdentity(7L, 3L, frame.screenRevision, frame.screenRevision)));
+            new TerminalFrameIdentity(sessionGeneration, 3L,
+                frame.screenRevision, frame.screenRevision)));
     }
 
     private static boolean await(BooleanSupplier condition) throws InterruptedException {
@@ -219,6 +225,66 @@ public class TerminalSurfaceRenderThreadTest {
         thread.onSurfaceCreated();
         thread.requestCycle();
         assertTrue(thread.shutdownAndJoin(1_000L));
+    }
+
+    @Test
+    public void rebindSwapsMailboxWithoutKillingLoop() throws Exception {
+        TerminalFrameConsumerMailbox<TerminalRenderFrame> oldBox = mailbox();
+        FakeBackbuffer bb = new FakeBackbuffer();
+        TerminalSurfaceRenderThread thread =
+            new TerminalSurfaceRenderThread("t", oldBox, bb);
+        thread.start();
+        thread.onSurfaceCreated();
+        thread.onSurfaceChanged(320, 240);
+
+        // A frame in the OLD mailbox before rebind must never be drawn.
+        FrameFactory f = new FrameFactory();
+        submit(oldBox, f.next("STALE-A"));
+        assertTrue(thread.rebind(mailbox()));
+
+        // New session's frames flow through the new mailbox.
+        TerminalFrameConsumerMailbox<TerminalRenderFrame> newBox =
+            new TerminalFrameConsumerMailbox<>(new RenderFrameMetrics(), 9L, 3L);
+        assertTrue(thread.rebind(newBox));
+        submit(newBox, f.next("FRESH"), 9L);
+        thread.requestCycle();
+        assertTrue(await(() -> !bb.drawnRevisions.isEmpty()));
+
+        // Loop still alive: a second frame is also served after rebind.
+        int drawsAfterFirst = bb.drawnRevisions.size();
+        submit(newBox, f.next("SECOND"), 9L);
+        thread.requestCycle();
+        assertTrue(await(() -> bb.drawnRevisions.size() > drawsAfterFirst));
+
+        assertTrue(thread.shutdownAndJoin(5_000L));
+    }
+
+    @Test
+    public void rebindDropsUnservedOldMailboxFrame() throws Exception {
+        TerminalFrameConsumerMailbox<TerminalRenderFrame> oldBox = mailbox();
+        FakeBackbuffer bb = new FakeBackbuffer();
+        TerminalSurfaceRenderThread thread =
+            new TerminalSurfaceRenderThread("t", oldBox, bb);
+        thread.start();
+        thread.onSurfaceCreated();
+
+        // Old frame sits pending; no requestCycle, so it was never acquired.
+        FrameFactory f = new FrameFactory();
+        submit(oldBox, f.next("PENDING-OLD"));
+
+        TerminalFrameConsumerMailbox<TerminalRenderFrame> newBox =
+            new TerminalFrameConsumerMailbox<>(new RenderFrameMetrics(), 8L, 3L);
+        assertTrue(thread.rebind(newBox));
+
+        // Only the new mailbox's frame may appear on the backbuffer: exactly one
+        // draw cycle served after rebind, and it came from the new mailbox.
+        submit(newBox, f.next("NEW"), 8L);
+        thread.requestCycle();
+        assertTrue(await(() -> !bb.drawnRevisions.isEmpty()));
+        Thread.sleep(100);
+        assertEquals(1, bb.drawnRevisions.size());
+
+        assertTrue(thread.shutdownAndJoin(5_000L));
     }
 
     private static TerminalRenderFrame mailboxFrame() {

@@ -17,6 +17,7 @@ import android.view.ContextMenu.ContextMenuInfo;
 import android.view.Gravity;
 import android.view.Menu;
 import android.view.MenuItem;
+import android.view.SurfaceView;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowManager;
@@ -515,13 +516,25 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
 
         String mode = mPreferences.getTerminalRenderingMode();
         int layerType;
+        boolean surfaceRoute = false;
         if (TermuxPreferenceConstants.TERMUX_APP.TERMINAL_RENDERING_MODE_HWUI_GPU.equals(mode)) {
             getWindow().addFlags(WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED);
             layerType = View.LAYER_TYPE_HARDWARE;
         } else if (TermuxPreferenceConstants.TERMUX_APP.TERMINAL_RENDERING_MODE_SOFTWARE.equals(mode)) {
             layerType = View.LAYER_TYPE_SOFTWARE;
+        } else if (TermuxPreferenceConstants.TERMUX_APP.TERMINAL_RENDERING_MODE_SURFACE.equals(mode)) {
+            // #52 spike: pixels move to a dedicated render thread + SurfaceView;
+            // this View keeps input/selection and paints transparent.
+            layerType = View.LAYER_TYPE_NONE;
+            surfaceRoute = true;
         } else {
             layerType = View.LAYER_TYPE_NONE;
+        }
+
+        mTerminalView.setSurfaceRenderingEnabled(surfaceRoute);
+        if (surfaceRoute) {
+            SurfaceView host = findViewById(R.id.terminal_surface_host);
+            if (host != null) mTerminalView.setSurfaceRenderingHost(host);
         }
 
         if (mTerminalView.getLayerType() != layerType) {

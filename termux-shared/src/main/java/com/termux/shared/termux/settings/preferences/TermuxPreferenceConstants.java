@@ -104,6 +104,8 @@ public final class TermuxPreferenceConstants {
         public static final String TERMINAL_RENDERING_MODE_SYSTEM = "system";
         public static final String TERMINAL_RENDERING_MODE_HWUI_GPU = "hwui_gpu";
         public static final String TERMINAL_RENDERING_MODE_SOFTWARE = "software";
+        /** #52 spike: SurfaceView + persistent software backbuffer render route. */
+        public static final String TERMINAL_RENDERING_MODE_SURFACE = "surface";
         public static final String DEFAULT_TERMINAL_RENDERING_MODE = TERMINAL_RENDERING_MODE_SYSTEM;
 
         /** Last rendering state reported by the Canvas passed to TerminalView.onDraw(). */
