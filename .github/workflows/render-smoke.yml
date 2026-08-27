@@ -258,7 +258,7 @@ jobs:
           adb shell run-as com.termux cp /data/local/tmp/termux_prefs.xml shared_prefs/com.termux_preferences.xml
           adb shell am force-stop com.termux
           adb logcat -c
-          adb shell am start -W -S -n com.termux/.app.TermuxActivity
+          adb shell am start -W -S -n com.termux/.app.TermuxActivity | tee /tmp/hwui-start.txt
           # Wait for the first frame under the new mode.
           frame_seen=0
           for _ in $(seq 1 40); do
@@ -286,6 +286,32 @@ jobs:
             || { echo 'NO_FRAME_INFO_LINES under hwui_gpu'; tail -50 logcat-hwui.txt; exit 1; }
           python3 .github/workflows/verify_frame_metrics.py frame-info-hwui.txt --min-lines 3 --require-skipped --min-drawn-ratio 0.3
           python3 .github/workflows/assert_render.py render_hwui.png
+          # gfxinfo percentiles over a deterministic burst (hardware-layer path):
+          # TotalTime/WaitTime come from the -W cold start just performed above.
+          adb shell dumpsys gfxinfo com.termux reset >/dev/null
+          for i in $(seq 1 40); do
+            adb shell input text "b$i"
+          done
+          sleep 3
+          GFX=$(adb shell dumpsys gfxinfo com.termux)
+          TOTAL_FRAMES=$(echo "$GFX" | grep -oE 'Total frames rendered: [0-9]+' | grep -oE '[0-9]+' | head -1 || echo 0)
+          JANKY=$(echo "$GFX" | grep -oE 'Janky frames: [0-9]+ \(' | grep -oE '[0-9]+' | head -1 || echo 0)
+          P50=$(echo "$GFX" | grep -oE '50th percentile: [0-9]+ms' | grep -oE '[0-9]+' | head -1 || echo -1)
+          P90=$(echo "$GFX" | grep -oE '90th percentile: [0-9]+ms' | grep -oE '[0-9]+' | head -1 || echo -1)
+          P95=$(echo "$GFX" | grep -oE '95th percentile: [0-9]+ms' | grep -oE '[0-9]+' | head -1 || echo -1)
+          P99=$(echo "$GFX" | grep -oE '99th percentile: [0-9]+ms' | grep -oE '[0-9]+' | head -1 || echo -1)
+          echo "$GFX" > perf-emulator-gfx.txt
+          {
+            echo "## HWUI gfxinfo probe (hardware layer, SwiftShader software stack)"
+            grep -E 'TotalTime|WaitTime' /tmp/hwui-start.txt | tr -d '\r' | sed 's/^/COLD_START_/'
+            echo "GFX_TOTAL_FRAMES=${TOTAL_FRAMES:-0}"
+            echo "GFX_JANKY_FRAMES=${JANKY:-0}"
+            echo "GFX_P50_MS=${P50:--1}"
+            echo "GFX_P90_MS=${P90:--1}"
+            echo "GFX_P95_MS=${P95:--1}"
+            echo "GFX_P99_MS=${P99:--1}"
+            echo "NOTE=software/emulator evidence; not physical-GPU acceptance"
+          } | tee -a perf-emulator-gfx.txt "$GITHUB_STEP_SUMMARY"
           adb logcat -d | grep -iE 'FATAL|AndroidRuntime.*com.termux' | tail -20 || true
 
       # #52 spike 3b: the surface route moves pixels to a dedicated render thread +
@@ -343,6 +369,29 @@ jobs:
             || { echo 'SURFACE_MODE_NOT_APPLIED'; exit 1; }
           adb logcat -d | grep -iE 'FATAL|AndroidRuntime.*com.termux' | tail -20 || true
 
+      # Surface-route raster cost lives on the render thread, invisible to gfxinfo
+      # (which only counts HWUI frames). Aggregate the backbuffer diagnostics
+      # instead: per-present CPU raster cost from the tagged Termux:SurfaceBackbuffer
+      # lines. Software/emulator evidence only — never physical-GPU acceptance.
+      - name: Surface route raster aggregates (render thread)
+        if: matrix.gpu == 'swiftshader_indirect'
+        run: |
+          set -euo pipefail
+          DRAW_AVG=$(grep -oE 'drawTextNs=[0-9]+' frame-info-surface.txt | grep -oE '[0-9]+' | awk '{s+=$1;n++} END{if(n>0) printf "%.0f", s/n; else print "-1"}')
+          PAINT_AVG=$(grep -oE 'paintSetupNs=[0-9]+' frame-info-surface.txt | grep -oE '[0-9]+' | awk '{s+=$1;n++} END{if(n>0) printf "%.0f", s/n; else print "-1"}')
+          ROWS_AVG=$(grep -oE 'renderRows=[0-9]+' frame-info-surface.txt | grep -oE '[0-9]+' | awk '{s+=$1;n++} END{if(n>0) printf "%.0f", s/n; else print "-1"}')
+          CELLS_AVG=$(grep -oE 'renderCells=[0-9]+' frame-info-surface.txt | grep -oE '[0-9]+' | awk '{s+=$1;n++} END{if(n>0) printf "%.0f", s/n; else print "-1"}')
+          PRESENTS=$(wc -l < frame-info-surface.txt | tr -d ' ')
+          {
+            echo "## Surface route raster aggregates (render thread, backbuffer presents)"
+            echo "SURFACE_PRESENTS=$PRESENTS"
+            echo "SURFACE_DRAW_TEXT_NS_AVG=$DRAW_AVG"
+            echo "SURFACE_PAINT_SETUP_NS_AVG=$PAINT_AVG"
+            echo "SURFACE_RENDER_ROWS_AVG=$ROWS_AVG"
+            echo "SURFACE_RENDER_CELLS_AVG=$CELLS_AVG"
+            echo "NOTE=software/emulator evidence; not physical-GPU acceptance"
+          } | tee -a perf-emulator.txt "$GITHUB_STEP_SUMMARY"
+
       - name: Upload render evidence
         if: always()
         uses: actions/upload-artifact@v6
@@ -353,6 +402,8 @@ jobs:
             render_after_input.png
             render_hwui.png
             render_surface.png
+            perf-emulator-gfx.txt
+            perf-emulator.txt
             logcat-smoke.txt
             logcat-hwui.txt
             logcat-surface.txt
