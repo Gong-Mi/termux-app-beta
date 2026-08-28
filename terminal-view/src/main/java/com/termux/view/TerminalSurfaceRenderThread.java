@@ -223,7 +223,12 @@ public final class TerminalSurfaceRenderThread {
     /** Pixel adapter bound to the injected backbuffer. */
     private final class OpsAdapter implements TerminalBackbufferSequencer.Ops {
         @Override public void resizeIfNeeded(int width, int height) {
-            mBackbuffer.resizeTo(width, height);
+            // The sequencer conveys CELL geometry (frame.columns x visible rows),
+            // not pixels. Backbuffer pixel size is owned exclusively by
+            // SurfaceHolder surfaceChanged; recreating the bitmap from cell
+            // counts here produced a cell-sized bitmap that the surface blit
+            // stretched into full-screen mosaic blocks (real-device bug,
+            // surface route). Nothing to do: geometry already handled.
         }
 
         @Override public void drawAll(TerminalRenderFrame frame) {
