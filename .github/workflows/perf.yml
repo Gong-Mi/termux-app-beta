@@ -132,6 +132,17 @@ jobs:
           name: perf-timing-aarch64
           path: timings/aarch64
 
+      - name: Find latest master baseline run
+        id: baseline-run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          RUN_ID=$(gh api \
+            "repos/${{ github.repository }}/actions/workflows/perf.yml/runs?branch=master&status=success&per_page=1" \
+            --jq '.workflow_runs[0].id' 2>/dev/null || true)
+          echo "baseline run_id=${RUN_ID:-none}"
+          echo "run_id=${RUN_ID:-}" >> "$GITHUB_OUTPUT"
+
       - name: Download baseline x86_64 timing
         id: baseline-x86_64
         continue-on-error: true
@@ -139,6 +150,8 @@ jobs:
         with:
           name: perf-timing-baseline-x86_64
           path: timings/baseline-x86_64
+          run-id: ${{ steps.baseline-run.outputs.run_id }}
+          github-token: ${{ github.token }}
 
       - name: Download baseline aarch64 timing
         id: baseline-aarch64
@@ -147,8 +160,12 @@ jobs:
         with:
           name: perf-timing-baseline-aarch64
           path: timings/baseline-aarch64
+          run-id: ${{ steps.baseline-run.outputs.run_id }}
+          github-token: ${{ github.token }}
 
       - name: Print comparison tables
+        env:
+          BASELINE_RUN_ID: ${{ steps.baseline-run.outputs.run_id }}
         run: |
           python3 - <<'EOF'
           import glob
@@ -179,6 +196,7 @@ jobs:
           arm = load_single("timings/aarch64/perf-timing-*.txt")
           base_x86 = load_single("timings/baseline-x86_64/perf-timing-*.txt")
           base_arm = load_single("timings/baseline-aarch64/perf-timing-*.txt")
+          base_run_label = __import__("os").environ.get("BASELINE_RUN_ID", "unknown")
 
           print("per test class wall time: x86_64 vs aarch64 (lower is better)")
           print(f"{'test class':60s} {'x86_64':>10s} {'aarch64':>10s} {'x86/arm':>8s}")
@@ -193,7 +211,7 @@ jobs:
                 f"ratio={total_x/total_a:.2f}x" if total_a > 0 else "")
 
           if base_x86 or base_arm:
-              print("\nPR vs master baseline (negative = faster than baseline)")
+              print(f"\\nPR vs master baseline (baseline run: {base_run_label}, negative = faster than baseline)")
               print(f"{'test class':60s} {'arch':>8s} {'pr':>10s} {'baseline':>10s} {'delta':>10s}")
               for cls in sorted(set(x86) | set(arm)):
                   for label, current, baseline in [
