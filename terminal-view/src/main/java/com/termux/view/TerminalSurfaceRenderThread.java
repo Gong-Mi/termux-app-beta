@@ -26,6 +26,9 @@ public final class TerminalSurfaceRenderThread {
     public interface Backbuffer {
         void resizeTo(int widthPx, int heightPx);
 
+        /** Whether the bitmap exists at a known pixel size (safe to drawAll). */
+        boolean hasSize();
+
         void drawAll(TerminalRenderFrame frame);
 
         boolean present();
@@ -85,6 +88,12 @@ public final class TerminalSurfaceRenderThread {
             // surface (pure re-present, markers untouched — see onSurfaceCreated);
             // the next cycle re-rasters at full resolution anyway.
             mBackbuffer.present();
+            // A frame may be queued waiting for this size (draw raced ahead of
+            // the first resize); serve it now.
+            if (!mCyclePending) {
+                mCyclePending = true;
+                mLock.notifyAll();
+            }
         }
     }
 
@@ -222,6 +231,10 @@ public final class TerminalSurfaceRenderThread {
 
     /** Pixel adapter bound to the injected backbuffer. */
     private final class OpsAdapter implements TerminalBackbufferSequencer.Ops {
+        @Override public boolean pixelSizeReady() {
+            return mBackbuffer.hasSize();
+        }
+
         @Override public void resizeIfNeeded(int width, int height) {
             // The sequencer conveys CELL geometry (frame.columns x visible rows),
             // not pixels. Backbuffer pixel size is owned exclusively by

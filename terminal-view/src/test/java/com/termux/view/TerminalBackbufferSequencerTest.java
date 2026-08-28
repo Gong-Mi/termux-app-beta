@@ -42,6 +42,10 @@ public class TerminalBackbufferSequencerTest {
         boolean surfaceAlive = true;
         int width = 8;
 
+        @Override public boolean pixelSizeReady() {
+            return true;
+        }
+
         @Override public void resizeIfNeeded(int width, int height) {
             if (width != this.width) {
                 this.width = width;

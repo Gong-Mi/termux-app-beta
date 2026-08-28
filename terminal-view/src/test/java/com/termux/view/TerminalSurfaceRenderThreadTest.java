@@ -40,11 +40,17 @@ public class TerminalSurfaceRenderThreadTest {
         final List<Integer> resizedToWidths = new CopyOnWriteArrayList<>();
         final List<Long> drawnRevisions = new CopyOnWriteArrayList<>();
         final AtomicInteger presentOk = new AtomicInteger();
+        volatile boolean sized = true;
         CountDownLatch blockDrawEntered;
         CountDownLatch blockDrawRelease;
 
         @Override public void resizeTo(int widthPx, int heightPx) {
             resizedToWidths.add(widthPx);
+            sized = true;
+        }
+
+        @Override public boolean hasSize() {
+            return sized;
         }
 
         @Override public void drawAll(TerminalRenderFrame frame) {
@@ -283,6 +289,31 @@ public class TerminalSurfaceRenderThreadTest {
         assertTrue(await(() -> !bb.drawnRevisions.isEmpty()));
         Thread.sleep(100);
         assertEquals(1, bb.drawnRevisions.size());
+
+        assertTrue(thread.shutdownAndJoin(5_000L));
+    }
+
+    @Test
+    public void frameBeforeFirstResizeIsRetainedThenServedAfterResize() throws Exception {
+        TerminalFrameConsumerMailbox<TerminalRenderFrame> mbox = mailbox();
+        FakeBackbuffer bb = new FakeBackbuffer();
+        TerminalSurfaceRenderThread thread =
+            new TerminalSurfaceRenderThread("t", mbox, bb);
+        thread.start();
+        thread.onSurfaceCreated();
+
+        // Simulate draw racing ahead of the first resize: unsized backbuffer.
+        bb.sized = false;
+        FrameFactory f = new FrameFactory();
+        submit(mbox, f.next("EARLY"));
+        thread.requestCycle();
+        Thread.sleep(150);
+        assertEquals("unsized backbuffer must not consume the frame", 0, bb.drawnRevisions.size());
+
+        // First pixel size arrives (surfaceChanged): the queued frame is served.
+        thread.onSurfaceChanged(320, 240);
+        assertTrue(await(() -> !bb.drawnRevisions.isEmpty()));
+        assertEquals("EARLY frame served after resize", 1, bb.drawnRevisions.size());
 
         assertTrue(thread.shutdownAndJoin(5_000L));
     }

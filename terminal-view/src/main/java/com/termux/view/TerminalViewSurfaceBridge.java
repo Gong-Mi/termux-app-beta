@@ -1,5 +1,6 @@
 package com.termux.view;
 
+import android.graphics.Rect;
 import android.view.Surface;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
@@ -67,12 +68,19 @@ final class TerminalViewSurfaceBridge implements SurfaceHolder.Callback {
         holder.addCallback(bridge);
         // Surface may already exist (view re-created while activity kept it):
         // the addCallback above does NOT replay creation, so install eagerly.
+        // The surface frame supplies the CURRENT pixel size — the system will
+        // not necessarily deliver surfaceChanged again, and without a size the
+        // backbuffer can never build its bitmap (dead render path, seen as the
+        // CI smoke "Timed out waiting for surface backbuffer frame
+        // diagnostics" on slow-emulator timings).
         Surface surface = holder.getSurface();
         if (surface != null && surface.isValid()) {
             backbuffer.setSurface(surface);
             thread.onSurfaceCreated();
-            // Geometry is unknown here; surfaceChanged will follow from the
-            // system and resize the backbuffer before any draw.
+            Rect frame = holder.getSurfaceFrame();
+            if (frame != null && frame.width() > 0 && frame.height() > 0) {
+                thread.onSurfaceChanged(frame.width(), frame.height());
+            }
         }
         thread.start();
         return bridge;

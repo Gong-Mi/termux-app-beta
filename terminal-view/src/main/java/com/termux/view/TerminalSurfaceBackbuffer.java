@@ -81,6 +81,11 @@ final class TerminalSurfaceBackbuffer implements TerminalSurfaceRenderThread.Bac
     }
 
     @Override
+    public boolean hasSize() {
+        return mBitmapCanvas != null;
+    }
+
+    @Override
     public void resizeTo(int widthPx, int heightPx) {
         if (widthPx <= 0 || heightPx <= 0) return;
         if (mBitmap != null && mBitmapWidth == widthPx && mBitmapHeight == heightPx) return;
@@ -100,7 +105,16 @@ final class TerminalSurfaceBackbuffer implements TerminalSurfaceRenderThread.Bac
 
     @Override
     public void drawAll(TerminalRenderFrame frame) {
-        if (mBitmapCanvas == null) return;
+        if (mBitmapCanvas == null) {
+            // Draw raced ahead of the first resize (create path can hand a
+            // live surface before any pixel size arrives): no bitmap yet, and
+            // acquireLatest() has already taken the frame out of the mailbox.
+            // The caller (sequencer step) checks pixelSizeReady() BEFORE
+            // acquiring, so in practice this is unreachable; kept as a
+            // defensive no-op so a future caller mistake degrades to a
+            // dropped frame instead of a crash.
+            return;
+        }
         Trace.beginSection("Termux:SurfaceBackbuffer.drawAll");
         try {
             // Damage from the last CONFIRMED-presented frame (not the last drawn):

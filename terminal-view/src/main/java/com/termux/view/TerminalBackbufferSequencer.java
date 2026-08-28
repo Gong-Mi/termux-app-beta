@@ -23,6 +23,9 @@ public final class TerminalBackbufferSequencer {
 
     /** Pixel/surface mechanics injected by the Android shell. */
     public interface Ops {
+        /** Whether the pixel target is sized and safe for drawAll. */
+        boolean pixelSizeReady();
+
         /** Backbuffer must match this geometry; recreate when it differs. */
         void resizeIfNeeded(int width, int height);
 
@@ -68,6 +71,13 @@ public final class TerminalBackbufferSequencer {
     }
 
     public StepResult step() {
+        // Draw raced ahead of the first pixel resize: acquiring now would drop
+        // the frame (acquireLatest() is take-not-peek) into a backbuffer that
+        // cannot raster it. Leave the frame queued; onSurfaceChanged sizes the
+        // bitmap and the next requestCycle() serves it.
+        if (!mOps.pixelSizeReady()) {
+            return StepResult.IDLE;
+        }
         TerminalFrameConsumerMailbox.Entry<TerminalRenderFrame> entry = mMailbox.acquireLatest();
         if (entry == null) {
             return StepResult.IDLE;
