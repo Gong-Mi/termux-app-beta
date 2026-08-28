@@ -25,6 +25,11 @@ on:
         required: false
         default: "60"
         type: string
+      producer_run_id:
+        description: "Optional Build pixel-loop prebuilts run id; empty uses the pinned Release asset"
+        required: false
+        default: ""
+        type: string
 
 env:
   JAVA_VERSION: 21
@@ -96,7 +101,8 @@ jobs:
           sha256sum app/build/outputs/bundle/debug/app-debug.aab \
             debug-universal/universal.apk | tee debug-artifacts.sha256
 
-      - name: Download and verify x86_64 producer from latest release
+      - name: Download x86_64 producer from pinned Release
+        if: inputs.producer_run_id == ''
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -104,14 +110,30 @@ jobs:
           PIXEL_LOOP_PATH=$(python3 .github/workflows/fetch_pixel_loop_release.py \
             --asset "$PIXEL_LOOP_ASSET" --out-dir .)
           echo "PIXEL_LOOP_PATH=$PIXEL_LOOP_PATH" >> "$GITHUB_ENV"
+
+      - name: Download exact source-built x86_64 producer
+        if: inputs.producer_run_id != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euxo pipefail
+          mkdir -p source-prebuilt
+          gh run download "${{ inputs.producer_run_id }}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name pixel-loop-x86_64-prebuilt-evidence \
+            --dir source-prebuilt
+          test -s source-prebuilt/pixel-loop-x86_64
+          echo "PIXEL_LOOP_PATH=$GITHUB_WORKSPACE/source-prebuilt/pixel-loop-x86_64" >> "$GITHUB_ENV"
+
+      - name: Verify selected x86_64 producer
+        run: |
+          set -euxo pipefail
           chmod 755 "$PIXEL_LOOP_PATH"
-          file "$PIXEL_LOOP_ASSET" | tee pixel-loop-file.txt
-          readelf -d "$PIXEL_LOOP_ASSET" | tee pixel-loop-dynamic.txt
+          file "$PIXEL_LOOP_PATH" | tee pixel-loop-file.txt
+          readelf -d "$PIXEL_LOOP_PATH" | tee pixel-loop-dynamic.txt
           grep -q 'x86-64' pixel-loop-file.txt
-          # The interpreter is a program header (readelf -l, "Requesting program
-          # interpreter:"); readelf -d (dynamic section) never prints it.
-          readelf -l "$PIXEL_LOOP_ASSET" | grep -q 'Requesting program interpreter: /system/bin/linker64'
-          test -x "$PIXEL_LOOP_ASSET"
+          readelf -l "$PIXEL_LOOP_PATH" | grep -q 'Requesting program interpreter: /system/bin/linker64'
+          test -x "$PIXEL_LOOP_PATH"
 
       - name: Create and boot x86_64 emulator
         env:
