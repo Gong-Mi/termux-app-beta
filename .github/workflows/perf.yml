@@ -94,6 +94,21 @@ jobs:
       - name: Extract timing from JUnit XML reports
         run: python3 .github/workflows/perf_extract_timing.py ${{ matrix.arch }} perf-timing-${{ matrix.arch }}.txt
 
+      # Repeatable worker/snapshot/mailbox micro-benchmark (JMH-style, in-repo
+      # main class): fixed iteration count with median + IQR, resolvable grain
+      # for the worker path that JUnit's single wall-clock sample cannot
+      # distinguish (~6% deltas drown in runner jitter there).
+      - name: Worker pipeline micro-benchmark (median of N)
+        run: |
+          ANNOT=$(find ~/.gradle/caches -path "*androidx.annotation*" -name "annotation-*.jar" | head -1)
+          MAIN_CP="terminal-emulator/build/intermediates/javac/debug/compileDebugJavaWithJavac/classes"
+          TEST_CP="terminal-emulator/build/intermediates/javac/debugUnitTest/compileDebugUnitTestJavaWithJavac/classes"
+          # Recompile test sources to guarantee the bench class is present.
+          ./gradlew :terminal-emulator:compileDebugUnitTestJavaWithJavac --no-daemon -q
+          java -cp "$MAIN_CP:$TEST_CP:$ANNOT" com.termux.terminal.WorkerBenchMain 15 3 \
+            | tee worker-bench-${{ matrix.arch }}.txt
+          grep -q "worker/ascii" worker-bench-${{ matrix.arch }}.txt || { echo 'BENCH_FAILED'; exit 1; }
+
       # Fail the job on structural perf regressions (e.g. reintroducing the
       # O(columns^2) row scans or per-code-point width binary search).
       - name: Check tracked benchmark budgets
@@ -103,7 +118,9 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: perf-timing-${{ matrix.arch }}
-          path: perf-timing-${{ matrix.arch }}.txt
+          path: |
+            perf-timing-${{ matrix.arch }}.txt
+            worker-bench-${{ matrix.arch }}.txt
           if-no-files-found: error
 
       - name: Upload baseline timing artifact on master
