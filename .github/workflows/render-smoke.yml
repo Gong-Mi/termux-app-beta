@@ -365,7 +365,10 @@ jobs:
           wc -l frame-info-surface.txt
           # Reuse the standard frame contract: revisions non-decreasing, counters
           # sane, drawn/published ratio >= 0.3 (backbuffer acks every present).
-          python3 .github/workflows/verify_frame_metrics.py frame-info-surface.txt --min-lines 3 --min-drawn-ratio 0.3
+          # --require-skipped proves the clean-row reuse path actually executes
+          # (full-frame discipline lifted in 1901a221: burst traffic must skip
+          # unchanged rows on the persistent bitmap).
+          python3 .github/workflows/verify_frame_metrics.py frame-info-surface.txt --min-lines 3 --require-skipped --min-drawn-ratio 0.3
           python3 .github/workflows/assert_render.py render_surface.png
           # Route evidence: the surface mode must have been applied at activity
           # startup (logged via Logger.logInfo into logcat).
