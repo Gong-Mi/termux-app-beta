@@ -52,6 +52,13 @@ final class TerminalSurfaceBackbuffer implements TerminalSurfaceRenderThread.Bac
     /** Frame being drawn/presented in the current cycle (render-thread-owned). */
     private TerminalRenderFrame mCurrentFrame;
     private TerminalRenderStepMetrics.Snapshot mRenderStepsSnapshot;
+    /**
+     * Last frame whose pixels are provably complete in the bitmap. Only advances
+     * after a confirmed present; the persistent bitmap retains those pixels, so
+     * clean rows can be skipped exactly like the HWUI layered path (with a
+     * strictly stronger retention guarantee — the bitmap is never reclaimed).
+     */
+    private TerminalRenderFrame mLastPresentedFrame;
 
     TerminalSurfaceBackbuffer(TerminalRenderer renderer, RenderFrameMetrics metrics,
                               SessionSupplier sessionSupplier) {
@@ -81,6 +88,10 @@ final class TerminalSurfaceBackbuffer implements TerminalSurfaceRenderThread.Bac
         mBitmapCanvas = canvas;
         mBitmapWidth = widthPx;
         mBitmapHeight = heightPx;
+        // New bitmap: no provably-presented pixels survive the swap; force the
+        // next drawAll to full-frame (damage computation would otherwise trust
+        // row content from a differently-sized bitmap).
+        mLastPresentedFrame = null;
         Log.i(LOG_TAG, "backbuffer resized " + widthPx + "x" + heightPx);
     }
 
@@ -89,8 +100,16 @@ final class TerminalSurfaceBackbuffer implements TerminalSurfaceRenderThread.Bac
         if (mBitmapCanvas == null) return;
         Trace.beginSection("Termux:SurfaceBackbuffer.drawAll");
         try {
-            mBitmapCanvas.drawColor(Color.BLACK);
-            mRenderer.render(frame, mBitmapCanvas);
+            // Damage from the last CONFIRMED-presented frame (not the last drawn):
+            // the bitmap only provably holds pixels of frames whose present
+            // succeeded. fullRedraw (geometry/palette/reverseVideo) drops the
+            // reuse, matching the HWUI layered path's invariant.
+            RenderDamage damage = RenderDamage.compute(frame, mLastPresentedFrame);
+            boolean skipCleanRows = !damage.fullRedraw;
+            if (!skipCleanRows) {
+                mBitmapCanvas.drawColor(Color.BLACK);
+            }
+            mRenderer.render(frame, mBitmapCanvas, skipCleanRows, mLastPresentedFrame);
             mRenderStepsSnapshot = mRenderer.getAndResetRenderStepDelta();
             mCurrentFrame = frame;
         } finally {
@@ -133,6 +152,7 @@ final class TerminalSurfaceBackbuffer implements TerminalSurfaceRenderThread.Bac
     /** Called only after a confirmed presentation. */
     private void onPresented(TerminalRenderFrame frame) {
         mMetrics.ack(frame.getScreenRevision());
+        mLastPresentedFrame = frame;
         // Tag with the backbuffer identity so smoke verifiers can prove the pixel
         // actually flowed through the SurfaceView route.
         TerminalFrameDiagnostics.logIfEnabled(LOG_TAG, mSessionSupplier.get(), mMetrics, frame,
