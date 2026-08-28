@@ -43,6 +43,9 @@ final class TerminalSurfaceBackbuffer implements TerminalSurfaceRenderThread.Bac
 
     private volatile Surface mSurface;
 
+    /** Wall time of the last successful lockCanvas..post cycle (render-thread-owned). */
+    private long mLastPresentNanos = -1L;
+
     /** Render-thread-owned pixel state; never touched from other threads. */
     private Bitmap mBitmap;
     private Canvas mBitmapCanvas;
@@ -126,12 +129,14 @@ final class TerminalSurfaceBackbuffer implements TerminalSurfaceRenderThread.Bac
 
         Trace.beginSection("Termux:SurfaceBackbuffer.present");
         Canvas target = null;
+        long t0 = System.nanoTime();
         try {
             target = surface.lockCanvas(null);
             if (target == null) return false;
             target.drawBitmap(mBitmap, 0, 0, null);
             surface.unlockCanvasAndPost(target);
             target = null;
+            mLastPresentNanos = System.nanoTime() - t0;
             onPresented(frame);
             return true;
         } catch (RuntimeException | OutOfMemoryError e) {
@@ -156,6 +161,7 @@ final class TerminalSurfaceBackbuffer implements TerminalSurfaceRenderThread.Bac
         // Tag with the backbuffer identity so smoke verifiers can prove the pixel
         // actually flowed through the SurfaceView route.
         TerminalFrameDiagnostics.logIfEnabled(LOG_TAG, mSessionSupplier.get(), mMetrics, frame,
-            mRenderStepsSnapshot != null ? mRenderStepsSnapshot : mRenderer.getAndResetRenderStepDelta());
+            mRenderStepsSnapshot != null ? mRenderStepsSnapshot : mRenderer.getAndResetRenderStepDelta(),
+            mLastPresentNanos);
     }
 }

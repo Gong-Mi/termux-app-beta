@@ -389,6 +389,9 @@ jobs:
           ROWS_AVG=$(grep -oE 'renderRows=[0-9]+' frame-info-surface.txt | grep -oE '[0-9]+' | awk '{s+=$1;n++} END{if(n>0) printf "%.0f", s/n; else print "-1"}')
           CELLS_AVG=$(grep -oE 'renderCells=[0-9]+' frame-info-surface.txt | grep -oE '[0-9]+' | awk '{s+=$1;n++} END{if(n>0) printf "%.0f", s/n; else print "-1"}')
           PRESENTS=$(wc -l < frame-info-surface.txt | tr -d ' ')
+          # Present (lockCanvas..post) cost: the blit segment invisible to other
+          # counters. Percentiles over nanosecond values.
+          PRESENT_STATS=$(grep -oE 'presentNs=[0-9]+' frame-info-surface.txt | grep -oE '[0-9]+' | sort -n | awk '{a[NR]=$1; s+=$1} END {if(n>0) printf "min=%.2f p50=%.2f max=%.2f avg=%.2f n=%d", a[1]/1e6, a[int(NR*0.5)]/1e6, a[NR]/1e6, s/NR/1e6, NR; else print "none"}')
           {
             echo "## Surface route raster aggregates (render thread, backbuffer presents)"
             echo "SURFACE_PRESENTS=$PRESENTS"
@@ -396,6 +399,7 @@ jobs:
             echo "SURFACE_PAINT_SETUP_NS_AVG=$PAINT_AVG"
             echo "SURFACE_RENDER_ROWS_AVG=$ROWS_AVG"
             echo "SURFACE_RENDER_CELLS_AVG=$CELLS_AVG"
+            echo "SURFACE_PRESENT_MS(min/p50/max/avg)=$PRESENT_STATS"
             echo "NOTE=software/emulator evidence; not physical-GPU acceptance"
           } | tee -a perf-emulator.txt "$GITHUB_STEP_SUMMARY"
 

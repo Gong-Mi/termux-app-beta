@@ -20,4 +20,10 @@ final class TerminalFrameDiagnostics {
                              TerminalRenderFrame frame, TerminalRenderStepMetrics.Snapshot renderSteps) {
         // Intentionally empty in release builds.
     }
+
+    static void logIfEnabled(String logTag, TerminalSession session, RenderFrameMetrics metrics,
+                             TerminalRenderFrame frame, TerminalRenderStepMetrics.Snapshot renderSteps,
+                             long presentNanos) {
+        // Intentionally empty in release builds.
+    }
 }
