@@ -17,9 +17,11 @@ import com.termux.terminal.TerminalSession;
  * render thread, presented to a SurfaceView Surface with a single
  * {@code lockCanvas + drawBitmap + unlockCanvasAndPost} blit.
  *
- * <p>Spike discipline (per #52): FULL-frame raster every cycle — no incremental
- * reuse. The bitmap persists between presents but every draw repaints it, so a
- * frame never depends on stale pixels.</p>
+ * <p>Surface correctness policy: the Bitmap is cleared and the visible frame is
+ * rasterized completely on every present. The layered Canvas path has a separate
+ * clean-row optimization, but Surface row identity/damage reuse is not yet safe
+ * across full-screen terminal clears and scrolls; stale bottom pixels are worse
+ * than the temporary CPU cost.</p>
  *
  * <p>Threading: {@link #resizeTo}, {@link #drawAll} and {@link #present} run on
  * exactly one thread — the {@link TerminalSurfaceRenderThread} loop. The Surface
@@ -117,16 +119,13 @@ final class TerminalSurfaceBackbuffer implements TerminalSurfaceRenderThread.Bac
         }
         Trace.beginSection("Termux:SurfaceBackbuffer.drawAll");
         try {
-            // Damage from the last CONFIRMED-presented frame (not the last drawn):
-            // the bitmap only provably holds pixels of frames whose present
-            // succeeded. fullRedraw (geometry/palette/reverseVideo) drops the
-            // reuse, matching the HWUI layered path's invariant.
-            RenderDamage damage = RenderDamage.compute(frame, mLastPresentedFrame);
-            boolean skipCleanRows = !damage.fullRedraw;
-            if (!skipCleanRows) {
-                mBitmapCanvas.drawColor(Color.BLACK);
-            }
-            mRenderer.render(frame, mBitmapCanvas, skipCleanRows, mLastPresentedFrame);
+            // Surface bitmap contents must not be reused based on snapshot row
+            // identity: terminal clear/scroll can leave logically stale bottom
+            // rows. Correctness takes precedence until a Surface-specific damage
+            // contract exists.
+            boolean skipCleanRows = false;
+            mBitmapCanvas.drawColor(Color.BLACK);
+            mRenderer.render(frame, mBitmapCanvas, skipCleanRows, null);
             mRenderStepsSnapshot = mRenderer.getAndResetRenderStepDelta();
             mCurrentFrame = frame;
         } finally {
