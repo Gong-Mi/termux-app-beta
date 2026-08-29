@@ -258,7 +258,7 @@ jobs:
           adb shell run-as com.termux cp /data/local/tmp/termux_prefs.xml shared_prefs/com.termux_preferences.xml
           adb shell am force-stop com.termux
           adb logcat -c
-          adb shell am start -W -S -n com.termux/.app.TermuxActivity
+          adb shell am start -W -S -n com.termux/.app.TermuxActivity | tee /tmp/hwui-start.txt
           # Wait for the first frame under the new mode.
           frame_seen=0
           for _ in $(seq 1 40); do
@@ -286,7 +286,179 @@ jobs:
             || { echo 'NO_FRAME_INFO_LINES under hwui_gpu'; tail -50 logcat-hwui.txt; exit 1; }
           python3 .github/workflows/verify_frame_metrics.py frame-info-hwui.txt --min-lines 3 --require-skipped --min-drawn-ratio 0.3
           python3 .github/workflows/assert_render.py render_hwui.png
+          # gfxinfo percentiles over a deterministic burst (hardware-layer path):
+          # TotalTime/WaitTime come from the -W cold start just performed above.
+          adb shell dumpsys gfxinfo com.termux reset >/dev/null
+          for i in $(seq 1 40); do
+            adb shell input text "b$i"
+          done
+          sleep 3
+          GFX=$(adb shell dumpsys gfxinfo com.termux)
+          TOTAL_FRAMES=$(echo "$GFX" | grep -oE 'Total frames rendered: [0-9]+' | grep -oE '[0-9]+' | head -1 || echo 0)
+          JANKY=$(echo "$GFX" | grep -oE 'Janky frames: [0-9]+ \(' | grep -oE '[0-9]+' | head -1 || echo 0)
+          # Take the VALUE after "percentile:", not the percentile label itself.
+          P50=$(echo "$GFX" | grep -oE '50th percentile: [0-9]+ms' | awk '{print $3}' | tr -d 'ms' | head -1 || echo -1)
+          P90=$(echo "$GFX" | grep -oE '90th percentile: [0-9]+ms' | awk '{print $3}' | tr -d 'ms' | head -1 || echo -1)
+          P95=$(echo "$GFX" | grep -oE '95th percentile: [0-9]+ms' | awk '{print $3}' | tr -d 'ms' | head -1 || echo -1)
+          P99=$(echo "$GFX" | grep -oE '99th percentile: [0-9]+ms' | awk '{print $3}' | tr -d 'ms' | head -1 || echo -1)
+          echo "$GFX" > perf-emulator-gfx.txt
+          {
+            echo "## HWUI gfxinfo probe (hardware layer, SwiftShader software stack)"
+            grep -E 'TotalTime|WaitTime' /tmp/hwui-start.txt | tr -d '\r' | sed 's/^/COLD_START_/'
+            echo "GFX_TOTAL_FRAMES=${TOTAL_FRAMES:-0}"
+            echo "GFX_JANKY_FRAMES=${JANKY:-0}"
+            echo "GFX_P50_MS=${P50:--1}"
+            echo "GFX_P90_MS=${P90:--1}"
+            echo "GFX_P95_MS=${P95:--1}"
+            echo "GFX_P99_MS=${P99:--1}"
+            echo "NOTE=software/emulator evidence; not physical-GPU acceptance"
+          } | tee -a perf-emulator-gfx.txt "$GITHUB_STEP_SUMMARY"
           adb logcat -d | grep -iE 'FATAL|AndroidRuntime.*com.termux' | tail -20 || true
+
+      # #52 spike 3b: the surface route moves pixels to a dedicated render thread +
+      # persistent backbuffer presented through a SurfaceView. Prove the route
+      # actually executes: frame diagnostics must come from the backbuffer path
+      # (published keeps advancing while drawn stays pinned at the view's last
+      # reference-path frame), pixels must still assert, and the SurfaceView must
+      # own a live surface.
+      - name: Surface backbuffer route (#52 spike 3b)
+        if: matrix.gpu == 'swiftshader_indirect'
+        run: |
+          set -euo pipefail
+          # Write the rendering mode preference through run-as (debug build is debuggable).
+          cat > /tmp/termux_prefs_surface.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8" standalone="yes" ?>
+          <map>
+              <string name="terminal_rendering_mode">surface</string>
+          </map>
+          EOF
+          adb push /tmp/termux_prefs_surface.xml /data/local/tmp/termux_prefs_surface.xml
+          adb shell run-as com.termux mkdir -p shared_prefs
+          adb shell run-as com.termux cp /data/local/tmp/termux_prefs_surface.xml shared_prefs/com.termux_preferences.xml
+          adb shell am force-stop com.termux
+          adb logcat -c
+          adb shell am start -W -S -n com.termux/.app.TermuxActivity
+          frame_seen=0
+          for _ in $(seq 1 40); do
+            if adb logcat -d | grep -q 'Termux:SurfaceBackbuffer.*frame rev='; then
+              frame_seen=1
+              break
+            fi
+            sleep 1
+          done
+          if [ "$frame_seen" -ne 1 ]; then
+            echo 'Timed out waiting for surface backbuffer frame diagnostics'
+            adb logcat -d | tail -100
+            exit 1
+          fi
+          # Live input must flow producer -> surface mailbox -> backbuffer present.
+          # 20 injections give the raster aggregates a usable sample size.
+          adb shell input keyevent KEYCODE_MOVE_END
+          for i in $(seq 1 20); do
+            adb shell input text "s$i"
+          done
+          sleep 3
+          adb exec-out screencap -p > render_surface.png
+          adb logcat -d > logcat-surface.txt
+          grep -E 'Termux:SurfaceBackbuffer.*frame rev=' logcat-surface.txt > frame-info-surface.txt \
+            || { echo 'NO_SURFACE_FRAME_LINES'; tail -50 logcat-surface.txt; exit 1; }
+          wc -l frame-info-surface.txt
+          # Surface currently uses correctness-first full redraws. The required
+          # assertion is complete-frame output, not clean-row reuse.
+          python3 .github/workflows/verify_frame_metrics.py frame-info-surface.txt --min-lines 3 --min-drawn-ratio 0.3
+          python3 .github/workflows/assert_render.py render_surface.png
+          # Route evidence: the surface mode must have been applied at activity
+          # startup (logged via Logger.logInfo into logcat).
+          grep -m1 'Terminal rendering mode=surface' logcat-surface.txt \
+            || { echo 'SURFACE_MODE_NOT_APPLIED'; exit 1; }
+          adb logcat -d | grep -iE 'FATAL|AndroidRuntime.*com.termux' | tail -20 || true
+
+      # Surface-route raster cost lives on the render thread, invisible to gfxinfo
+      # (which only counts HWUI frames). Aggregate the backbuffer diagnostics
+      # instead: per-present CPU raster cost from the tagged Termux:SurfaceBackbuffer
+      # lines. Software/emulator evidence only — never physical-GPU acceptance.
+      - name: Surface route raster aggregates (render thread)
+        if: matrix.gpu == 'swiftshader_indirect'
+        run: |
+          set -euo pipefail
+          DRAW_AVG=$(grep -oE 'drawTextNs=[0-9]+' frame-info-surface.txt | grep -oE '[0-9]+' | awk '{s+=$1;n++} END{if(n>0) printf "%.0f", s/n; else print "-1"}')
+          PAINT_AVG=$(grep -oE 'paintSetupNs=[0-9]+' frame-info-surface.txt | grep -oE '[0-9]+' | awk '{s+=$1;n++} END{if(n>0) printf "%.0f", s/n; else print "-1"}')
+          ROWS_AVG=$(grep -oE 'renderRows=[0-9]+' frame-info-surface.txt | grep -oE '[0-9]+' | awk '{s+=$1;n++} END{if(n>0) printf "%.0f", s/n; else print "-1"}')
+          CELLS_AVG=$(grep -oE 'renderCells=[0-9]+' frame-info-surface.txt | grep -oE '[0-9]+' | awk '{s+=$1;n++} END{if(n>0) printf "%.0f", s/n; else print "-1"}')
+          PRESENTS=$(wc -l < frame-info-surface.txt | tr -d ' ')
+          # Present (lockCanvas..post) cost: the blit segment invisible to other
+          # counters. Percentiles over nanosecond values.
+          PRESENT_STATS=$(grep -oE 'presentNs=[0-9]+' frame-info-surface.txt | grep -oE '[0-9]+' | sort -n | awk '{a[NR]=$1; s+=$1} END {if(n>0) printf "min=%.2f p50=%.2f max=%.2f avg=%.2f n=%d", a[1]/1e6, a[int(NR*0.5)]/1e6, a[NR]/1e6, s/NR/1e6, NR; else print "none"}')
+          {
+            echo "## Surface route raster aggregates (render thread, backbuffer presents)"
+            echo "SURFACE_PRESENTS=$PRESENTS"
+            echo "SURFACE_DRAW_TEXT_NS_AVG=$DRAW_AVG"
+            echo "SURFACE_PAINT_SETUP_NS_AVG=$PAINT_AVG"
+            echo "SURFACE_RENDER_ROWS_AVG=$ROWS_AVG"
+            echo "SURFACE_RENDER_CELLS_AVG=$CELLS_AVG"
+            echo "SURFACE_PRESENT_MS(min/p50/max/avg)=$PRESENT_STATS"
+            echo "NOTE=software/emulator evidence; not physical-GPU acceptance"
+          } | tee -a perf-emulator.txt "$GITHUB_STEP_SUMMARY"
+
+      - name: Multi-resolution and density scaling matrix
+        if: matrix.gpu == 'swiftshader_indirect'
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet Pillow
+          for PROFILE in \
+            low_720x1560_320:720x1560:320 \
+            native_1080x2340_440:1080x2340:440 \
+            high_1440x3120_560:1440x3120:560 \
+            high_scaled_1440x3120_440:1440x3120:440; do
+            IFS=: read -r NAME SIZE DENSITY <<< "$PROFILE"
+            WIDTH=${SIZE%x*}
+            HEIGHT=${SIZE#*x}
+            echo "== profile $NAME size=$SIZE density=$DENSITY =="
+            adb shell wm size "$SIZE"
+            adb shell wm density "$DENSITY"
+            {
+              adb shell wm size
+              adb shell wm density
+            } | tee "display-scale-$NAME.txt"
+
+            adb shell am force-stop com.termux
+            adb logcat -c
+            adb shell am start -W -S -n com.termux/.app.TermuxActivity \
+              | tee "start-scale-$NAME.txt"
+            FRAME_SEEN=0
+            for i in $(seq 1 30); do
+              sleep 1
+              if adb logcat -d 2>/dev/null | grep -q 'Termux:SurfaceBackbuffer.*frame rev='; then
+                FRAME_SEEN=1
+                break
+              fi
+            done
+            if [ "$FRAME_SEEN" != 1 ]; then
+              echo "NO_SURFACE_FRAME_LINES profile=$NAME"
+              adb logcat -d | tail -80
+              exit 1
+            fi
+            adb shell input keyevent KEYCODE_MOVE_END
+            adb shell input text "scale_$NAME"
+            sleep 2
+            adb exec-out screencap -p > "render-scale-$NAME.png"
+            adb logcat -d > "logcat-scale-$NAME.txt"
+            grep -E 'Termux:SurfaceBackbuffer.*frame rev=' "logcat-scale-$NAME.txt" \
+              > "frame-info-scale-$NAME.txt"
+            python3 .github/workflows/verify_frame_metrics.py \
+              "frame-info-scale-$NAME.txt" --min-lines 1 --min-drawn-ratio 0.3
+            python3 .github/workflows/assert_render.py "render-scale-$NAME.png"
+            python3 - "$NAME" "$WIDTH" "$HEIGHT" "render-scale-$NAME.png" <<'PY'
+          import sys
+          from PIL import Image
+          name, expected_w, expected_h, path = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), sys.argv[4]
+          actual = Image.open(path).size
+          expected = (expected_w, expected_h)
+          print(f"profile={name} expected={expected} actual={actual}")
+          if actual != expected:
+              raise SystemExit(f"SCREENSHOT_SIZE_MISMATCH {name}: expected={expected} actual={actual}")
+          PY
+          done
 
       - name: Upload render evidence
         if: always()
@@ -297,10 +469,20 @@ jobs:
             render_initial.png
             render_after_input.png
             render_hwui.png
+            render_surface.png
+            perf-emulator-gfx.txt
+            perf-emulator.txt
             logcat-smoke.txt
             logcat-hwui.txt
+            logcat-surface.txt
             frame-info-lines.txt
             frame-info-hwui.txt
+            frame-info-surface.txt
+            render-scale-*.png
+            logcat-scale-*.txt
+            frame-info-scale-*.txt
+            display-scale-*.txt
+            start-scale-*.txt
             /tmp/emu.log
           if-no-files-found: warn
 

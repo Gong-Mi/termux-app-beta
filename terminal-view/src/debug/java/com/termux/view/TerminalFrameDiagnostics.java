@@ -18,6 +18,19 @@ final class TerminalFrameDiagnostics {
 
     static void logIfEnabled(TerminalSession session, RenderFrameMetrics metrics, TerminalRenderFrame frame,
                              TerminalRenderStepMetrics.Snapshot renderSteps) {
+        logIfEnabled("Termux:TerminalView", session, metrics, frame, renderSteps, -1L);
+    }
+
+    /** Variant with an explicit log tag so alternative pixel paths can identify their lines. */
+    static void logIfEnabled(String logTag, TerminalSession session, RenderFrameMetrics metrics,
+                             TerminalRenderFrame frame, TerminalRenderStepMetrics.Snapshot renderSteps) {
+        logIfEnabled(logTag, session, metrics, frame, renderSteps, -1L);
+    }
+
+    /** Variant carrying the pixel path's own present (lockCanvas..post) cost in nanoseconds. */
+    static void logIfEnabled(String logTag, TerminalSession session, RenderFrameMetrics metrics,
+                             TerminalRenderFrame frame, TerminalRenderStepMetrics.Snapshot renderSteps,
+                             long presentNanos) {
         if (!sEnabled) return;
 
         TerminalParserMetrics.Snapshot parser = session.getParserMetricsSnapshot();
@@ -26,7 +39,8 @@ final class TerminalFrameDiagnostics {
         for (int row = frame.topRow; row < frame.endRow; row++) {
             if (frame.rowNeedsRedraw(row)) dirtyInView++;
         }
-        Log.i("Termux:TerminalView", "frame rev=" + frame.screenRevision
+        Log.i(logTag, "frame rev=" + frame.screenRevision
+            + " presentNs=" + presentNanos
             + " published=" + render.publishedFrameCount + " lastPublishedRev=" + render.lastPublishedScreenRevision
             + " drawn=" + render.drawnFrameCount + " lastDrawnRev=" + render.lastDrawnScreenRevision
             + " dropped=" + render.droppedFrameCount + " coalesced=" + render.coalescedRevisionCount + " acked=" + render.lastAckedScreenRevision

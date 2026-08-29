@@ -25,6 +25,16 @@ on:
         required: false
         default: "60"
         type: string
+      producer_run_id:
+        description: "Optional Build pixel-loop prebuilts run id; empty uses the pinned Release asset"
+        required: false
+        default: ""
+        type: string
+      display_size:
+        description: "Emulator logical display size, e.g. 1080x2340 or 1440x3120"
+        required: false
+        default: "1080x2340"
+        type: string
 
 env:
   JAVA_VERSION: 21
@@ -96,7 +106,8 @@ jobs:
           sha256sum app/build/outputs/bundle/debug/app-debug.aab \
             debug-universal/universal.apk | tee debug-artifacts.sha256
 
-      - name: Download and verify x86_64 producer from latest release
+      - name: Download x86_64 producer from pinned Release
+        if: inputs.producer_run_id == ''
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -104,14 +115,30 @@ jobs:
           PIXEL_LOOP_PATH=$(python3 .github/workflows/fetch_pixel_loop_release.py \
             --asset "$PIXEL_LOOP_ASSET" --out-dir .)
           echo "PIXEL_LOOP_PATH=$PIXEL_LOOP_PATH" >> "$GITHUB_ENV"
+
+      - name: Download exact source-built x86_64 producer
+        if: inputs.producer_run_id != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euxo pipefail
+          mkdir -p source-prebuilt
+          gh run download "${{ inputs.producer_run_id }}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name pixel-loop-x86_64-prebuilt-evidence \
+            --dir source-prebuilt
+          test -s source-prebuilt/pixel-loop-x86_64
+          echo "PIXEL_LOOP_PATH=$GITHUB_WORKSPACE/source-prebuilt/pixel-loop-x86_64" >> "$GITHUB_ENV"
+
+      - name: Verify selected x86_64 producer
+        run: |
+          set -euxo pipefail
           chmod 755 "$PIXEL_LOOP_PATH"
-          file "$PIXEL_LOOP_ASSET" | tee pixel-loop-file.txt
-          readelf -d "$PIXEL_LOOP_ASSET" | tee pixel-loop-dynamic.txt
+          file "$PIXEL_LOOP_PATH" | tee pixel-loop-file.txt
+          readelf -d "$PIXEL_LOOP_PATH" | tee pixel-loop-dynamic.txt
           grep -q 'x86-64' pixel-loop-file.txt
-          # The interpreter is a program header (readelf -l, "Requesting program
-          # interpreter:"); readelf -d (dynamic section) never prints it.
-          readelf -l "$PIXEL_LOOP_ASSET" | grep -q 'Requesting program interpreter: /system/bin/linker64'
-          test -x "$PIXEL_LOOP_ASSET"
+          readelf -l "$PIXEL_LOOP_PATH" | grep -q 'Requesting program interpreter: /system/bin/linker64'
+          test -x "$PIXEL_LOOP_PATH"
 
       - name: Create and boot x86_64 emulator
         env:
@@ -136,6 +163,15 @@ jobs:
           test "$(adb shell getprop sys.boot_completed | tr -d '\r')" = 1
           adb shell getprop ro.product.cpu.abi
           adb shell getprop ro.hardware.egl
+          DISPLAY_SIZE='${{ inputs.display_size }}'
+          case "$DISPLAY_SIZE" in
+            [0-9]*x[0-9]*) ;;
+            *) echo "invalid display_size=$DISPLAY_SIZE"; exit 2 ;;
+          esac
+          adb shell wm size "$DISPLAY_SIZE"
+          adb shell wm density
+          adb shell wm size | tee display-size.txt
+          adb shell wm density | tee display-density.txt
 
       - name: Install Termux and stage producer inside app UID
         run: |
@@ -151,7 +187,7 @@ jobs:
             sleep 10
           done
           adb shell run-as com.termux test -x /data/data/com.termux/files/usr/bin/sh
-          adb push "$PIXEL_LOOP_ASSET" /data/local/tmp/$PIXEL_LOOP_ASSET
+          adb push "$PIXEL_LOOP_PATH" /data/local/tmp/$PIXEL_LOOP_ASSET
           adb shell run-as com.termux mkdir -p /data/data/com.termux/files/usr/tmp
           adb shell run-as com.termux cp /data/local/tmp/$PIXEL_LOOP_ASSET /data/data/com.termux/files/usr/tmp/$PIXEL_LOOP_ASSET
           adb shell run-as com.termux chmod 755 /data/data/com.termux/files/usr/tmp/$PIXEL_LOOP_ASSET
@@ -195,6 +231,7 @@ jobs:
           echo "PRODUCER_REQUESTED_SECONDS=$DURATION" | tee stress-metrics.txt
           echo "PRODUCER_FIT_MODE=$FIT_MODE" | tee -a stress-metrics.txt
           echo "PRODUCER_FPS=$FPS" | tee -a stress-metrics.txt
+          echo "DISPLAY_SIZE=${{ inputs.display_size }}" | tee -a stress-metrics.txt
           echo "PRODUCER_WALL_SECONDS=$((end-start))" | tee -a stress-metrics.txt
           adb exec-out screencap -p > pixel-loop-running.png
           adb shell ps -A | grep -E 'com.termux|pixel-loop' | tee -a stress-metrics.txt || true
@@ -269,6 +306,8 @@ jobs:
             device-time-start.txt
             device-time-running.txt
             stress-metrics.txt
+            display-size.txt
+            display-density.txt
             stress-evidence.txt
             gfxinfo-running.txt
             gfxinfo-final.txt

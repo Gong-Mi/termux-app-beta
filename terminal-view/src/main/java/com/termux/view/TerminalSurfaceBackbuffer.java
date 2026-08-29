@@ -1,0 +1,180 @@
+package com.termux.view;
+
+import android.graphics.Bitmap;
+import android.graphics.Canvas;
+import android.graphics.Color;
+import android.os.Trace;
+import android.util.Log;
+import android.view.Surface;
+
+import androidx.annotation.Nullable;
+
+import com.termux.terminal.TerminalSession;
+
+/**
+ * Real Android backbuffer for the #52 spike (step 3b): a persistent software
+ * {@link Bitmap} rasterized with the reference {@link TerminalRenderer} on the
+ * render thread, presented to a SurfaceView Surface with a single
+ * {@code lockCanvas + drawBitmap + unlockCanvasAndPost} blit.
+ *
+ * <p>Surface correctness policy: the Bitmap is cleared and the visible frame is
+ * rasterized completely on every present. The layered Canvas path has a separate
+ * clean-row optimization, but Surface row identity/damage reuse is not yet safe
+ * across full-screen terminal clears and scrolls; stale bottom pixels are worse
+ * than the temporary CPU cost.</p>
+ *
+ * <p>Threading: {@link #resizeTo}, {@link #drawAll} and {@link #present} run on
+ * exactly one thread — the {@link TerminalSurfaceRenderThread} loop. The Surface
+ * is installed/cleared from the app thread only outside any live epoch (the
+ * blocked-destroy contract of the render thread guarantees no pixel traffic
+ * after {@code onSurfaceBlockedDestroy()} returns, and before surfaceCreated
+ * the epoch is 0 so no cycle can draw).</p>
+ */
+final class TerminalSurfaceBackbuffer implements TerminalSurfaceRenderThread.Backbuffer {
+
+    private static final String LOG_TAG = "Termux:SurfaceBackbuffer";
+
+    /** Session provider for frame diagnostics. */
+    interface SessionSupplier {
+        @Nullable TerminalSession get();
+    }
+
+    private final TerminalRenderer mRenderer;
+    private final RenderFrameMetrics mMetrics;
+    private final SessionSupplier mSessionSupplier;
+
+    private volatile Surface mSurface;
+
+    /** Wall time of the last successful lockCanvas..post cycle (render-thread-owned). */
+    private long mLastPresentNanos = -1L;
+
+    /** Render-thread-owned pixel state; never touched from other threads. */
+    private Bitmap mBitmap;
+    private Canvas mBitmapCanvas;
+    private int mBitmapWidth;
+    private int mBitmapHeight;
+
+    /** Frame being drawn/presented in the current cycle (render-thread-owned). */
+    private TerminalRenderFrame mCurrentFrame;
+    private TerminalRenderStepMetrics.Snapshot mRenderStepsSnapshot;
+    /**
+     * Last frame whose pixels are provably complete in the bitmap. Only advances
+     * after a confirmed present; the persistent bitmap retains those pixels, so
+     * clean rows can be skipped exactly like the HWUI layered path (with a
+     * strictly stronger retention guarantee — the bitmap is never reclaimed).
+     */
+    private TerminalRenderFrame mLastPresentedFrame;
+
+    TerminalSurfaceBackbuffer(TerminalRenderer renderer, RenderFrameMetrics metrics,
+                              SessionSupplier sessionSupplier) {
+        mRenderer = renderer;
+        mMetrics = metrics;
+        mSessionSupplier = sessionSupplier;
+    }
+
+    /** Install or clear the presenting Surface. Called outside any live epoch. */
+    void setSurface(@Nullable Surface surface) {
+        mSurface = surface;
+    }
+
+    /** Whether a presenting Surface is currently installed. */
+    boolean hasSurface() {
+        return mSurface != null;
+    }
+
+    @Override
+    public boolean hasSize() {
+        return mBitmapCanvas != null;
+    }
+
+    @Override
+    public void resizeTo(int widthPx, int heightPx) {
+        if (widthPx <= 0 || heightPx <= 0) return;
+        if (mBitmap != null && mBitmapWidth == widthPx && mBitmapHeight == heightPx) return;
+        Bitmap replacement = Bitmap.createBitmap(widthPx, heightPx, Bitmap.Config.ARGB_8888);
+        Canvas canvas = new Canvas(replacement);
+        canvas.drawColor(Color.BLACK);
+        mBitmap = replacement;
+        mBitmapCanvas = canvas;
+        mBitmapWidth = widthPx;
+        mBitmapHeight = heightPx;
+        // New bitmap: no provably-presented pixels survive the swap; force the
+        // next drawAll to full-frame (damage computation would otherwise trust
+        // row content from a differently-sized bitmap).
+        mLastPresentedFrame = null;
+        Log.i(LOG_TAG, "backbuffer resized " + widthPx + "x" + heightPx);
+    }
+
+    @Override
+    public void drawAll(TerminalRenderFrame frame) {
+        if (mBitmapCanvas == null) {
+            // Draw raced ahead of the first resize (create path can hand a
+            // live surface before any pixel size arrives): no bitmap yet, and
+            // acquireLatest() has already taken the frame out of the mailbox.
+            // The caller (sequencer step) checks pixelSizeReady() BEFORE
+            // acquiring, so in practice this is unreachable; kept as a
+            // defensive no-op so a future caller mistake degrades to a
+            // dropped frame instead of a crash.
+            return;
+        }
+        Trace.beginSection("Termux:SurfaceBackbuffer.drawAll");
+        try {
+            // Surface bitmap contents must not be reused based on snapshot row
+            // identity: terminal clear/scroll can leave logically stale bottom
+            // rows. Correctness takes precedence until a Surface-specific damage
+            // contract exists.
+            boolean skipCleanRows = false;
+            mBitmapCanvas.drawColor(Color.BLACK);
+            mRenderer.render(frame, mBitmapCanvas, skipCleanRows, null);
+            mRenderStepsSnapshot = mRenderer.getAndResetRenderStepDelta();
+            mCurrentFrame = frame;
+        } finally {
+            Trace.endSection();
+        }
+    }
+
+    @Override
+    public boolean present() {
+        TerminalRenderFrame frame = mCurrentFrame;
+        if (mBitmap == null || frame == null) return false;
+        Surface surface = mSurface;
+        if (surface == null || !surface.isValid()) return false;
+
+        Trace.beginSection("Termux:SurfaceBackbuffer.present");
+        Canvas target = null;
+        long t0 = System.nanoTime();
+        try {
+            target = surface.lockCanvas(null);
+            if (target == null) return false;
+            target.drawBitmap(mBitmap, 0, 0, null);
+            surface.unlockCanvasAndPost(target);
+            target = null;
+            mLastPresentNanos = System.nanoTime() - t0;
+            onPresented(frame);
+            return true;
+        } catch (RuntimeException | OutOfMemoryError e) {
+            // Surface refused or died mid-present: sequencer must NOT advance.
+            Log.w(LOG_TAG, "present failed: " + e);
+            return false;
+        } finally {
+            if (target != null) {
+                try {
+                    surface.unlockCanvasAndPost(target);
+                } catch (RuntimeException ignored) {
+                }
+            }
+            Trace.endSection();
+        }
+    }
+
+    /** Called only after a confirmed presentation. */
+    private void onPresented(TerminalRenderFrame frame) {
+        mMetrics.ack(frame.getScreenRevision());
+        mLastPresentedFrame = frame;
+        // Tag with the backbuffer identity so smoke verifiers can prove the pixel
+        // actually flowed through the SurfaceView route.
+        TerminalFrameDiagnostics.logIfEnabled(LOG_TAG, mSessionSupplier.get(), mMetrics, frame,
+            mRenderStepsSnapshot != null ? mRenderStepsSnapshot : mRenderer.getAndResetRenderStepDelta(),
+            mLastPresentNanos);
+    }
+}
