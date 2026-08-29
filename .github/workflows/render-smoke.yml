@@ -400,6 +400,66 @@ jobs:
             echo "NOTE=software/emulator evidence; not physical-GPU acceptance"
           } | tee -a perf-emulator.txt "$GITHUB_STEP_SUMMARY"
 
+      - name: Multi-resolution and density scaling matrix
+        if: matrix.gpu == 'swiftshader_indirect'
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet Pillow
+          for PROFILE in \
+            low_720x1560_320:720x1560:320 \
+            native_1080x2340_440:1080x2340:440 \
+            high_1440x3120_560:1440x3120:560 \
+            high_scaled_1440x3120_440:1440x3120:440; do
+            IFS=: read -r NAME SIZE DENSITY <<< "$PROFILE"
+            WIDTH=${SIZE%x*}
+            HEIGHT=${SIZE#*x}
+            echo "== profile $NAME size=$SIZE density=$DENSITY =="
+            adb shell wm size "$SIZE"
+            adb shell wm density "$DENSITY"
+            {
+              adb shell wm size
+              adb shell wm density
+            } | tee "display-scale-$NAME.txt"
+
+            adb shell am force-stop com.termux
+            adb logcat -c
+            adb shell am start -W -S -n com.termux/.app.TermuxActivity \
+              | tee "start-scale-$NAME.txt"
+            FRAME_SEEN=0
+            for i in $(seq 1 30); do
+              sleep 1
+              if adb logcat -d 2>/dev/null | grep -q 'Termux:SurfaceBackbuffer.*frame rev='; then
+                FRAME_SEEN=1
+                break
+              fi
+            done
+            if [ "$FRAME_SEEN" != 1 ]; then
+              echo "NO_SURFACE_FRAME_LINES profile=$NAME"
+              adb logcat -d | tail -80
+              exit 1
+            fi
+            adb shell input keyevent KEYCODE_MOVE_END
+            adb shell input text "scale_$NAME"
+            sleep 2
+            adb exec-out screencap -p > "render-scale-$NAME.png"
+            adb logcat -d > "logcat-scale-$NAME.txt"
+            grep -E 'Termux:SurfaceBackbuffer.*frame rev=' "logcat-scale-$NAME.txt" \
+              > "frame-info-scale-$NAME.txt"
+            python3 .github/workflows/verify_frame_metrics.py \
+              "frame-info-scale-$NAME.txt" --min-lines 1 --min-drawn-ratio 0.3
+            python3 .github/workflows/assert_render.py "render-scale-$NAME.png"
+            python3 - "$NAME" "$WIDTH" "$HEIGHT" "render-scale-$NAME.png" <<'PY'
+          import sys
+          from PIL import Image
+          name, expected_w, expected_h, path = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), sys.argv[4]
+          actual = Image.open(path).size
+          expected = (expected_w, expected_h)
+          print(f"profile={name} expected={expected} actual={actual}")
+          if actual != expected:
+              raise SystemExit(f"SCREENSHOT_SIZE_MISMATCH {name}: expected={expected} actual={actual}")
+          PY
+          done
+
       - name: Upload render evidence
         if: always()
         uses: actions/upload-artifact@v6
@@ -418,6 +478,11 @@ jobs:
             frame-info-lines.txt
             frame-info-hwui.txt
             frame-info-surface.txt
+            render-scale-*.png
+            logcat-scale-*.txt
+            frame-info-scale-*.txt
+            display-scale-*.txt
+            start-scale-*.txt
             /tmp/emu.log
           if-no-files-found: warn
 
