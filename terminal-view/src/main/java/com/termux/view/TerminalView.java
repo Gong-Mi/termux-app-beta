@@ -80,6 +80,8 @@ public final class TerminalView extends View {
     /** Whether this View currently owns a live render target/window attachment. */
     private boolean mRenderTargetAttached;
     private long mTargetGeneration;
+    private int mRenderTargetWidth;
+    private int mRenderTargetHeight;
     /** Projection revision: bumps when selection, topRow or view geometry changes without a new model frame. */
     private final AtomicLong mProjectionRevision = new AtomicLong();
     /** Most recently acquired model frame, reused for View-only projection changes. */
@@ -1140,11 +1142,44 @@ public final class TerminalView extends View {
         updateSize();
     }
 
+    /** Whether a pixel-size transition requires a fresh target generation. */
+    static boolean renderTargetGeometryChanged(int oldWidth, int oldHeight,
+                                                int newWidth, int newHeight) {
+        return newWidth > 0 && newHeight > 0
+            && (oldWidth != newWidth || oldHeight != newHeight);
+    }
+
+    private void rebindRenderTargetForGeometryChange() {
+        if (!mRenderTargetAttached || mTermSession == null) return;
+
+        mTargetGeneration = mTargetGate.detach();
+        mFrameConsumerMailbox = null;
+        if (mCanvasFrameConsumer != null) {
+            mCanvasFrameConsumer.detachAndJoin(mCanvasFrameConsumerGeneration, 250L);
+        }
+        mCanvasFrameConsumer = null;
+        mCanvasFrameConsumerRenderer = null;
+        mCanvasFrameConsumerGeneration = -1;
+        mLastRenderFrame = null;
+        mLastRenderedFrame = null;
+
+        mTargetGeneration = mTargetGate.attach();
+        mFrameConsumerMailbox = new TerminalFrameConsumerMailbox<>(
+            mFrameMetrics, mSessionGeneration, mTargetGeneration);
+        buildAndPublishProjectionFrame();
+        invalidate();
+    }
     /** Check if the terminal size in rows and columns should be updated. */
     public void updateSize() {
         int viewWidth = getWidth();
         int viewHeight = getHeight();
         if (viewWidth == 0 || viewHeight == 0 || mTermSession == null) return;
+
+        boolean pixelGeometryChanged = renderTargetGeometryChanged(
+            mRenderTargetWidth, mRenderTargetHeight, viewWidth, viewHeight);
+        mRenderTargetWidth = viewWidth;
+        mRenderTargetHeight = viewHeight;
+        if (pixelGeometryChanged) rebindRenderTargetForGeometryChange();
 
         // Set to 80 and 24 if you want to enable vttest.
         int newColumns = Math.max(4, (int) (viewWidth / mRenderer.mFontWidth));
@@ -1717,6 +1752,8 @@ public final class TerminalView extends View {
         super.onAttachedToWindow();
         mRenderTargetAttached = true;
         mTargetGeneration = mTargetGate.attach();
+        mRenderTargetWidth = getWidth();
+        mRenderTargetHeight = getHeight();
         mLastRenderFrame = null;
         mLastRenderedFrame = null;
         mCanvasFrameConsumer = null;
