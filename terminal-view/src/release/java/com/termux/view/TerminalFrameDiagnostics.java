@@ -12,7 +12,7 @@ final class TerminalFrameDiagnostics {
     }
 
     static void logIfEnabled(TerminalSession session, RenderFrameMetrics metrics, TerminalRenderFrame frame,
-                             TerminalRenderStepMetrics.Snapshot renderSteps) {
+                             TerminalRenderStepMetrics.Snapshot renderSteps, RenderStats stats) {
         // Intentionally empty in release builds.
     }
 }
