@@ -86,8 +86,10 @@ public final class TerminalView extends View {
     private final AtomicLong mProjectionRevision = new AtomicLong();
     /** Most recently acquired model frame, reused for View-only projection changes. */
     private volatile TerminalModelFrame mLastModelFrame;
-    /** Immutable accounting object tracking publish/draw/ack lifecycle. */
-    private final RenderFrameMetrics mFrameMetrics = new RenderFrameMetrics();
+    /** Immutable accounting object tracking publish/draw/ack lifecycle.
+     *  Session-scoped: recreated in attachSession so counters never mix two
+     *  sessions in one diagnostics line (the mailbox owns the same lifecycle). */
+    private RenderFrameMetrics mFrameMetrics = new RenderFrameMetrics();
     /** Parser callbacks must coalesce onto the View's UI thread before invalidating. */
     private final TerminalFrameInvalidationGate mFrameInvalidationGate =
         new TerminalFrameInvalidationGate(this::post);
@@ -353,6 +355,19 @@ public final class TerminalView extends View {
         mLastRenderFrame = null;
         mLastRenderedFrame = null;
         mLastModelFrame = null;
+
+        // Session-scoped accounting: a fresh RenderFrameMetrics per session keeps
+        // published/drawn/dropped/coalesced aligned with THIS session's parser
+        // counters. Reusing the view-level instance made diagnostics lines mix
+        // the previous session's cumulative counts with the new session's
+        // parser metrics (on-device 2026-09-25 07:18: rev 15118 -> 5851 while
+        // published kept accumulating and rastered reset to 1).
+        mFrameMetrics = new RenderFrameMetrics();
+        // The Canvas consumer caches the metrics reference; force recreation so
+        // it publishes acks into the new session-scoped instance.
+        mCanvasFrameConsumer = null;
+        mCanvasFrameConsumerRenderer = null;
+        mCanvasFrameConsumerGeneration = -1;
 
         final TerminalFrameConsumerMailbox<TerminalRenderFrame> mailbox =
             new TerminalFrameConsumerMailbox<>(mFrameMetrics, sessionGeneration, mTargetGeneration);
