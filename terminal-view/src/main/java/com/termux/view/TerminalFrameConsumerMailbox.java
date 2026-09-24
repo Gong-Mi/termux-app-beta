@@ -57,6 +57,11 @@ public final class TerminalFrameConsumerMailbox<T extends FrameRevision> {
     private final AtomicLong mRejectedAckOrder = new AtomicLong();
     /** Accepted/current and acquired/in-flight identities awaiting presentation. */
     private final Map<TerminalFrameIdentity, AckStage> mAckStages = new HashMap<>();
+    /** Submission order of accepted identities, for ordered per-identity chain queries. */
+    private final java.util.ArrayDeque<TerminalFrameIdentity> mAcceptedOrder =
+        new java.util.ArrayDeque<>();
+    /** Cap on retained completed identities so diagnostics cannot leak memory. */
+    private static final int MAX_RETAINED_IDENTITIES = 256;
 
     public TerminalFrameConsumerMailbox(RenderFrameMetrics metrics,
                                         long sessionGeneration, long targetGeneration) {
@@ -87,7 +92,16 @@ public final class TerminalFrameConsumerMailbox<T extends FrameRevision> {
         mLastAccepted.set(identity);
         // ACCEPTED is implicit upon submission; recordAck advances from here.
         mAckStages.put(identity, AckStage.ACCEPTED);
-        if (replaced != null) mAckStages.remove(replaced.identity);
+        mAcceptedOrder.addLast(identity);
+        // Replaced SLOT frames keep their recorded ack stages (drop and the ack
+        // ladder are different lifecycles): a frame that was consumed/rastered and
+        // then replaced still has RASTERED/SUBMITTED recorded on its identity, and
+        // verifiers must be able to correlate that. Stale stages age out only via
+        // the retained-order ring cap below.
+        while (mAcceptedOrder.size() > MAX_RETAINED_IDENTITIES) {
+            TerminalFrameIdentity evicted = mAcceptedOrder.pollFirst();
+            if (evicted != null) mAckStages.remove(evicted);
+        }
         if (replaced != null) mMetrics.drop();
         mMetrics.publish(frame.getScreenRevision());
         return SubmitResult.ACCEPTED;
@@ -173,5 +187,23 @@ public final class TerminalFrameConsumerMailbox<T extends FrameRevision> {
     /** Peek without acquiring. */
     public synchronized Entry<T> peekLatest() {
         return mSlot.get();
+    }
+
+    /**
+     * Current ack stage for an accepted identity, or null if the identity was never
+     * accepted (or has aged out of the retained chain window). Correlating
+     * published/rastered/submitted per identity — instead of comparing aggregate
+     * counters across separately-sampled layers — is the #57 stats contract.
+     */
+    public synchronized AckStage ackStageFor(TerminalFrameIdentity identity) {
+        return mAckStages.get(identity);
+    }
+
+    /**
+     * Accepted identities in submission order, oldest first, within the retained
+     * window. The list is a snapshot copy; mutation does not affect the mailbox.
+     */
+    public synchronized java.util.List<TerminalFrameIdentity> acceptedIdentities() {
+        return new java.util.ArrayList<>(mAcceptedOrder);
     }
 }

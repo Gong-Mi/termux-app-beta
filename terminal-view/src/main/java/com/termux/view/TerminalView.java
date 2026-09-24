@@ -1263,7 +1263,7 @@ public final class TerminalView extends View {
                     Trace.endSection();
                 }
                 TerminalFrameDiagnostics.logIfEnabled(mTermSession, mFrameMetrics, frame,
-                    mRenderer.getAndResetRenderStepDelta());
+                    mRenderer.getAndResetRenderStepDelta(), snapshotRenderStats());
 
                 // render the text selection handles
                 renderTextSelection();
