@@ -1737,7 +1737,15 @@ public final class TerminalView extends View {
     public void stopTextSelectionMode() {
         if (hideTextSelectionCursors()) {
             mClient.copyModeChanged(isSelectingText());
-            invalidate();
+            // Selection clear is a View-only projection change just like selection updates:
+            // the last published frame still carries the cleared selection's highlights, and
+            // without a fresh projection publication the highlight persists on every
+            // empty-mailbox redraw until an unrelated model frame arrives.
+            if (mRenderTargetAttached && mLastModelFrame != null) {
+                publishProjectionFrameForSelectionChange();
+            } else {
+                invalidate();
+            }
         }
     }
 
@@ -1797,6 +1805,21 @@ public final class TerminalView extends View {
 
 
     /**
+     * Whether the selection state described by {@code selectors} differs from the selection
+     * captured in {@code lastPublished}. Pure protocol predicate so the publication decision is
+     * JVM-testable without an Android View: the selector protocol is {@code [y1, y2, x1, x2]}
+     * while the frame stores {@code x1, y1, x2, y2}.
+     */
+    static boolean selectionChangedFromLastPublished(int[] selectors, TerminalRenderFrame lastPublished) {
+        if (selectors == null || selectors.length != 4) return true;
+        if (lastPublished == null) return true;
+        return selectors[0] != lastPublished.selectionY1
+            || selectors[1] != lastPublished.selectionY2
+            || selectors[2] != lastPublished.selectionX1
+            || selectors[3] != lastPublished.selectionX2;
+    }
+
+    /**
      * Called by the selection controller when the text selection changes. This is a
      * View-only projection change: it bumps the projection revision and publishes a new
      * render frame from the latest model frame without waiting for a new model frame.
@@ -1807,14 +1830,21 @@ public final class TerminalView extends View {
         if (mTextSelectionCursorController != null) {
             mTextSelectionCursorController.getSelectors(sel);
         }
-        if (mLastRenderFrame != null
-            && sel[0] == mLastRenderFrame.selectionY1
-            && sel[1] == mLastRenderFrame.selectionY2
-            && sel[2] == mLastRenderFrame.selectionX1
-            && sel[3] == mLastRenderFrame.selectionX2) {
+        if (!selectionChangedFromLastPublished(sel, mLastRenderFrame)) {
             // Selection has not actually changed relative to the last published projection.
             return;
         }
+        publishProjectionFrameForSelectionChange();
+    }
+
+    /**
+     * Bump the projection revision, republish the projection frame from the latest model
+     * frame, and invalidate. Shared by every View-only selection transition, including
+     * selection clear: a frame published with selection highlights must be superseded by a
+     * frame without them, otherwise the highlight persists until an unrelated model frame
+     * happens to arrive (issue #57 projection publication contract).
+     */
+    private void publishProjectionFrameForSelectionChange() {
         mProjectionRevision.incrementAndGet();
         buildAndPublishProjectionFrame();
         invalidate();
