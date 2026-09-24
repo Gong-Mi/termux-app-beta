@@ -80,6 +80,15 @@ public final class TerminalRenderFrame implements FrameRevision {
     }
 
     public TerminalRenderFrame(TerminalModelFrame model, int topRow, int selectionX1, int selectionY1, int selectionX2, int selectionY2) {
+        // Projection invariant: this frame's screen snapshot only covers the
+        // model frame's own viewport [model.topRow, model.endRow). The view's
+        // mTopRow can drift away from the worker viewport between the model
+        // publish and this projection (on-device crash 2026-09-24:
+        // "externalRow=47 outside [-1,47)"). Fall back to the model viewport
+        // instead of packaging a row range the snapshot cannot answer for.
+        if (topRow != model.topRow) {
+            topRow = model.topRow;
+        }
         this.topRow = topRow;
         this.endRow = topRow + model.rows;
         this.columns = model.columns;
@@ -142,6 +151,11 @@ public final class TerminalRenderFrame implements FrameRevision {
 
     public int colorAt(int index) {
         return modelFrame != null ? modelFrame.colorAt(index) : palette[index];
+    }
+
+    /** Return the model frame this render frame was built from, or null if built directly. */
+    public TerminalModelFrame getModelFrame() {
+        return modelFrame;
     }
 
     public int[] copyPalette() {
