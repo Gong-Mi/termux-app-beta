@@ -46,6 +46,8 @@ import com.termux.terminal.TerminalModelFrame;
 import com.termux.terminal.TerminalSession;
 import com.termux.view.textselection.TextSelectionCursorController;
 
+import java.util.concurrent.atomic.AtomicLong;
+
 /** View displaying and interacting with a {@link TerminalSession}. */
 public final class TerminalView extends View {
 
@@ -67,17 +69,32 @@ public final class TerminalView extends View {
     private TerminalRenderFrame mLastRenderFrame;
     /** The frame that was actually drawn in the previous onDraw, used to decide whether clean rows can be skipped. */
     private TerminalRenderFrame mLastRenderedFrame;
-    /** Latest-only mailbox from the parser worker to the render thread. */
-    private TerminalRenderMailbox<TerminalModelFrame> mRenderMailbox;
+    /** Latest-only mailbox from the projection builder to the consumer. */
+    private TerminalFrameConsumerMailbox<TerminalRenderFrame> mFrameConsumerMailbox;
     /** Rejects callbacks from a session that was detached while they were in flight. */
     private final TerminalRenderSessionGate mSessionGate = new TerminalRenderSessionGate();
+    /** Current session generation; used when building projection-only frames. */
+    private long mSessionGeneration;
+    /** Rejects frames from a view target that was detached/recreated. */
+    private final TerminalRenderTargetGate mTargetGate = new TerminalRenderTargetGate();
+    /** Whether this View currently owns a live render target/window attachment. */
+    private boolean mRenderTargetAttached;
+    private long mTargetGeneration;
+    private int mRenderTargetWidth;
+    private int mRenderTargetHeight;
+    /** Projection revision: bumps when selection, topRow or view geometry changes without a new model frame. */
+    private final AtomicLong mProjectionRevision = new AtomicLong();
     /** Most recently acquired model frame, reused for View-only projection changes. */
-    private TerminalModelFrame mLastModelFrame;
+    private volatile TerminalModelFrame mLastModelFrame;
     /** Immutable accounting object tracking publish/draw/ack lifecycle. */
     private final RenderFrameMetrics mFrameMetrics = new RenderFrameMetrics();
     /** Parser callbacks must coalesce onto the View's UI thread before invalidating. */
     private final TerminalFrameInvalidationGate mFrameInvalidationGate =
         new TerminalFrameInvalidationGate(this::post);
+    /** Canvas backend consumer; recreated when the renderer changes. */
+    private CanvasFrameConsumer mCanvasFrameConsumer;
+    private TerminalRenderer mCanvasFrameConsumerRenderer;
+    private long mCanvasFrameConsumerGeneration = -1;
     /** Last selection rectangle used to build mLastRenderFrame. */
     private int mLastRenderSelectionX1 = Integer.MIN_VALUE;
     private int mLastRenderSelectionY1 = Integer.MIN_VALUE;
@@ -327,6 +344,8 @@ public final class TerminalView extends View {
         if (previousSession != null) previousSession.detachFrameSink();
 
         final long sessionGeneration = mSessionGate.advance();
+        mSessionGeneration = sessionGeneration;
+        mTargetGeneration = mTargetGate.attach();
         mTermSession = session;
         mEmulator = null;
         mCombiningAccent = 0;
@@ -335,21 +354,21 @@ public final class TerminalView extends View {
         mLastRenderedFrame = null;
         mLastModelFrame = null;
 
-        final TerminalRenderMailbox<TerminalModelFrame> mailbox = new TerminalRenderMailbox<>(mFrameMetrics);
-        mRenderMailbox = mailbox;
+        final TerminalFrameConsumerMailbox<TerminalRenderFrame> mailbox =
+            new TerminalFrameConsumerMailbox<>(mFrameMetrics, sessionGeneration, mTargetGeneration);
+        mFrameConsumerMailbox = mailbox;
         session.setFrameSink(new TerminalFrameSink() {
             @Override
             public void publishFrame(TerminalModelFrame frame) {
                 if (!mSessionGate.isCurrent(sessionGeneration)) return;
-                boolean hadPending = mailbox.peek() != null;
-                mailbox.publish(frame);
-                if (!hadPending) mFrameInvalidationGate.request(TerminalView.this::invalidate);
+                mLastModelFrame = frame;
+                mFrameInvalidationGate.request(TerminalView.this::buildAndPublishProjectionFrame);
             }
 
             @Override
             public boolean shouldCaptureSnapshot() {
-                if (!mSessionGate.isCurrent(sessionGeneration)) return false;
-                return mailbox.peek() == null;
+                if (!mRenderTargetAttached || !mSessionGate.isCurrent(sessionGeneration)) return false;
+                return mFrameConsumerMailbox != null && mFrameConsumerMailbox.peekLatest() == null;
             }
 
             @Override
@@ -365,6 +384,31 @@ public final class TerminalView extends View {
         setVerticalScrollBarEnabled(true);
 
         return true;
+    }
+
+    /**
+     * Build a {@link TerminalRenderFrame} from the latest stored model frame and current view
+     * projection (top row + selection), then submit it to the consumer mailbox.
+     *
+     * <p>Must run on the UI thread because it reads view selection and topRow.</p>
+     */
+    private void buildAndPublishProjectionFrame() {
+        TerminalModelFrame model = mLastModelFrame;
+        if (model == null || mFrameConsumerMailbox == null) return;
+        int[] selectors = mDefaultSelectors;
+        if (mTextSelectionCursorController != null) {
+            mTextSelectionCursorController.getSelectors(selectors);
+        }
+        TerminalSelectionRange selection = TerminalSelectionRange.fromSelectors(selectors);
+        TerminalRenderFrame render = new TerminalRenderFrame(model, mTopRow,
+            selection.x1, selection.y1, selection.x2, selection.y2);
+        TerminalFrameIdentity identity = new TerminalFrameIdentity(
+            mSessionGeneration, mTargetGeneration, model.getScreenRevision(), mProjectionRevision.get());
+        boolean hadPending = mFrameConsumerMailbox.peekLatest() != null;
+        TerminalFrameConsumerMailbox.SubmitResult result = mFrameConsumerMailbox.submit(render, identity);
+        if (result == TerminalFrameConsumerMailbox.SubmitResult.ACCEPTED && !hadPending) {
+            invalidate();
+        }
     }
 
     /**
@@ -536,6 +580,7 @@ public final class TerminalView extends View {
     public void onScreenUpdated(boolean skipScrolling) {
         if (mTermSession == null) return;
 
+        int previousTopRow = mTopRow;
         int rowsInHistory = mTermSession.getActiveTranscriptRows();
         if (mTopRow < -rowsInHistory) mTopRow = -rowsInHistory;
 
@@ -574,6 +619,10 @@ public final class TerminalView extends View {
         mTermSession.clearScrollCounter();
         mTermSession.setViewport(mTopRow);
 
+        if (mTopRow != previousTopRow) {
+            mProjectionRevision.incrementAndGet();
+            buildAndPublishProjectionFrame();
+        }
         invalidate();
         if (mAccessibilityEnabled) setContentDescription(getText());
     }
@@ -692,7 +741,10 @@ public final class TerminalView extends View {
                 if (!awakenScrollBars()) invalidate();
             }
         }
-        if (mTopRow != previousTopRow) mTermSession.setViewport(mTopRow);
+        if (mTopRow != previousTopRow) {
+            mProjectionRevision.incrementAndGet();
+            mTermSession.setViewport(mTopRow);
+        }
     }
 
     /** Overriding {@link View#onGenericMotionEvent(MotionEvent)}. */
@@ -1090,11 +1142,44 @@ public final class TerminalView extends View {
         updateSize();
     }
 
+    /** Whether a pixel-size transition requires a fresh target generation. */
+    static boolean renderTargetGeometryChanged(int oldWidth, int oldHeight,
+                                                int newWidth, int newHeight) {
+        return newWidth > 0 && newHeight > 0
+            && (oldWidth != newWidth || oldHeight != newHeight);
+    }
+
+    private void rebindRenderTargetForGeometryChange() {
+        if (!mRenderTargetAttached || mTermSession == null) return;
+
+        mTargetGeneration = mTargetGate.detach();
+        mFrameConsumerMailbox = null;
+        if (mCanvasFrameConsumer != null) {
+            mCanvasFrameConsumer.detachAndJoin(mCanvasFrameConsumerGeneration, 250L);
+        }
+        mCanvasFrameConsumer = null;
+        mCanvasFrameConsumerRenderer = null;
+        mCanvasFrameConsumerGeneration = -1;
+        mLastRenderFrame = null;
+        mLastRenderedFrame = null;
+
+        mTargetGeneration = mTargetGate.attach();
+        mFrameConsumerMailbox = new TerminalFrameConsumerMailbox<>(
+            mFrameMetrics, mSessionGeneration, mTargetGeneration);
+        buildAndPublishProjectionFrame();
+        invalidate();
+    }
     /** Check if the terminal size in rows and columns should be updated. */
     public void updateSize() {
         int viewWidth = getWidth();
         int viewHeight = getHeight();
         if (viewWidth == 0 || viewHeight == 0 || mTermSession == null) return;
+
+        boolean pixelGeometryChanged = renderTargetGeometryChanged(
+            mRenderTargetWidth, mRenderTargetHeight, viewWidth, viewHeight);
+        mRenderTargetWidth = viewWidth;
+        mRenderTargetHeight = viewHeight;
+        if (pixelGeometryChanged) rebindRenderTargetForGeometryChange();
 
         // Set to 80 and 24 if you want to enable vttest.
         int newColumns = Math.max(4, (int) (viewWidth / mRenderer.mFontWidth));
@@ -1106,8 +1191,19 @@ public final class TerminalView extends View {
 
             mTopRow = 0;
             scrollTo(0, 0);
+            mProjectionRevision.incrementAndGet();
+            buildAndPublishProjectionFrame();
             invalidate();
         }
+    }
+
+    private CanvasFrameConsumer getOrCreateCanvasFrameConsumer() {
+        if (mCanvasFrameConsumer == null || mCanvasFrameConsumerRenderer != mRenderer) {
+            mCanvasFrameConsumer = new CanvasFrameConsumer(mRenderer, mFrameMetrics, this);
+            mCanvasFrameConsumerRenderer = mRenderer;
+            mCanvasFrameConsumerGeneration = -1;
+        }
+        return mCanvasFrameConsumer;
     }
 
     @Override
@@ -1125,46 +1221,38 @@ public final class TerminalView extends View {
                 mClient.onTerminalRenderingStateChanged(canvasHardwareAccelerated, layerType);
             }
 
-            TerminalModelFrame model = mRenderMailbox != null ? mRenderMailbox.acquireLatest() : null;
-            if (model != null) mLastModelFrame = model;
-            if (mLastModelFrame != null) {
-                // render the terminal view and highlight any selected text
-                int[] selectors = mDefaultSelectors;
-                if (mTextSelectionCursorController != null) {
-                    mTextSelectionCursorController.getSelectors(selectors);
-                }
-                TerminalSelectionRange selection = TerminalSelectionRange.fromSelectors(selectors);
-                boolean selectionChanged = selection.x1 != mLastRenderSelectionX1
-                    || selection.y1 != mLastRenderSelectionY1
-                    || selection.x2 != mLastRenderSelectionX2
-                    || selection.y2 != mLastRenderSelectionY2;
-                if (model != null || mLastRenderFrame == null || selectionChanged) {
-                    // Explicit handoff: collect all render inputs once and reuse it while the
-                    // immutable model frame and view-only selection projection are unchanged.
-                    mLastRenderFrame = new TerminalRenderFrame(mLastModelFrame, mLastModelFrame.topRow,
-                        selection.x1, selection.y1, selection.x2, selection.y2);
-                    mLastRenderSelectionX1 = selection.x1;
-                    mLastRenderSelectionY1 = selection.y1;
-                    mLastRenderSelectionX2 = selection.x2;
-                    mLastRenderSelectionY2 = selection.y2;
-                }
-            }
-            TerminalRenderFrame frame = mLastRenderFrame;
+            TerminalFrameConsumerMailbox.Entry<TerminalRenderFrame> entry =
+                mFrameConsumerMailbox != null ? mFrameConsumerMailbox.acquireLatest() : null;
+            TerminalRenderFrame frame = frameForDraw(entry, mLastRenderFrame);
+            if (frame != null) mLastRenderFrame = frame;
+            final TerminalModelFrame model = frame != null ? frame.getModelFrame() : null;
             if (frame == null) {
                 canvas.drawColor(0XFF000000);
             } else {
                 Trace.beginSection("Termux:TerminalRenderer.render");
                 try {
-                    // Only skip rows whose pixels are guaranteed to survive on the canvas
-                    // from the previous draw: a hardware/software view layer retains them,
-                    // and reverseVideo clears the whole canvas before rows are drawn.
-                    boolean skipCleanRows = !frame.reverseVideo
-                        && mLastRenderedFrame != null
-                        && !frame.needsFullRedraw(mLastRenderedFrame)
-                        && (getLayerType() == View.LAYER_TYPE_HARDWARE || getLayerType() == View.LAYER_TYPE_SOFTWARE);
-                    mRenderer.render(frame, canvas, skipCleanRows, mLastRenderedFrame);
+                    CanvasFrameConsumer consumer = getOrCreateCanvasFrameConsumer();
+                    if (mCanvasFrameConsumerGeneration != mTargetGeneration) {
+                        consumer.attach(mTargetGeneration,
+                            new RenderGeometry(mTermSession.getScreenColumns(), mTermSession.getScreenRows(),
+                                getWidth(), getHeight()));
+                        mCanvasFrameConsumerGeneration = mTargetGeneration;
+                    }
+                    RenderDamage damage = RenderDamage.compute(frame, consumer.getLastSubmittedFrame());
+                    consumer.setCanvas(canvas);
+                    TerminalFrameRenderCompletion.run(
+                        () -> consumer.submit(frame, damage, entry != null ? entry.identity : null, mTargetGeneration),
+                        () -> {
+                            if (entry != null && mFrameConsumerMailbox != null) {
+                                // This is the end of reference Canvas command generation;
+                                // it is not physical GPU/SF presentation.
+                                mFrameConsumerMailbox.recordAck(entry.identity,
+                                    TerminalFrameConsumerMailbox.AckStage.RASTERED);
+                                mFrameConsumerMailbox.recordAck(entry.identity,
+                                    TerminalFrameConsumerMailbox.AckStage.SUBMITTED);
+                            }
+                        });
                     mLastRenderedFrame = frame;
-                    mFrameMetrics.ack(frame.screenRevision);
                     if (model != null) {
                         mTermSession.onFrameConsumed(model);
                     }
@@ -1175,7 +1263,7 @@ public final class TerminalView extends View {
                     Trace.endSection();
                 }
                 TerminalFrameDiagnostics.logIfEnabled(mTermSession, mFrameMetrics, frame,
-                    mRenderer.getAndResetRenderStepDelta());
+                    mRenderer.getAndResetRenderStepDelta(), snapshotRenderStats());
 
                 // render the text selection handles
                 renderTextSelection();
@@ -1183,6 +1271,18 @@ public final class TerminalView extends View {
         } finally {
             Trace.endSection();
         }
+    }
+
+    /**
+     * Select the frame to draw after a mailbox acquire. An empty mailbox after the
+     * first successful draw means "no new frame", not "no frame exists"; system
+     * redraws and view-only invalidations must redraw the last valid frame rather
+     * than clear the terminal to black.
+     */
+    static TerminalRenderFrame frameForDraw(
+            TerminalFrameConsumerMailbox.Entry<TerminalRenderFrame> entry,
+            TerminalRenderFrame lastRenderedFrame) {
+        return entry != null ? entry.frame : lastRenderedFrame;
     }
 
     public TerminalSession getCurrentSession() {
@@ -1202,6 +1302,11 @@ public final class TerminalView extends View {
     /** Current render frame used by the latest onDraw. May be null before first draw. */
     public TerminalRenderFrame getCurrentRenderFrame() {
         return mLastRenderFrame;
+    }
+
+    /** Canvas backend consumer used by this view. Exposed for diagnostics and tests. */
+    public CanvasFrameConsumer getCanvasFrameConsumer() {
+        return getOrCreateCanvasFrameConsumer();
     }
 
     public long getPublishedFrameCount() {
@@ -1632,7 +1737,15 @@ public final class TerminalView extends View {
     public void stopTextSelectionMode() {
         if (hideTextSelectionCursors()) {
             mClient.copyModeChanged(isSelectingText());
-            invalidate();
+            // Selection clear is a View-only projection change just like selection updates:
+            // the last published frame still carries the cleared selection's highlights, and
+            // without a fresh projection publication the highlight persists on every
+            // empty-mailbox redraw until an unrelated model frame arrives.
+            if (mRenderTargetAttached && mLastModelFrame != null) {
+                publishProjectionFrameForSelectionChange();
+            } else {
+                invalidate();
+            }
         }
     }
 
@@ -1645,6 +1758,21 @@ public final class TerminalView extends View {
     @Override
     protected void onAttachedToWindow() {
         super.onAttachedToWindow();
+        mRenderTargetAttached = true;
+        mTargetGeneration = mTargetGate.attach();
+        mRenderTargetWidth = getWidth();
+        mRenderTargetHeight = getHeight();
+        mLastRenderFrame = null;
+        mLastRenderedFrame = null;
+        mCanvasFrameConsumer = null;
+        mCanvasFrameConsumerRenderer = null;
+        mCanvasFrameConsumerGeneration = -1;
+        if (mTermSession != null) {
+            mFrameConsumerMailbox = new TerminalFrameConsumerMailbox<>(
+                mFrameMetrics, mSessionGeneration, mTargetGeneration);
+            buildAndPublishProjectionFrame();
+            invalidate();
+        }
 
         if (mTextSelectionCursorController != null) {
             getViewTreeObserver().addOnTouchModeChangeListener(mTextSelectionCursorController);
@@ -1654,6 +1782,15 @@ public final class TerminalView extends View {
     @Override
     protected void onDetachedFromWindow() {
         super.onDetachedFromWindow();
+        mRenderTargetAttached = false;
+        mTargetGeneration = mTargetGate.detach();
+        mFrameConsumerMailbox = null;
+
+        if (mCanvasFrameConsumer != null) {
+            mCanvasFrameConsumer.detachAndJoin(mCanvasFrameConsumerGeneration, 250L);
+            mCanvasFrameConsumer = null;
+            mCanvasFrameConsumerRenderer = null;
+        }
 
         if (mTextSelectionCursorController != null) {
             // Might solve the following exception
@@ -1666,6 +1803,68 @@ public final class TerminalView extends View {
     }
 
 
+
+    /**
+     * Whether the selection state described by {@code selectors} differs from the selection
+     * captured in {@code lastPublished}. Pure protocol predicate so the publication decision is
+     * JVM-testable without an Android View: the selector protocol is {@code [y1, y2, x1, x2]}
+     * while the frame stores {@code x1, y1, x2, y2}.
+     */
+    static boolean selectionChangedFromLastPublished(int[] selectors, TerminalRenderFrame lastPublished) {
+        if (selectors == null || selectors.length != 4) return true;
+        if (lastPublished == null) return true;
+        return selectors[0] != lastPublished.selectionY1
+            || selectors[1] != lastPublished.selectionY2
+            || selectors[2] != lastPublished.selectionX1
+            || selectors[3] != lastPublished.selectionX2;
+    }
+
+    /**
+     * Called by the selection controller when the text selection changes. This is a
+     * View-only projection change: it bumps the projection revision and publishes a new
+     * render frame from the latest model frame without waiting for a new model frame.
+     */
+    public void notifySelectionChanged() {
+        if (!mRenderTargetAttached || mLastModelFrame == null) return;
+        int[] sel = mDefaultSelectors;
+        if (mTextSelectionCursorController != null) {
+            mTextSelectionCursorController.getSelectors(sel);
+        }
+        if (!selectionChangedFromLastPublished(sel, mLastRenderFrame)) {
+            // Selection has not actually changed relative to the last published projection.
+            return;
+        }
+        publishProjectionFrameForSelectionChange();
+    }
+
+    /**
+     * Bump the projection revision, republish the projection frame from the latest model
+     * frame, and invalidate. Shared by every View-only selection transition, including
+     * selection clear: a frame published with selection highlights must be superseded by a
+     * frame without them, otherwise the highlight persists until an unrelated model frame
+     * happens to arrive (issue #57 projection publication contract).
+     */
+    private void publishProjectionFrameForSelectionChange() {
+        mProjectionRevision.incrementAndGet();
+        buildAndPublishProjectionFrame();
+        invalidate();
+    }
+
+
+
+    /**
+     * Return a unified snapshot of mailbox and consumer counters. The mailbox owns the
+     * published/drawn/dropped and rejection counts; the consumer owns the stage counters
+     * (rastered/submitted/presented).
+     */
+    public RenderStats snapshotRenderStats() {
+        RenderStats mailboxStats = mFrameConsumerMailbox != null ? mFrameConsumerMailbox.snapshot() : null;
+        RenderStats consumerStats = mCanvasFrameConsumer != null ? mCanvasFrameConsumer.snapshot() : null;
+        if (mailboxStats != null && consumerStats != null) {
+            return RenderStats.merge(mailboxStats, consumerStats);
+        }
+        return mailboxStats != null ? mailboxStats : (consumerStats != null ? consumerStats : new RenderStats(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0));
+    }
 
     /**
      * Define functions required for long hold toolbar.
