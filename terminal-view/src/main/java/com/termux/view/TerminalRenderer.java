@@ -139,11 +139,7 @@ public final class TerminalRenderer {
         for (int row = topRow; row < endRow; row++) {
             heightOffset += mFontLineSpacing;
 
-            if (skipCleanRows
-                    && frame.rowUnchangedFrom(previousRenderedFrame, row)
-                    && !(cursorVisible && row == cursorRow)
-                    && !needsRedrawForProjection(previousRenderedFrame, row,
-                        selectionY1, selectionY2)) {
+            if (TerminalRowSkipPolicy.maySkipRow(frame, previousRenderedFrame, skipCleanRows, row)) {
                 // The layered canvas keeps the pixels produced by the previous frame
                 // for this row; nothing changed in the buffer here, so skip measuring
                 // and drawing it entirely. Cursor and selection rows are view
@@ -240,21 +236,6 @@ public final class TerminalRenderer {
                 measuredWidthForRun, cursorColor, cursorShape, lastRunStyle, reverseVideo || invertCursorTextColor || lastRunInsideSelection);
         }
         lastSkippedRowCount = skippedRows;
-    }
-
-    /**
-     * Whether {@code row} intersects a view projection that is not part of the buffer
-     * content: the selection rectangle of the current or previous frame, or the cursor
-     * row of the previous frame (the current frame's cursor row is checked by the
-     * caller). Such rows must redraw even when their buffer content is unchanged,
-     * because the projection pixels are not stored in the snapshot.
-     */
-    private static boolean needsRedrawForProjection(TerminalRenderFrame previousRenderedFrame, int row,
-                                                    int selectionY1, int selectionY2) {
-        if (row >= selectionY1 && row <= selectionY2) return true;
-        if (previousRenderedFrame == null) return true;
-        if (previousRenderedFrame.cursorVisible && row == previousRenderedFrame.cursorRow) return true;
-        return row >= previousRenderedFrame.selectionY1 && row <= previousRenderedFrame.selectionY2;
     }
 
     private void drawTextRun(Canvas canvas, char[] text, int[] palette, float y, int startColumn, int runWidthColumns,
