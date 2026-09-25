@@ -7,6 +7,8 @@ import androidx.annotation.NonNull;
 
 import com.termux.supportui.R;
 import com.termux.shared.android.PermissionUtils;
+import com.termux.shared.android.StoragePermissionCapabilities;
+import com.termux.shared.android.StoragePermissionCapabilities.StoragePermissionCapability;
 import com.termux.shared.logger.Logger;
 
 /** Coordinates independent storage-permission UI capabilities without making API versions modules. */
@@ -22,7 +24,8 @@ public final class StoragePermissionUiCoordinator {
     private StoragePermissionUiCoordinator() {}
 
     public static int requestCodeFor(boolean preferManageExternalStorage) {
-        return preferManageExternalStorage && ManageExternalStoragePermissionUi.isApplicable()
+        return StoragePermissionCapabilities.resolve(Build.VERSION.SDK_INT, preferManageExternalStorage)
+            == StoragePermissionCapability.MANAGE_EXTERNAL_STORAGE
             ? REQUEST_MANAGE_EXTERNAL_STORAGE_PERMISSION
             : REQUEST_LEGACY_STORAGE_PERMISSION;
     }
@@ -32,25 +35,31 @@ public final class StoragePermissionUiCoordinator {
      * request if needed. The caller may prefer all-files access on platforms
      * where that permission capability exists; this is a capability choice,
      * not a separate Android-version UI module.
+     *
+     * Resolution is delegated to {@link StoragePermissionCapabilities} so the
+     * UI path and {@link PermissionUtils} cannot drift apart per API level.
+     * {@code NONE} is not treated as granted: if no storage capability
+     * applies, no storage flow may proceed silently.
      */
     public static boolean checkAndRequest(@NonNull Context context, int requestCode,
                                           boolean preferManageExternalStorage,
                                           boolean showErrorMessage) {
-        boolean manage = preferManageExternalStorage && ManageExternalStoragePermissionUi.isApplicable();
-        boolean legacy = !manage && LegacyStoragePermissionUi.isApplicable();
+        StoragePermissionCapability capability = StoragePermissionCapabilities.resolve(
+            Build.VERSION.SDK_INT, preferManageExternalStorage);
 
-        if (!manage && !legacy)
+        if (capability == StoragePermissionCapability.PLATFORM_GRANTED)
             return true;
 
-        if (legacy && PermissionUtils.checkIfHasRequestedLegacyExternalStorage(context) &&
+        if (capability == StoragePermissionCapability.NONE)
+            return false;
+
+        if (capability == StoragePermissionCapability.LEGACY &&
+            PermissionUtils.checkIfHasRequestedLegacyExternalStorage(context) &&
             !PermissionUtils.hasRequestedLegacyExternalStorage(context, showErrorMessage)) {
             return false;
         }
 
-        boolean granted = manage
-            ? ManageExternalStoragePermissionUi.isGranted(context)
-            : LegacyStoragePermissionUi.isGranted(context);
-        if (granted)
+        if (StoragePermissionCapabilities.isGranted(context, capability))
             return true;
 
         String message = context.getString(R.string.msg_storage_permission_ui_not_granted);
@@ -61,7 +70,7 @@ public final class StoragePermissionUiCoordinator {
         if (requestCode < 0 || Build.VERSION.SDK_INT < Build.VERSION_CODES.M)
             return false;
 
-        if (manage)
+        if (capability == StoragePermissionCapability.MANAGE_EXTERNAL_STORAGE)
             ManageExternalStoragePermissionUi.request(context, requestCode);
         else
             LegacyStoragePermissionUi.request(context, requestCode);
