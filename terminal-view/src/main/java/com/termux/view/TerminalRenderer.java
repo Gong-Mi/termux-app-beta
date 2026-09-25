@@ -34,6 +34,14 @@ public final class TerminalRenderer {
     private final float[] asciiMeasures = new float[127];
     /** Per-render step counters for diagnostics (no behavioral effect). */
     private final TerminalRenderStepMetrics mRenderSteps = new TerminalRenderStepMetrics();
+    /**
+     * Value-exact elision cache for the text-path Paint mutations in
+     * drawTextRun. The background/cursor rect sites below still mutate
+     * {@code mTextPaint.setColor} directly; each such site calls
+     * {@link PaintStateCache#reset()} so the cache never assumes a color the
+     * paint no longer holds. See PaintStateCacheTest for the elision contract.
+     */
+    private final PaintStateCache mTextPaintState = new PaintStateCache(mTextPaint);
 
     /**
      * Lazily populated BMP (U+0000..U+FFFF) single-code-point advances.
@@ -316,12 +324,16 @@ public final class TerminalRenderer {
         if (backColor != palette[TextStyle.COLOR_INDEX_BACKGROUND]) {
             // Only draw non-default background.
             mTextPaint.setColor(backColor);
+            // Direct mutation outside the cache: its tracked color is stale.
+            mTextPaintState.reset();
             canvas.drawRect(left, y - mFontLineSpacingAndAscent + mFontAscent, right, y, mTextPaint);
             mRenderSteps.recordDrawRectCall();
         }
 
         if (cursor != 0) {
             mTextPaint.setColor(cursor);
+            // Direct mutation outside the cache: its tracked color is stale.
+            mTextPaintState.reset();
             float cursorHeight = mFontLineSpacingAndAscent - mFontAscent;
             if (cursorStyle == TerminalEmulator.TERMINAL_CURSOR_STYLE_UNDERLINE) cursorHeight /= 4.;
             else if (cursorStyle == TerminalEmulator.TERMINAL_CURSOR_STYLE_BAR) right -= ((right - left) * 3) / 4.;
@@ -346,11 +358,11 @@ public final class TerminalRenderer {
                 foreColor = 0xFF000000 + (red << 16) + (green << 8) + blue;
             }
 
-            mTextPaint.setFakeBoldText(bold);
-            mTextPaint.setUnderlineText(underline);
-            mTextPaint.setTextSkewX(italic ? -0.35f : 0.f);
-            mTextPaint.setStrikeThruText(strikeThrough);
-            mTextPaint.setColor(foreColor);
+            mTextPaintState.setFakeBoldText(bold);
+            mTextPaintState.setUnderlineText(underline);
+            mTextPaintState.setTextSkewX(italic ? -0.35f : 0.f);
+            mTextPaintState.setStrikeThruText(strikeThrough);
+            mTextPaintState.setColor(foreColor);
 
             // The text alignment is the default Paint.Align.LEFT.
             canvas.drawTextRun(text, startCharIndex, runWidthChars, startCharIndex, runWidthChars, left, y - mFontLineSpacingAndAscent, false, mTextPaint);
