@@ -6,6 +6,7 @@ import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
 import android.media.AudioManager;
+import android.os.Build;
 import android.os.Environment;
 import android.text.TextUtils;
 import android.view.Gravity;
@@ -536,8 +537,11 @@ public class TermuxTerminalViewClient extends TermuxTerminalViewClientBase {
     public void onToggleSoftKeyboardRequest() {
         // If soft keyboard toggle behaviour is enable/disabled
         if (mActivity.getProperties().shouldEnableDisableSoftKeyboardOnToggle()) {
-            // If soft keyboard is visible
-            if (!KeyboardUtils.areDisableSoftKeyboardFlagsSet(mActivity)) {
+            // Decide from the measured IME visibility, not the FLAG_ALT_FOCUSABLE_IM
+            // proxy, so the preference is only flipped when the keyboard is
+            // actually shown.
+            if (SoftKeyboardTogglePolicy.onToggleEnableDisableMode(isSoftKeyboardVisibleForToggle())
+                == SoftKeyboardTogglePolicy.Action.DISABLE_AND_PERSIST) {
                 Logger.logVerbose(LOG_TAG, "Disabling soft keyboard on toggle");
                 mActivity.getPreferences().setSoftKeyboardEnabled(false);
                 KeyboardUtils.disableSoftKeyboard(mActivity, mActivity.getTerminalView());
@@ -559,16 +563,40 @@ public class TermuxTerminalViewClient extends TermuxTerminalViewClientBase {
         }
         // If soft keyboard toggle behaviour is show/hide
         else {
-            // If soft keyboard is disabled by user for Termux
-            if (!mActivity.getPreferences().isSoftKeyboardEnabled()) {
-                Logger.logVerbose(LOG_TAG, "Maintaining disabled soft keyboard on toggle");
-                KeyboardUtils.disableSoftKeyboard(mActivity, mActivity.getTerminalView());
-            } else {
-                Logger.logVerbose(LOG_TAG, "Showing/Hiding soft keyboard on toggle");
-                KeyboardUtils.clearDisableSoftKeyboardFlags(mActivity);
-                KeyboardUtils.toggleSoftKeyboard(mActivity);
+            // Decide from the measured IME visibility instead of the blind
+            // InputMethodManager.toggleSoftInput() round trip, which can flip
+            // opposite to the real IME state.
+            SoftKeyboardTogglePolicy.Action action = mActivity.getPreferences().isSoftKeyboardEnabled()
+                ? SoftKeyboardTogglePolicy.onToggleShowHideMode(isSoftKeyboardVisibleForToggle())
+                : SoftKeyboardTogglePolicy.Action.MAINTAIN_DISABLED;
+            switch (action) {
+                case MAINTAIN_DISABLED:
+                    Logger.logVerbose(LOG_TAG, "Maintaining disabled soft keyboard on toggle");
+                    KeyboardUtils.disableSoftKeyboard(mActivity, mActivity.getTerminalView());
+                    break;
+                case HIDE:
+                    Logger.logVerbose(LOG_TAG, "Hiding soft keyboard on toggle");
+                    KeyboardUtils.clearDisableSoftKeyboardFlags(mActivity);
+                    KeyboardUtils.hideSoftKeyboard(mActivity, mActivity.getTerminalView());
+                    break;
+                case SHOW:
+                    Logger.logVerbose(LOG_TAG, "Showing soft keyboard on toggle");
+                    KeyboardUtils.clearDisableSoftKeyboardFlags(mActivity);
+                    KeyboardUtils.showSoftKeyboard(mActivity, mActivity.getTerminalView());
+                    break;
             }
         }
+    }
+
+    /**
+     * Measured soft keyboard visibility for toggle decisions. Below API 23 the
+     * WindowInsets IME visibility is unavailable, so fall back to the
+     * FLAG_ALT_FOCUSABLE_IM-derived proxy.
+     */
+    private boolean isSoftKeyboardVisibleForToggle() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M)
+            return KeyboardUtils.isSoftKeyboardVisible(mActivity);
+        return !KeyboardUtils.areDisableSoftKeyboardFlagsSet(mActivity);
     }
 
     public void setSoftKeyboardState(boolean isStartup, boolean isReloadTermuxProperties) {
