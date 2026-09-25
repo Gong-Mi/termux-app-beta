@@ -353,6 +353,7 @@ public final class TerminalView extends View {
         mCombiningAccent = 0;
         mTopRow = 0;
         mLastRenderFrame = null;
+        mLastRenderFrameIdentitySession = -1;
         mLastRenderedFrame = null;
         mLastModelFrame = null;
 
@@ -638,8 +639,45 @@ public final class TerminalView extends View {
             mProjectionRevision.incrementAndGet();
             buildAndPublishProjectionFrame();
         }
-        invalidate();
+        if (shouldInvalidateForScreenUpdate(
+                mFrameConsumerMailbox != null && mFrameConsumerMailbox.peekLatest() != null,
+                mTopRow != previousTopRow,
+                mLastRenderFrame != null && mLastRenderFrameIdentitySession == mSessionGeneration)) {
+            invalidate();
+        }
         if (mAccessibilityEnabled) setContentDescription(getText());
+    }
+
+    /**
+     * Generation of the session whose frame {@link #mLastRenderFrame} was built
+     * from; -1 when no frame has been rendered yet (attachSession nulls both).
+     * Lets a screen update detect that the canvas still shows a previous
+     * session's pixels — or nothing at all.
+     */
+    private long mLastRenderFrameIdentitySession = -1;
+
+    /**
+     * Whether an onScreenUpdated must schedule a draw. A draw is only
+     * observable work when the next render would differ from the pixels the
+     * canvas already holds: a frame is waiting in the mailbox (new content),
+     * the viewport moved (rows shift under the projection), or the last
+     * rendered frame is not the current session's (nothing drawn yet, or the
+     * canvas still shows a previous session — onStart force-refreshes rely on
+     * this path).
+     *
+     * <p>When the mailbox is empty, the viewport is unchanged and the last
+     * rendered frame is this session's own, the draw would raster the identical
+     * frame to identical pixels. On-device (2026-09-25) the parser worker
+     * publishes once per PTY segment, so a 10 line/s stream produces ~90
+     * publishes/s; cashing every one as a full re-record measured 235 draws
+     * for 53 consumed publishes (14:1 waste, phantom frames at mutations=0).
+     * Skipping the no-op is pixel-identical by construction: the next real
+     * change re-enters here and invalidates.
+     */
+    static boolean shouldInvalidateForScreenUpdate(boolean mailboxHasFrame,
+                                                  boolean viewportChanged,
+                                                  boolean lastRenderIsCurrentSession) {
+        return mailboxHasFrame || viewportChanged || !lastRenderIsCurrentSession;
     }
 
     /** This must be called by the hosting activity in {@link Activity#onContextMenuClosed(Menu)}
@@ -1240,6 +1278,7 @@ public final class TerminalView extends View {
                 mFrameConsumerMailbox != null ? mFrameConsumerMailbox.acquireLatest() : null;
             TerminalRenderFrame frame = frameForDraw(entry, mLastRenderFrame);
             if (frame != null) mLastRenderFrame = frame;
+            if (frame != null) mLastRenderFrameIdentitySession = mSessionGeneration;
             final TerminalModelFrame model = frame != null ? frame.getModelFrame() : null;
             if (frame == null) {
                 canvas.drawColor(0XFF000000);
