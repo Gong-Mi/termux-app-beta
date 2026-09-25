@@ -37,6 +37,18 @@ public class RenderFrameMetricsTest {
     }
 
     @Test
+    public void skipNoChangeAcksWithoutDrawing() {
+        RenderFrameMetrics m = new RenderFrameMetrics();
+        m.publish(7);
+        m.skipNoChange(7);
+        assertEquals(0L, m.getDrawnFrameCount());
+        assertEquals(1L, m.getSkippedNoChangeFrameCount());
+        assertEquals(7L, m.getLastAckedScreenRevision());
+        assertTrue(m.isConsistent());
+        assertEquals(1L, m.snapshot().skippedNoChangeFrameCount);
+    }
+
+    @Test
     public void dropAfterPublishIsConsistent() {
         RenderFrameMetrics m = new RenderFrameMetrics();
         m.publish(1);
