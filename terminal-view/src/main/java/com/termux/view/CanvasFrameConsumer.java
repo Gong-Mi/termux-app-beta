@@ -61,9 +61,19 @@ public final class CanvasFrameConsumer implements TerminalFrameConsumer {
             return;
         }
 
-        boolean layered = mView.getLayerType() == View.LAYER_TYPE_HARDWARE
-            || mView.getLayerType() == View.LAYER_TYPE_SOFTWARE;
-        boolean skipCleanRows = !damage.fullRedraw && layered;
+        // Pixel retention is a property of the WINDOW + draw target, not of the
+        // onDraw canvas flag alone: a LAYER_TYPE_SOFTWARE view inside a hardware
+        // window draws on a software canvas, but that layer bitmap is redrawn
+        // in its entirety per invalidation — conflating the two re-opens the
+        // lost-row bug (disproven on device 2026-09-25 under hwui_gpu,
+        // skipped=80/81). Only a software-rendered window drawing directly into
+        // its persistent surface retains prior pixels.
+        boolean skipCleanRows = CanvasRetentionPolicy.shouldSkipCleanRows(
+            mView.isHardwareAccelerated(),
+            mView.getLayerType(),
+            damage.fullRedraw,
+            mLastSubmittedFrame != null,
+            frame.reverseVideo);
 
         mRenderer.render(frame, mCanvas, skipCleanRows, mLastSubmittedFrame);
         // The reference Canvas render has completed successfully. For a hardware

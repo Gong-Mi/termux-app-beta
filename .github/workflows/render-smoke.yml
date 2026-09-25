@@ -228,7 +228,16 @@ jobs:
           grep -E 'Termux:TerminalView.*frame rev=' logcat-smoke.txt > frame-info-lines.txt \
             || { echo 'NO_FRAME_INFO_LINES'; tail -50 logcat-smoke.txt; exit 1; }
           wc -l frame-info-lines.txt
-          python3 .github/workflows/verify_frame_metrics.py frame-info-lines.txt --min-lines 3 --min-drawn-ratio 0.3
+          if [ "${{ matrix.gpu }}" = "off" ]; then
+            # A software-rendered window (-gpu off) with the default
+            # LAYER_TYPE_NONE draws into the persistent window surface — the
+            # only draw target that retains previous pixels. The clean-row
+            # skip MUST be active here (proves the skip path survives the
+            # retention gate instead of being disabled everywhere).
+            python3 .github/workflows/verify_frame_metrics.py frame-info-lines.txt --min-lines 3 --min-drawn-ratio 0.3 --require-skipped
+          else
+            python3 .github/workflows/verify_frame_metrics.py frame-info-lines.txt --min-lines 3 --min-drawn-ratio 0.3
+          fi
 
       - name: Pixel assertions
         if: matrix.gpu == 'swiftshader_indirect'
@@ -237,11 +246,15 @@ jobs:
           python3 .github/workflows/assert_render.py render_initial.png
           python3 .github/workflows/assert_render.py render_after_input.png
 
-      # The default rendering mode is 'system' -> LAYER_TYPE_NONE, which never
-      # enables the clean-row redraw skip (canvas contents are not preserved).
-      # To prove the skip path itself, switch to the hwui_gpu mode (-> LAYER_TYPE_HARDWARE),
-      # restart the activity, and demand at least one frame that actually skipped rows.
-      - name: Hwui GPU clean-row skip path (implies renderer row culling)
+      # The default rendering mode is 'system' -> LAYER_TYPE_NONE. Under the
+      # canvas-retention policy the clean-row skip is gated by DRAW TARGET
+      # persistence, not by the layer type: a hardware-accelerated window
+      # (SwiftShader included) re-records a display list every draw, so skipped
+      # rows would be lost — the exact on-device bug (hwui_gpu, skipped=80/81,
+      # flicker + missing content, 2026-09-25). This leg therefore proves the
+      # OPPOSITE direction: even with the hwui_gpu preference set (-> HARDWARE
+      # layer), the gate must keep skipped == 0 on the hardware canvas.
+      - name: Hwui GPU non-retaining target must not skip clean rows
         if: matrix.gpu == 'swiftshader_indirect'
         run: |
           set -euo pipefail
@@ -273,9 +286,8 @@ jobs:
             adb logcat -d | tail -100
             exit 1
           fi
-          # Give the idle app a few frames so unchanged rows are actually skipped,
-          # then capture and assert both the frame metrics (skipped>0 required) and
-          # that pixels still render correctly through the layered path.
+          # Give the idle app a few frames, then assert the regression nail:
+          # a hardware canvas must never report skipped > 0.
           sleep 3
           adb shell input keyevent KEYCODE_MOVE_END
           adb shell input text "hwui"
@@ -284,7 +296,7 @@ jobs:
           adb logcat -d > logcat-hwui.txt
           grep -E 'Termux:TerminalView.*frame rev=' logcat-hwui.txt > frame-info-hwui.txt \
             || { echo 'NO_FRAME_INFO_LINES under hwui_gpu'; tail -50 logcat-hwui.txt; exit 1; }
-          python3 .github/workflows/verify_frame_metrics.py frame-info-hwui.txt --min-lines 3 --require-skipped --min-drawn-ratio 0.3
+          python3 .github/workflows/verify_frame_metrics.py frame-info-hwui.txt --min-lines 3 --forbid-skipped --min-drawn-ratio 0.3
           python3 .github/workflows/assert_render.py render_hwui.png
           adb logcat -d | grep -iE 'FATAL|AndroidRuntime.*com.termux' | tail -20 || true
 
