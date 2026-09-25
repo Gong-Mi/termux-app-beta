@@ -17,7 +17,7 @@ final class TerminalFrameDiagnostics {
     }
 
     static void logIfEnabled(TerminalSession session, RenderFrameMetrics metrics, TerminalRenderFrame frame,
-                             TerminalRenderStepMetrics.Snapshot renderSteps) {
+                             TerminalRenderStepMetrics.Snapshot renderSteps, RenderStats stats) {
         if (!sEnabled) return;
 
         TerminalParserMetrics.Snapshot parser = session.getParserMetricsSnapshot();
@@ -30,6 +30,11 @@ final class TerminalFrameDiagnostics {
             + " published=" + render.publishedFrameCount + " lastPublishedRev=" + render.lastPublishedScreenRevision
             + " drawn=" + render.drawnFrameCount + " lastDrawnRev=" + render.lastDrawnScreenRevision
             + " dropped=" + render.droppedFrameCount + " coalesced=" + render.coalescedRevisionCount + " acked=" + render.lastAckedScreenRevision
+            + " rastered=" + stats.rasteredFrames + " submitted=" + stats.submittedFrames
+            + " rejectedIncompatible=" + stats.rejectedIncompatibleFrames
+            + " rejectedStale=" + stats.rejectedStaleFrames
+            + " rejectedAckIncompatible=" + stats.rejectedAckIncompatibleFrames
+            + " rejectedAckOrder=" + stats.rejectedAckOrderFrames
             + " parserBytes=" + parser.inputBytes + " appendCommands=" + parser.appendCommands
             + " controlCommands=" + parser.controlCommands + " parserFrames=" + parser.publishedFrames
             + " finishCommands=" + parser.finishCommands + " stopCommands=" + parser.stopCommands
