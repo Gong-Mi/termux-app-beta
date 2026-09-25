@@ -228,16 +228,15 @@ jobs:
           grep -E 'Termux:TerminalView.*frame rev=' logcat-smoke.txt > frame-info-lines.txt \
             || { echo 'NO_FRAME_INFO_LINES'; tail -50 logcat-smoke.txt; exit 1; }
           wc -l frame-info-lines.txt
-          if [ "${{ matrix.gpu }}" = "off" ]; then
-            # A software-rendered window (-gpu off) with the default
-            # LAYER_TYPE_NONE draws into the persistent window surface — the
-            # only draw target that retains previous pixels. The clean-row
-            # skip MUST be active here (proves the skip path survives the
-            # retention gate instead of being disabled everywhere).
-            python3 .github/workflows/verify_frame_metrics.py frame-info-lines.txt --min-lines 3 --min-drawn-ratio 0.3 --require-skipped
-          else
-            python3 .github/workflows/verify_frame_metrics.py frame-info-lines.txt --min-lines 3 --min-drawn-ratio 0.3
-          fi
+          # Every emulator leg of this matrix draws through a HARDWARE-accelerated
+          # window: observed in CI logcat 2026-09-25 even with -gpu off ("Terminal
+          # Canvas hardwareAccelerated=true") — that flag only disables host GPU
+          # emulation, the guest still runs HWUI on guest-side SwiftShader. The
+          # clean-row skip must therefore stay OFF on BOTH legs (the only draw
+          # target that retains pixels is a software-rendered window, reachable
+          # only via manifest-level opt-out which this app does not use; that
+          # direction is pinned at JVM level in CanvasRetentionPolicyTest).
+          python3 .github/workflows/verify_frame_metrics.py frame-info-lines.txt --min-lines 3 --min-drawn-ratio 0.3 --forbid-skipped
 
       - name: Pixel assertions
         if: matrix.gpu == 'swiftshader_indirect'
