@@ -34,6 +34,14 @@ public final class TerminalRenderer {
     private final float[] asciiMeasures = new float[127];
     /** Per-render step counters for diagnostics (no behavioral effect). */
     private final TerminalRenderStepMetrics mRenderSteps = new TerminalRenderStepMetrics();
+    /**
+     * Value-exact elision cache for the text-path Paint mutations in
+     * drawTextRun. The background/cursor rect sites below still mutate
+     * {@code mTextPaint.setColor} directly; each such site calls
+     * {@link PaintStateCache#reset()} so the cache never assumes a color the
+     * paint no longer holds. See PaintStateCacheTest for the elision contract.
+     */
+    private final PaintStateCache mTextPaintState = new PaintStateCache(mTextPaint);
 
     /**
      * Lazily populated BMP (U+0000..U+FFFF) single-code-point advances.
@@ -108,12 +116,17 @@ public final class TerminalRenderer {
      *
      * @param skipCleanRows when true, rows whose content provably did not change
      *                      since the previous rendering of the same viewport are
-     *                      skipped. The caller must only pass true when the view is
-     *                      layered (hardware/software layer) so that skipped rows
-     *                      retain their previous pixels, when
+     *                      skipped. The caller must only pass true when the
+     *                      canvas provably retains the previous draw's pixels —
+     *                      a software-rendered persistent window surface (see
+     *                      {@link CanvasRetentionPolicy}); a view layer type is
+     *                      NOT sufficient (a hardware-accelerated canvas
+     *                      re-records a display list every draw, so skipped rows
+     *                      are lost) — when
      *                      {@link TerminalRenderFrame#needsFullRedraw(TerminalRenderFrame)}
-     *                      is false for the previous frame, and when that previous
-     *                      frame is supplied as {@code previousRenderedFrame}.
+     *                      is false for the previous frame, when the frame is
+     *                      not reverse-video, and when that previous frame is
+     *                      supplied as {@code previousRenderedFrame}.
      */
     public final void render(TerminalRenderFrame frame, Canvas canvas, boolean skipCleanRows, TerminalRenderFrame previousRenderedFrame) {
         final boolean reverseVideo = frame.reverseVideo;
@@ -144,11 +157,13 @@ public final class TerminalRenderer {
                     && !(cursorVisible && row == cursorRow)
                     && !needsRedrawForProjection(previousRenderedFrame, row,
                         selectionY1, selectionY2)) {
-                // The layered canvas keeps the pixels produced by the previous frame
-                // for this row; nothing changed in the buffer here, so skip measuring
-                // and drawing it entirely. Cursor and selection rows are view
-                // projections, not buffer content, so they always redraw - including
-                // rows that held the cursor/selection in the previous frame.
+                // The persistent canvas keeps the pixels produced by the previous
+                // frame for this row (see CanvasRetentionPolicy — a view layer
+                // type is NOT proof of retention); nothing changed in the buffer
+                // here, so skip measuring and drawing it entirely. Cursor and
+                // selection rows are view projections, not buffer content, so
+                // they always redraw - including rows that held the
+                // cursor/selection in the previous frame.
                 skippedRows++;
                 mRenderSteps.recordSkippedRow();
                 continue;
@@ -309,12 +324,16 @@ public final class TerminalRenderer {
         if (backColor != palette[TextStyle.COLOR_INDEX_BACKGROUND]) {
             // Only draw non-default background.
             mTextPaint.setColor(backColor);
+            // Direct mutation outside the cache: its tracked color is stale.
+            mTextPaintState.reset();
             canvas.drawRect(left, y - mFontLineSpacingAndAscent + mFontAscent, right, y, mTextPaint);
             mRenderSteps.recordDrawRectCall();
         }
 
         if (cursor != 0) {
             mTextPaint.setColor(cursor);
+            // Direct mutation outside the cache: its tracked color is stale.
+            mTextPaintState.reset();
             float cursorHeight = mFontLineSpacingAndAscent - mFontAscent;
             if (cursorStyle == TerminalEmulator.TERMINAL_CURSOR_STYLE_UNDERLINE) cursorHeight /= 4.;
             else if (cursorStyle == TerminalEmulator.TERMINAL_CURSOR_STYLE_BAR) right -= ((right - left) * 3) / 4.;
@@ -339,11 +358,11 @@ public final class TerminalRenderer {
                 foreColor = 0xFF000000 + (red << 16) + (green << 8) + blue;
             }
 
-            mTextPaint.setFakeBoldText(bold);
-            mTextPaint.setUnderlineText(underline);
-            mTextPaint.setTextSkewX(italic ? -0.35f : 0.f);
-            mTextPaint.setStrikeThruText(strikeThrough);
-            mTextPaint.setColor(foreColor);
+            mTextPaintState.setFakeBoldText(bold);
+            mTextPaintState.setUnderlineText(underline);
+            mTextPaintState.setTextSkewX(italic ? -0.35f : 0.f);
+            mTextPaintState.setStrikeThruText(strikeThrough);
+            mTextPaintState.setColor(foreColor);
 
             // The text alignment is the default Paint.Align.LEFT.
             canvas.drawTextRun(text, startCharIndex, runWidthChars, startCharIndex, runWidthChars, left, y - mFontLineSpacingAndAscent, false, mTextPaint);

@@ -102,6 +102,10 @@ def main():
     ap.add_argument("--require-skipped", action="store_true",
                     help="require at least one frame line with skipped > 0 (proves the "
                          "clean-row redraw skip path actually ran)")
+    ap.add_argument("--forbid-skipped", action="store_true",
+                    help="require every frame line to report skipped == 0 (proves the "
+                         "clean-row skip is correctly gated OFF on draw targets that "
+                         "do not retain pixels, e.g. any hardware-accelerated canvas)")
     args = ap.parse_args()
 
     rows = parse_lines(args.logfile)
@@ -151,6 +155,12 @@ def main():
     if args.require_skipped and max_skipped <= 0:
         print("FAIL: --require-skipped set but no frame line reports skipped > 0 "
               "(clean-row skip path never ran; check layer type/hwui mode)")
+        sys.exit(1)
+    if args.forbid_skipped and max_skipped > 0:
+        print("FAIL: --forbid-skipped set but a frame line reports skipped="
+              f"{max_skipped} > 0 (clean-row skip ran on a non-retaining draw "
+              "target — skipped rows lose their pixels; check the "
+              "CanvasRetentionPolicy gate)")
         sys.exit(1)
 
     # Threshold checks against aggregate counters from the last sample.
