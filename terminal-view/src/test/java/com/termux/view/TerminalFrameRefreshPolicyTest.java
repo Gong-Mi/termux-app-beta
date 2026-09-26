@@ -55,6 +55,23 @@ public class TerminalFrameRefreshPolicyTest {
     }
 
     @Test
+    public void emptyMailboxWithoutRenderedFrameNeedsDraw() {
+        assertTrue(TerminalFrameRefreshPolicy.needsDrawWithoutPendingFrame(false, -1, -1));
+        assertTrue(TerminalFrameRefreshPolicy.needsDrawWithoutPendingFrame(false, 5, 5));
+    }
+
+    @Test
+    public void emptyMailboxAfterAckOfLatestRevisionNeedsNoDraw() {
+        // 一次发布触发两条失效请求：第一条已消费等价帧并 ack，第二条不得再重绘。
+        assertFalse(TerminalFrameRefreshPolicy.needsDrawWithoutPendingFrame(true, 12, 12));
+    }
+
+    @Test
+    public void emptyMailboxWithUnackedRevisionNeedsDraw() {
+        assertTrue(TerminalFrameRefreshPolicy.needsDrawWithoutPendingFrame(true, 11, 12));
+    }
+
+    @Test
     public void firstFrameAlwaysNeedsDraw() {
         TerminalEmulator emulator = emulator();
         append(emulator, "AB");

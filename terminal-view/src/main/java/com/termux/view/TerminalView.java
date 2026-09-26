@@ -605,8 +605,19 @@ public final class TerminalView extends View {
             invalidate();
             return;
         }
-        TerminalModelFrame pending = mRenderMailbox.peek();
-        if (pending == null || mLastRenderedFrame == null) {
+        TerminalModelFrame pending = mRenderMailbox == null ? null : mRenderMailbox.peek();
+        if (pending == null) {
+            // 同一批发布常常触发两次失效请求（帧 sink 一次、app 侧 onTextChanged 一次）。
+            // 第一次已经判定"与屏上像素一致"并 ack 时，第二次不能把一次多余的重绘带回来。
+            if (TerminalFrameRefreshPolicy.needsDrawWithoutPendingFrame(
+                    mLastRenderedFrame != null,
+                    mFrameMetrics.getLastAckedScreenRevision(),
+                    mFrameMetrics.getLastPublishedScreenRevision())) {
+                invalidate();
+            }
+            return;
+        }
+        if (mLastRenderedFrame == null) {
             invalidate();
             return;
         }
