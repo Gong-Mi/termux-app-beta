@@ -302,12 +302,17 @@ jobs:
           set -euo pipefail
           adb shell input keyevent KEYCODE_MOVE_END
           adb logcat -c
-          SEQ='for i in 1 2 3 4 5 6; do printf \a; sleep 0.5; done'
+          # Two seconds of silence let the echo of the typed line settle before the
+          # bells start; the trailing echo gives the visible frame that flushes the
+          # counters into a diagnostics line.
+          SEQ='sleep 2; for i in 1 2 3 4 5 6; do printf \a; sleep 0.5; done; echo NOOP_DONE'
           TYPED=$(printf '%s' "$SEQ" | sed 's/ /%s/g')
           adb shell "input text '$TYPED'"
           adb shell input keyevent KEYCODE_ENTER
-          sleep 6
+          sleep 10
           adb logcat -d > logcat-noop.txt
+          echo '== last frame diagnostics lines =='
+          grep -E 'Termux:TerminalView.*frame rev=' logcat-noop.txt | tail -3 || true
           grep -E 'Termux:TerminalView.*frame rev=' logcat-noop.txt > frame-info-noop.txt \
             || { echo 'NO_FRAME_INFO_LINES for the no-op publish gate'; tail -50 logcat-noop.txt; exit 1; }
           wc -l frame-info-noop.txt
