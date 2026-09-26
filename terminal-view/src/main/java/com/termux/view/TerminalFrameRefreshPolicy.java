@@ -47,4 +47,23 @@ public final class TerminalFrameRefreshPolicy {
             || previous.selectionX2 != current.selectionX2
             || previous.selectionY2 != current.selectionY2;
     }
+
+    /**
+     * 信箱里没有待绘制帧时的判据。
+     *
+     * <p>一次发布常常触发两条失效请求：帧 sink 的 request 与 app 侧 onTextChanged → onScreenUpdated。
+     * 若第一条已经把"与屏上像素一致"的帧消费并 ack 掉，第二条到达时信箱已空——此时不能再把一次
+     * 多余的重绘带回来。判据就是"屏上像素是否已反映最新发布的 revision"。
+     *
+     * @param hasRenderedFrame   是否已经画过至少一帧（没有则必须画）
+     * @param lastAckedRevision  屏上像素对应的 revision，未画过时为 -1
+     * @param lastPublishedRevision 最新发布过的 revision
+     * @return true 表示需要绘制
+     */
+    public static boolean needsDrawWithoutPendingFrame(boolean hasRenderedFrame,
+                                                       long lastAckedRevision,
+                                                       long lastPublishedRevision) {
+        if (!hasRenderedFrame) return true;
+        return lastAckedRevision < lastPublishedRevision;
+    }
 }
