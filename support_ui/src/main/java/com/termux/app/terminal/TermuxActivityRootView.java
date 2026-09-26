@@ -105,6 +105,11 @@ public class TermuxActivityRootView extends LinearLayout implements ViewTreeObse
     protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
         super.onMeasure(widthMeasureSpec, heightMeasureSpec);
 
+        ImeProbeLogger.getInstance().logMeasure(
+            MeasureSpec.getSize(widthMeasureSpec),
+            MeasureSpec.getSize(heightMeasureSpec),
+            marginBottom);
+
         if (marginBottom != null) {
             if (ROOT_VIEW_LOGGING_ENABLED)
                 Logger.logVerbose(LOG_TAG, "onMeasure: Setting bottom margin to " + marginBottom);
@@ -155,6 +160,10 @@ public class TermuxActivityRootView extends LinearLayout implements ViewTreeObse
 
         // If the bottomSpaceViewRect is visible, then remove the margin if needed
         if (isVisible) {
+            ImeProbeLogger.getInstance().logLayout(
+                windowAvailableRect.bottom, bottomSpaceViewRect.bottom,
+                params.bottomMargin, 0, true, isVisibleBecauseMargin, isVisibleBecauseExtraMargin);
+
             // If visible because of margin, i.e the bottom of bottomSpaceViewRect equals that of windowAvailableRect
             // and a margin has been added
             // Necessary so that we don't get stuck in an infinite loop since setting margin
@@ -165,6 +174,8 @@ public class TermuxActivityRootView extends LinearLayout implements ViewTreeObse
             // set appropriate margins when views are changed quickly since some changes
             // may be missed.
             if (isVisibleBecauseMargin) {
+                ImeProbeLogger.getInstance().logMargin("visible_by_margin", params.bottomMargin, 0,
+                    System.currentTimeMillis() - lastMarginBottomTime);
                 if (root_view_logging_enabled)
                     Logger.logVerbose(LOG_TAG, "Visible due to margin");
 
@@ -228,6 +239,10 @@ public class TermuxActivityRootView extends LinearLayout implements ViewTreeObse
         else {
             int pxHidden = bottomSpaceViewRect.bottom - windowAvailableRect.bottom;
 
+            ImeProbeLogger.getInstance().logLayout(
+                windowAvailableRect.bottom, bottomSpaceViewRect.bottom,
+                params.bottomMargin, pxHidden, false, false, false);
+
             if (root_view_logging_enabled)
                 Logger.logVerbose(LOG_TAG, "pxHidden " + pxHidden + ", bottom " + params.bottomMargin);
 
@@ -241,6 +256,8 @@ public class TermuxActivityRootView extends LinearLayout implements ViewTreeObse
             // onGlobalLayout: windowAvailableRect 1232, bottomSpaceViewRect 1408, diff 176, bottom 176, isVisible false, isVisibleBecauseMargin false, isVisibleBecauseExtraMargin false
             // onGlobalLayout: Bottom margin already equals 176
             if (pxHidden > 0 && params.bottomMargin > 0) {
+                ImeProbeLogger.getInstance().logMargin("invisible_despite_margin", params.bottomMargin, pxHidden,
+                    System.currentTimeMillis() - lastMarginBottomTime);
                 if (pxHidden != params.bottomMargin) {
                     if (root_view_logging_enabled)
                         Logger.logVerbose(LOG_TAG, "Force setting margin to 0 since not visible due to wrong margin");
@@ -260,6 +277,8 @@ public class TermuxActivityRootView extends LinearLayout implements ViewTreeObse
 
 
             if (setMargin) {
+                ImeProbeLogger.getInstance().logMargin("set_hidden_margin", params.bottomMargin, pxHidden,
+                    System.currentTimeMillis() - lastMarginBottomTime);
                 if (root_view_logging_enabled)
                     Logger.logVerbose(LOG_TAG, "Setting bottom margin to " + pxHidden);
                 params.setMargins(0, 0, 0, pxHidden);
@@ -276,6 +295,9 @@ public class TermuxActivityRootView extends LinearLayout implements ViewTreeObse
         @Override
         public WindowInsets onApplyWindowInsets(View v, WindowInsets insets) {
             mStatusBarHeight =  WindowInsetsCompat.toWindowInsetsCompat(insets).getInsets(WindowInsetsCompat.Type.statusBars()).top;
+            int imeBottom = WindowInsetsCompat.toWindowInsetsCompat(insets).getInsets(WindowInsetsCompat.Type.ime()).bottom;
+            int navBottom = WindowInsetsCompat.toWindowInsetsCompat(insets).getInsets(WindowInsetsCompat.Type.navigationBars()).bottom;
+            ImeProbeLogger.getInstance().logInsets(mStatusBarHeight, imeBottom, navBottom);
             // Let view window handle insets however it wants
             return v.onApplyWindowInsets(insets);
         }

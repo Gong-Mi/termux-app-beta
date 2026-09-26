@@ -199,6 +199,9 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
         Logger.logDebug(LOG_TAG, "onCreate");
         mIsOnResumeAfterOnCreate = true;
 
+        // Initialize IME diagnostic probe
+        com.termux.shared.view.ImeProbeLogger.getInstance().init();
+
         if (savedInstanceState != null)
             mIsActivityRecreated = savedInstanceState.getBoolean(ARG_ACTIVITY_RECREATED, false);
 
@@ -315,6 +318,9 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
 
         Logger.logVerbose(LOG_TAG, "onResume");
 
+        com.termux.shared.view.ImeProbeLogger.getInstance().logLifecycle("RESUME",
+            "created=" + mIsOnResumeAfterOnCreate, "recreated=" + mIsActivityRecreated);
+
         if (mIsInvalidState) return;
 
         if (mTermuxTerminalSessionActivityClient != null)
@@ -335,6 +341,8 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
         super.onStop();
 
         Logger.logDebug(LOG_TAG, "onStop");
+
+        com.termux.shared.view.ImeProbeLogger.getInstance().logLifecycle("STOP");
 
         if (mIsInvalidState) return;
 
