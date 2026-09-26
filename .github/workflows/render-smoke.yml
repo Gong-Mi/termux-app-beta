@@ -288,6 +288,40 @@ jobs:
           python3 .github/workflows/assert_render.py render_hwui.png
           adb logcat -d | grep -iE 'FATAL|AndroidRuntime.*com.termux' | tail -20 || true
 
+      # Publishes that cannot change a pixel (no cell write, no cursor movement,
+      # no selection change) must be consumed without starting a draw. BEL output
+      # is exactly such a publish: it bumps the screen revision and nothing else.
+      # The typed loop sleeps between bells so every bell arrives as its own
+      # append batch, and the prompt drawn after the command flushes the counters
+      # into a diagnostics line. assert_noop_skip.py then compares consecutive
+      # drawn frames: N no-op publishes must cost at most a bounded number of
+      # draws. This fails on builds without the gate, where publishes that change
+      # nothing are still drawn.
+      - name: Idle no-op publish gate (noopSkips)
+        run: |
+          set -euo pipefail
+          adb shell input keyevent KEYCODE_MOVE_END
+          adb logcat -c
+          # Two seconds of silence let the echo of the typed line settle before the
+          # bells start; the trailing echo gives the visible frame that flushes the
+          # counters into a diagnostics line.
+          SEQ='sleep 2; for i in 1 2 3 4 5 6; do printf \a; sleep 0.5; done; echo NOOP_DONE'
+          TYPED=$(printf '%s' "$SEQ" | sed 's/ /%s/g')
+          adb shell "input text '$TYPED'"
+          adb shell input keyevent KEYCODE_ENTER
+          adb shell input keyevent KEYCODE_ENTER
+          sleep 10
+          adb exec-out screencap -p > render_noop.png
+          adb logcat -d > logcat-noop.txt
+          echo '== last frame diagnostics lines =='
+          grep -E 'Termux:TerminalView.*frame rev=' logcat-noop.txt | tail -3 || true
+          grep -E 'Termux:TerminalView.*frame rev=' logcat-noop.txt > frame-info-noop.txt \
+            || { echo 'NO_FRAME_INFO_LINES for the no-op publish gate'; tail -50 logcat-noop.txt; exit 1; }
+          wc -l frame-info-noop.txt
+          python3 .github/workflows/assert_noop_skip.py frame-info-noop.txt \
+            --min-noop-skips 3 --max-drawn-delta 3
+          adb logcat -d | grep -iE 'FATAL|AndroidRuntime.*com.termux' | tail -20 || true
+
       - name: Upload render evidence
         if: always()
         uses: actions/upload-artifact@v6
@@ -297,10 +331,13 @@ jobs:
             render_initial.png
             render_after_input.png
             render_hwui.png
+            render_noop.png
             logcat-smoke.txt
             logcat-hwui.txt
+            logcat-noop.txt
             frame-info-lines.txt
             frame-info-hwui.txt
+            frame-info-noop.txt
             /tmp/emu.log
           if-no-files-found: warn
 

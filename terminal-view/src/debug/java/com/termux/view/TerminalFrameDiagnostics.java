@@ -47,6 +47,7 @@ final class TerminalFrameDiagnostics {
             + " paintSetupNs=" + renderSteps.paintSetupNanos + " drawRectNs=" + renderSteps.drawRectNanos
             + " drawTextNs=" + renderSteps.drawTextNanos
             + " visible=" + (frame.endRow - frame.topRow) + " redrawWorthies=" + dirtyInView + " skipped=" + renderSteps.skippedRows
+            + " noopSkips=" + render.skippedNoChangeFrameCount
             + " cursor=" + (frame.cursorVisible ? frame.cursorRow : "hidden")
             + " sel=" + frame.selectionY1 + ".." + frame.selectionY2);
     }
