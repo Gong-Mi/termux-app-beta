@@ -175,7 +175,14 @@ public final class TerminalSession extends TerminalOutput {
         if (worker != null) worker.onFrameConsumed(frame);
     }
 
-    /** Detach the current view route; future worker frames are not delivered to it. */
+    /** Detach the current view route; future worker frames are not delivered to it.
+     *
+     * <p>The detached sink refuses eager snapshot capture: with no consumer, the worker
+     * would otherwise pay a full screen copy per PTY publish batch and drop the frame
+     * into {@code mLatestFrame} where nobody reads it. Snapshot getters fall back to
+     * synchronized emulator reads while detached, and a re-attach resumes capture through
+     * the new view sink (its mailbox is empty, so {@code shouldCaptureSnapshot()} is
+     * true on the next publish and the pending dirty state produces a fresh frame). */
     public synchronized void detachFrameSink() {
         mFrameSink = new TerminalFrameSink() {
             @Override
@@ -185,7 +192,7 @@ public final class TerminalSession extends TerminalOutput {
 
             @Override
             public boolean shouldCaptureSnapshot() {
-                return true;
+                return false;
             }
         };
         if (mParserWorker != null) mParserWorker.setFrameSink(mFrameSink);
