@@ -108,12 +108,17 @@ public final class TerminalRenderer {
      *
      * @param skipCleanRows when true, rows whose content provably did not change
      *                      since the previous rendering of the same viewport are
-     *                      skipped. The caller must only pass true when the view is
-     *                      layered (hardware/software layer) so that skipped rows
-     *                      retain their previous pixels, when
+     *                      skipped. The caller must only pass true when the
+     *                      canvas provably retains the previous draw's pixels —
+     *                      a software-rendered persistent window surface (see
+     *                      {@link CanvasRetentionPolicy}); a view layer type is
+     *                      NOT sufficient (a hardware-accelerated canvas
+     *                      re-records a display list every draw, so skipped rows
+     *                      are lost) — when
      *                      {@link TerminalRenderFrame#needsFullRedraw(TerminalRenderFrame)}
-     *                      is false for the previous frame, and when that previous
-     *                      frame is supplied as {@code previousRenderedFrame}.
+     *                      is false for the previous frame, when the frame is
+     *                      not reverse-video, and when that previous frame is
+     *                      supplied as {@code previousRenderedFrame}.
      */
     public final void render(TerminalRenderFrame frame, Canvas canvas, boolean skipCleanRows, TerminalRenderFrame previousRenderedFrame) {
         final boolean reverseVideo = frame.reverseVideo;
@@ -144,11 +149,13 @@ public final class TerminalRenderer {
                     && !(cursorVisible && row == cursorRow)
                     && !needsRedrawForProjection(previousRenderedFrame, row,
                         selectionY1, selectionY2)) {
-                // The layered canvas keeps the pixels produced by the previous frame
-                // for this row; nothing changed in the buffer here, so skip measuring
-                // and drawing it entirely. Cursor and selection rows are view
-                // projections, not buffer content, so they always redraw - including
-                // rows that held the cursor/selection in the previous frame.
+                // The persistent canvas keeps the pixels produced by the previous
+                // frame for this row (see CanvasRetentionPolicy — a view layer
+                // type is NOT proof of retention); nothing changed in the buffer
+                // here, so skip measuring and drawing it entirely. Cursor and
+                // selection rows are view projections, not buffer content, so
+                // they always redraw - including rows that held the
+                // cursor/selection in the previous frame.
                 skippedRows++;
                 mRenderSteps.recordSkippedRow();
                 continue;

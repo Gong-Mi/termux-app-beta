@@ -136,6 +136,8 @@ public class TextSelectionCursorController implements CursorController {
                 mSelX2++;
             }
         }
+
+        terminalView.notifySelectionChanged();
     }
     
     public void setActionModeCallBacks() {
@@ -335,7 +337,7 @@ public class TextSelectionCursorController implements CursorController {
             mSelX2 = getValidCurX(screen, columns, mSelY2, mSelX2);
         }
 
-        terminalView.invalidate();
+        terminalView.notifySelectionChanged();
     }
 
     private int getValidCurX(TerminalScreenSnapshot screen, int columns, int cy, int cx) {
