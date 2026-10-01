@@ -144,6 +144,11 @@ public final class TerminalRenderFrame implements FrameRevision {
         return modelFrame != null ? modelFrame.colorAt(index) : palette[index];
     }
 
+    /** Return the model frame this render frame was built from, or null if built directly. */
+    public TerminalModelFrame getModelFrame() {
+        return modelFrame;
+    }
+
     public int[] copyPalette() {
         int[] source = paletteForRenderer();
         return Arrays.copyOf(source, source.length);
