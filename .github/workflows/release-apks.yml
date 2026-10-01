@@ -52,7 +52,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Download release AAB
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v8
         with:
           name: termux-app-release-aab
           path: input

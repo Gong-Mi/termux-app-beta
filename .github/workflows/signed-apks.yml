@@ -53,7 +53,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Download debug AAB
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v8
         with:
           name: termux-app-debug-aab
           path: input
@@ -117,7 +117,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Download debug AAB
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v8
         with:
           name: termux-app-debug-aab
           path: input
@@ -218,13 +218,13 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Download exact default target
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v8
         with:
           name: termux-app-debug-default-apks
           path: default-target
 
       - name: Download exact universal target
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v8
         with:
           name: termux-app-debug-universal-apks
           path: universal-target
