@@ -37,7 +37,7 @@ jobs:
 
       - name: Restore validation cache
         id: cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: |
             ~/.gradle/caches
@@ -83,7 +83,7 @@ jobs:
 
       - name: Save validation cache after successful miss run
         if: success() && steps.cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: |
             ~/.gradle/caches
