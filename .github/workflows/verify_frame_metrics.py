@@ -34,7 +34,9 @@ import sys
 
 FIELD_RE = re.compile(r"(published|lastPublishedRev|drawn|lastDrawnRev|dropped|coalesced"
                       r"|acked|visible|rev|parserBytes|appendCommands|controlCommands"
-                      r"|parserFrames|finishCommands|stopCommands|skipped)=(-?\d+)")
+                      r"|parserFrames|finishCommands|stopCommands|skipped"
+                      r"|rastered|submitted|rejectedIncompatible|rejectedStale"
+                      r"|rejectedAckIncompatible|rejectedAckOrder)=(-?\d+)")
 
 
 def parse_lines(path):
@@ -64,15 +66,22 @@ def check_row(row):
     visible = row.get("visible")
     parser_fields = ("parserBytes", "appendCommands", "controlCommands", "parserFrames",
                      "finishCommands", "stopCommands")
+    stage_fields = ("rastered", "submitted",
+                    "rejectedIncompatible", "rejectedStale",
+                    "rejectedAckIncompatible", "rejectedAckOrder")
 
     if None in (published, drawn, dropped, acked, last_drawn_rev, last_published_rev, visible):
         return f"missing field in row: {row}"
     missing_parser = [name for name in parser_fields if row.get(name) is None]
     if missing_parser:
         return f"missing parser field(s): {', '.join(missing_parser)}"
+    missing_stage = [name for name in stage_fields if row.get(name) is None]
+    if missing_stage:
+        return f"missing stage field(s): {', '.join(missing_stage)}"
     for name, value in (("published", published), ("drawn", drawn), ("dropped", dropped),
                         ("lastPublishedRev", last_published_rev),
-                        *[(name, row[name]) for name in parser_fields]):
+                        *[(name, row[name]) for name in parser_fields],
+                        *[(name, row[name]) for name in stage_fields]):
         if value < 0:
             return f"{name}({value}) < 0"
     if acked != last_drawn_rev:
@@ -116,7 +125,11 @@ def main():
     prev_published_rev = None
     parser_fields = ("parserBytes", "appendCommands", "controlCommands", "parserFrames",
                      "finishCommands", "stopCommands")
+    stage_fields = ("rastered", "submitted",
+                    "rejectedIncompatible", "rejectedStale",
+                    "rejectedAckIncompatible", "rejectedAckOrder")
     prev_parser = {name: None for name in parser_fields}
+    prev_stage = {name: None for name in stage_fields}
     max_skipped = 0
     for i, row in enumerate(rows):
         rev = row["rev"]
@@ -136,6 +149,16 @@ def main():
                 print(f"FAIL: {name} decreased at line {i + 1}: {value} < {previous}")
                 sys.exit(1)
             prev_parser[name] = value
+        for name in stage_fields:
+            value = row.get(name)
+            if value is None:
+                # Let check_row report the exact missing stage field.
+                continue
+            previous = prev_stage[name]
+            if previous is not None and value < previous:
+                print(f"FAIL: {name} decreased at line {i + 1}: {value} < {previous}")
+                sys.exit(1)
+            prev_stage[name] = value
         err = check_row(row)
         if err:
             print(f"FAIL: line {i + 1}: {err}")
