@@ -11,15 +11,25 @@ public final class TerminalScreenSnapshot {
     private final int activeTranscriptRows;
     private final int[] internalRows;
     private final TerminalRenderRow[] rows;
+    /**
+     * The exact {@link TerminalBuffer} instance this snapshot was captured from.
+     * Row-object reuse requires same-buffer provenance: main↔alternate switches
+     * swap {@code TerminalEmulator.mScreen} without changing per-row identity, so
+     * mapping numbers alone cannot prove that rows came from the live buffer.
+     * Holding the reference keeps that buffer reachable until this snapshot is
+     * superseded (at most a couple of frames), which is bounded and intentional.
+     */
+    private final TerminalBuffer sourceBuffer;
 
     private TerminalScreenSnapshot(int firstExternalRow, int columns, int screenRows, int activeTranscriptRows,
-                                 int[] internalRows, TerminalRenderRow[] rows) {
+                                 int[] internalRows, TerminalRenderRow[] rows, TerminalBuffer sourceBuffer) {
         this.firstExternalRow = firstExternalRow;
         this.columns = columns;
         this.screenRows = screenRows;
         this.activeTranscriptRows = activeTranscriptRows;
         this.internalRows = internalRows;
         this.rows = rows;
+        this.sourceBuffer = sourceBuffer;
     }
 
     /** Capture the inclusive/exclusive external row range used by a renderer frame. */
@@ -30,7 +40,8 @@ public final class TerminalScreenSnapshot {
 
     /**
      * Capture a frame while reusing immutable rows from the previous capture when
-     * the buffer mapping and dirty journal prove that the row did not change.
+     * the previous capture came from the SAME buffer, the buffer mapping and
+     * dirty journal prove that the row did not change.
      */
     static TerminalScreenSnapshot capture(TerminalBuffer screen, int firstExternalRow, int endExternalRow,
                                           int columns, TerminalScreenSnapshot previous, long[] dirtyRowBits) {
@@ -43,7 +54,7 @@ public final class TerminalScreenSnapshot {
             int externalRow = firstExternalRow + i;
             int internalRow = screen.externalToInternalRow(externalRow);
             internalRows[i] = internalRow;
-            if (canReuseRow(previous, externalRow, internalRow, columns, dirtyRowBits)) {
+            if (canReuseRow(screen, previous, externalRow, internalRow, columns, dirtyRowBits)) {
                 rows[i] = previous.rowAtExternal(externalRow);
             } else {
                 TerminalRow source = screen.allocateFullLineIfNecessary(internalRow);
@@ -51,12 +62,12 @@ public final class TerminalScreenSnapshot {
             }
         }
         return new TerminalScreenSnapshot(firstExternalRow, columns, screen.mScreenRows,
-            screen.getActiveTranscriptRows(), internalRows, rows);
+            screen.getActiveTranscriptRows(), internalRows, rows, screen);
     }
 
-    private static boolean canReuseRow(TerminalScreenSnapshot previous, int externalRow, int internalRow,
-                                       int columns, long[] dirtyRowBits) {
-        if (previous == null || previous.columns != columns
+    private static boolean canReuseRow(TerminalBuffer screen, TerminalScreenSnapshot previous, int externalRow,
+                                       int internalRow, int columns, long[] dirtyRowBits) {
+        if (previous == null || previous.sourceBuffer != screen || previous.columns != columns
                 || externalRow < previous.firstExternalRow || externalRow >= previous.endExternalRow()) {
             return false;
         }
