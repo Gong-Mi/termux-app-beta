@@ -17,6 +17,7 @@ public final class RenderFrameMetrics {
     private long mDroppedFrameCount;
     private long mCoalescedRevisionCount;
     private long mLastAckedScreenRevision = -1;
+    private long mSkippedNoChangeFrameCount;
 
     /** Record that a frame carrying {@code screenRevision} has been handed to the renderer. */
     public synchronized void publish(long screenRevision) {
@@ -41,6 +42,21 @@ public final class RenderFrameMetrics {
     /** Record that a published frame did not complete rendering. */
     public synchronized void drop() {
         mDroppedFrameCount++;
+    }
+
+    /**
+     * Record that a published frame was provably pixel-identical to the last drawn frame and was
+     * therefore not drawn: the screen already reflects {@code screenRevision}. The revision is
+     * acked, but the drawn counter is not incremented.
+     */
+    public synchronized void skipNoChange(long screenRevision) {
+        mSkippedNoChangeFrameCount++;
+        mLastAckedScreenRevision = screenRevision;
+    }
+
+    /** Number of published frames skipped because content and view projections were unchanged. */
+    public synchronized long getSkippedNoChangeFrameCount() {
+        return mSkippedNoChangeFrameCount;
     }
 
     public synchronized long getPublishedFrameCount() {
@@ -87,7 +103,8 @@ public final class RenderFrameMetrics {
                 mLastDrawnScreenRevision,
                 mDroppedFrameCount,
                 mCoalescedRevisionCount,
-                mLastAckedScreenRevision);
+                mLastAckedScreenRevision,
+                mSkippedNoChangeFrameCount);
     }
 
     /** Immutable snapshot of {@link RenderFrameMetrics} counters. */
@@ -99,11 +116,12 @@ public final class RenderFrameMetrics {
         public final long droppedFrameCount;
         public final long coalescedRevisionCount;
         public final long lastAckedScreenRevision;
+        public final long skippedNoChangeFrameCount;
 
         Snapshot(long publishedFrameCount, long lastPublishedScreenRevision,
                  long drawnFrameCount, long lastDrawnScreenRevision,
                  long droppedFrameCount, long coalescedRevisionCount,
-                 long lastAckedScreenRevision) {
+                 long lastAckedScreenRevision, long skippedNoChangeFrameCount) {
             this.publishedFrameCount = publishedFrameCount;
             this.lastPublishedScreenRevision = lastPublishedScreenRevision;
             this.drawnFrameCount = drawnFrameCount;
@@ -111,6 +129,7 @@ public final class RenderFrameMetrics {
             this.droppedFrameCount = droppedFrameCount;
             this.coalescedRevisionCount = coalescedRevisionCount;
             this.lastAckedScreenRevision = lastAckedScreenRevision;
+            this.skippedNoChangeFrameCount = skippedNoChangeFrameCount;
         }
     }
 
@@ -126,6 +145,7 @@ public final class RenderFrameMetrics {
             && mDrawnFrameCount >= 0
             && mDroppedFrameCount >= 0
             && mCoalescedRevisionCount >= 0
+            && mSkippedNoChangeFrameCount >= 0
             && mLastAckedScreenRevision <= mLastPublishedScreenRevision;
     }
 }

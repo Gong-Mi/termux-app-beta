@@ -343,7 +343,7 @@ public final class TerminalView extends View {
                 if (!mSessionGate.isCurrent(sessionGeneration)) return;
                 boolean hadPending = mailbox.peek() != null;
                 mailbox.publish(frame);
-                if (!hadPending) mFrameInvalidationGate.request(TerminalView.this::invalidate);
+                if (!hadPending) mFrameInvalidationGate.request(TerminalView.this::requestFrameDrawIfNeeded);
             }
 
             @Override
@@ -536,6 +536,7 @@ public final class TerminalView extends View {
     public void onScreenUpdated(boolean skipScrolling) {
         if (mTermSession == null) return;
 
+        final int topRowBeforeUpdate = mTopRow;
         int rowsInHistory = mTermSession.getActiveTranscriptRows();
         if (mTopRow < -rowsInHistory) mTopRow = -rowsInHistory;
 
@@ -574,8 +575,68 @@ public final class TerminalView extends View {
         mTermSession.clearScrollCounter();
         mTermSession.setViewport(mTopRow);
 
-        invalidate();
+        // 本次调用改动了视口（滚动/选择/自动滚动记账）时沿用旧行为立即重绘：不等解析线程
+        // 把新 viewport 变成新帧。视口未动时才允许"内容与投影都没变则不重绘"的闸门生效。
+        requestFrameDrawIfNeeded(mTopRow != topRowBeforeUpdate);
         if (mAccessibilityEnabled) setContentDescription(getText());
+    }
+
+    /**
+     * 绘制闸门（默认不强制）：见 {@link #requestFrameDrawIfNeeded(boolean)}。
+     */
+    private void requestFrameDrawIfNeeded() {
+        requestFrameDrawIfNeeded(false);
+    }
+
+    /**
+     * 绘制闸门：当信箱里有未绘制帧、且该帧相对"上一次实际绘制过的帧"在以下所有维度都完全一致时，
+     * 屏幕像素已经等于重绘结果，于是消费该帧并跳过本轮 invalidate：
+     * 几何（topRow/endRow/columns）、调色板、反相显示、光标投影（可见性/行/列/样式）、
+     * 选择矩形、以及视口内每一行的内容对象身份（{@link TerminalFrameRefreshPolicy}）。
+     *
+     * <p>消费帧是必须的：{@code shouldCaptureSnapshot()} 以"信箱槽位为空"为前提，若只跳过绘制
+     * 而不消费，解析线程会置 mDirty 后因 mConsumedPending 未置位而不再发布新帧，画面会停在旧内容。
+     * 消费后 {@link TerminalSession#onFrameConsumed} 会允许解析线程立即发布下一帧。
+     *
+     * <p>{@code forceDraw=true} 用于调用方已经决定必须重绘的场景（例如本次调用修改了 mTopRow）。
+     */
+    private void requestFrameDrawIfNeeded(boolean forceDraw) {
+        if (forceDraw || mRenderMailbox == null) {
+            invalidate();
+            return;
+        }
+        TerminalModelFrame pending = mRenderMailbox == null ? null : mRenderMailbox.peek();
+        if (pending == null) {
+            // 同一批发布常常触发两次失效请求（帧 sink 一次、app 侧 onTextChanged 一次）。
+            // 第一次已经判定"与屏上像素一致"并 ack 时，第二次不能把一次多余的重绘带回来。
+            if (TerminalFrameRefreshPolicy.needsDrawWithoutPendingFrame(
+                    mLastRenderedFrame != null,
+                    mFrameMetrics.getLastAckedScreenRevision(),
+                    mFrameMetrics.getLastPublishedScreenRevision())) {
+                invalidate();
+            }
+            return;
+        }
+        if (mLastRenderedFrame == null) {
+            invalidate();
+            return;
+        }
+        int[] selectors = mDefaultSelectors;
+        if (mTextSelectionCursorController != null) {
+            mTextSelectionCursorController.getSelectors(selectors);
+        }
+        TerminalSelectionRange selection = TerminalSelectionRange.fromSelectors(selectors);
+        TerminalRenderFrame candidate = new TerminalRenderFrame(pending, pending.topRow,
+            selection.x1, selection.y1, selection.x2, selection.y2);
+        if (TerminalFrameRefreshPolicy.needsDraw(mLastRenderedFrame, candidate)) {
+            invalidate();
+            return;
+        }
+        TerminalModelFrame consumed = mRenderMailbox.acquireLatest();
+        if (consumed != null) {
+            mFrameMetrics.skipNoChange(consumed.getScreenRevision());
+            if (mTermSession != null) mTermSession.onFrameConsumed(consumed);
+        }
     }
 
     /** This must be called by the hosting activity in {@link Activity#onContextMenuClosed(Menu)}
