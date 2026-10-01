@@ -25,6 +25,22 @@ on:
         required: false
         default: "60"
         type: string
+      rendering_mode:
+        description: "Terminal rendering mode"
+        required: false
+        default: "system"
+        type: choice
+        options:
+          - system
+          - hwui_gpu
+      producer_mode:
+        description: "Stress producer"
+        required: false
+        default: "pixel_loop"
+        type: choice
+        options:
+          - pixel_loop
+          - sparse_ansi
 
 env:
   JAVA_VERSION: 21
@@ -157,11 +173,58 @@ jobs:
           adb shell run-as com.termux chmod 755 /data/data/com.termux/files/usr/tmp/$PIXEL_LOOP_ASSET
           adb shell run-as com.termux sha256sum /data/data/com.termux/files/usr/tmp/$PIXEL_LOOP_ASSET
 
+      - name: Select rendering mode
+        if: inputs.rendering_mode == 'hwui_gpu'
+        run: |
+          set -euxo pipefail
+          cat > /tmp/termux_prefs.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8" standalone="yes" ?>
+          <map>
+              <string name="terminal_rendering_mode">hwui_gpu</string>
+          </map>
+          EOF
+          adb push /tmp/termux_prefs.xml /data/local/tmp/termux_prefs.xml
+          adb shell run-as com.termux mkdir -p shared_prefs
+          adb shell run-as com.termux cp /data/local/tmp/termux_prefs.xml shared_prefs/com.termux_preferences.xml
+          adb shell am force-stop com.termux
+          adb shell am start -W -n com.termux/.app.TermuxActivity
+          for i in $(seq 1 24); do
+            if adb shell run-as com.termux test -x /data/data/com.termux/files/usr/bin/sh; then break; fi
+            sleep 5
+          done
+          adb shell run-as com.termux test -x /data/data/com.termux/files/usr/bin/sh
+
+      - name: Stage sparse ANSI producer
+        if: inputs.producer_mode == 'sparse_ansi'
+        env:
+          DURATION: ${{ inputs.duration_seconds }}
+        run: |
+          set -euxo pipefail
+          cat > /tmp/sparse-producer.sh <<EOF
+          #!/system/bin/sh
+          end=\$((\$(date +%s) + ${DURATION}))
+          i=0
+          while [ \$(date +%s) -lt \$end ]; do
+            r=\$((i % 255))
+            g=\$(((i * 3) % 255))
+            b=\$(((i * 7) % 255))
+            printf '\033[1;1H\033[38;2;%s;%s;%smS%06d\033[0m\033[2;1H\033[38;2;%s;%s;%smLOCAL\033[0m' \"\$r\" \"\$g\" \"\$b\" \"\$i\" \"\$b\" \"\$r\" \"\$g\"
+            i=\$((i + 1))
+            sleep 0.016
+          done
+          EOF
+          adb push /tmp/sparse-producer.sh /data/local/tmp/sparse-producer.sh
+          adb shell run-as com.termux cp /data/local/tmp/sparse-producer.sh /data/data/com.termux/files/usr/tmp/sparse-producer.sh
+          adb shell run-as com.termux chmod 755 /data/data/com.termux/files/usr/tmp/sparse-producer.sh
+          adb shell run-as com.termux sha256sum /data/data/com.termux/files/usr/tmp/sparse-producer.sh
+
       - name: Run producer through the real Termux terminal session
         env:
           DURATION: ${{ inputs.duration_seconds }}
           FIT_MODE: ${{ inputs.fit_mode }}
           FPS: ${{ inputs.fps }}
+          RENDERING_MODE: ${{ inputs.rendering_mode }}
+          PRODUCER_MODE: ${{ inputs.producer_mode }}
         run: |
           set -euxo pipefail
           PRODUCER=/data/data/com.termux/files/usr/tmp/$PIXEL_LOOP_ASSET
@@ -172,7 +235,12 @@ jobs:
           test -n "$TERMUX_PID"
           adb shell atrace --async_start -b 8192 -a com.termux gfx view sched freq idle \
             > atrace-start.txt 2>&1
-          adb shell input text "$PRODUCER --fit $FIT_MODE --fps $FPS"
+          if [ "$PRODUCER_MODE" = "sparse_ansi" ]; then
+            COMMAND=/data/data/com.termux/files/usr/tmp/sparse-producer.sh
+          else
+            COMMAND="$PRODUCER --fit $FIT_MODE --fps $FPS"
+          fi
+          adb shell input text "$COMMAND"
           adb shell input keyevent KEYCODE_ENTER
           start=$(date +%s)
           date -Is > host-time-start.txt
@@ -195,6 +263,8 @@ jobs:
           echo "PRODUCER_REQUESTED_SECONDS=$DURATION" | tee stress-metrics.txt
           echo "PRODUCER_FIT_MODE=$FIT_MODE" | tee -a stress-metrics.txt
           echo "PRODUCER_FPS=$FPS" | tee -a stress-metrics.txt
+          echo "PRODUCER_RENDERING_MODE=$RENDERING_MODE" | tee -a stress-metrics.txt
+          echo "PRODUCER_MODE=$PRODUCER_MODE" | tee -a stress-metrics.txt
           echo "PRODUCER_WALL_SECONDS=$((end-start))" | tee -a stress-metrics.txt
           adb exec-out screencap -p > pixel-loop-running.png
           adb shell ps -A | grep -E 'com.termux|pixel-loop' | tee -a stress-metrics.txt || true
@@ -211,12 +281,16 @@ jobs:
         run: |
           set +e
           adb shell dumpsys gfxinfo com.termux > gfxinfo-final.txt
+          adb shell dumpsys gfxinfo com.termux framestats > framestats.txt || true
           adb shell dumpsys meminfo com.termux > meminfo-final.txt
           adb shell ps -A > processes-final.txt
           adb logcat -d > logcat-final.txt
           adb shell dumpsys activity activities > activity-final.txt
           python3 scripts/parse_meminfo.py meminfo-running.txt meminfo-final.txt --json meminfo-summary.json
           python3 scripts/parse_gfxinfo.py gfxinfo-final.txt gfxinfo-summary.json
+          if [ -s framestats.txt ]; then
+            python3 scripts/parse_framestats.py framestats.txt framestats-summary.json
+          fi
           grep -iE 'FATAL EXCEPTION|AndroidRuntime|Termux|TerminalView|frame rev=|published=|lastDrawnRev=' logcat-final.txt | tail -200 > terminal-log-summary.txt
           {
             echo '== producer hash inside app UID =='
@@ -250,7 +324,55 @@ jobs:
           echo '== frame metric invariant check (all lines) =='
           python3 .github/workflows/verify_frame_metrics.py terminal-log-summary.txt --min-lines 1
 
-      - name: Upload pixel-loop stress evidence
+      - name: Publish lightweight stress summary
+        if: always()
+        run: |
+          {
+            echo '## Pixel-loop emulator stress summary'
+            echo
+            echo '### Producer and runtime identity'
+            cat stress-evidence.txt 2>/dev/null || true
+            echo
+            echo '### Requested workload'
+            cat stress-metrics.txt 2>/dev/null || true
+            echo
+            echo '### Memory summary'
+            cat meminfo-summary.json 2>/dev/null || true
+            echo
+            echo '### Graphics summary'
+            cat gfxinfo-summary.json 2>/dev/null || true
+            echo
+            echo '### Frame stage summary (gfxinfo framestats)'
+            cat framestats-summary.json 2>/dev/null || true
+            echo
+            echo '### Frame metrics'
+            cat terminal-log-summary.txt 2>/dev/null || true
+          } | tee emulator-stress-summary.txt >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload lightweight stress summary
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: pixel-loop-stress-summary-x86_64
+          path: |
+            pixel-loop-file.txt
+            pixel-loop-dynamic.txt
+            debug-artifacts.sha256
+            package-running.txt
+            stress-metrics.txt
+            stress-evidence.txt
+            meminfo-summary.json
+            gfxinfo-summary.json
+            terminal-log-summary.txt
+            top-thread-samples.txt
+            gfxinfo-final.txt
+            framestats.txt
+            framestats-summary.json
+            atrace.txt
+            emulator-stress-summary.txt
+          if-no-files-found: warn
+
+      - name: Upload full pixel-loop stress evidence
         if: always()
         uses: actions/upload-artifact@v6
         with:
@@ -276,6 +398,8 @@ jobs:
             meminfo-final.txt
             meminfo-summary.json
             gfxinfo-summary.json
+            framestats.txt
+            framestats-summary.json
             atrace-start.txt
             atrace.txt
             top-thread-samples.txt
