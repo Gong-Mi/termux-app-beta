@@ -178,6 +178,76 @@ public class TerminalParserWorkerTest extends TestCase {
                 client.finishLatch.await(5, TimeUnit.SECONDS));
     }
 
+    public void testFinishReleasesUnclosedSynchronizedOutput() throws Exception {
+        WorkerHarness h = new WorkerHarness(MAX_BYTES_PER_BATCH);
+        h.worker.start();
+        try {
+            String partial = "\033[?2026h\033[H\033[2Jpartial-frame";
+            writeString(h.inputQueue, partial);
+            h.worker.requestAppend();
+            long expected = partial.getBytes(StandardCharsets.UTF_8).length;
+            long deadline = System.currentTimeMillis() + 5000;
+            while (h.worker.getMetricsSnapshot().inputBytes < expected
+                    && System.currentTimeMillis() < deadline) {
+                Thread.sleep(5);
+            }
+            assertEquals(0, h.sink.size());
+
+            h.worker.requestFinish(0);
+            waitForFinish(h.client);
+            assertEquals("process exit must release a stuck synchronized frame", 1, h.sink.size());
+            assertTrue(h.sink.last().screen.getTranscriptText().contains("partial-frame"));
+        } finally {
+            h.worker.stop();
+        }
+    }
+
+    public void testSynchronizedOutputPublishesOnlyCompletedVisualFrame() throws Exception {
+        WorkerHarness h = new WorkerHarness(MAX_BYTES_PER_BATCH);
+        h.worker.start();
+        try {
+            String[] chunks = {
+                "\033[?2026h\033[H\033[2Jline-one\r\n",
+                "line-two\r\n",
+                "line-three\r\n",
+            };
+            long expectedBytes = 0;
+            for (String chunk : chunks) {
+                expectedBytes += chunk.getBytes(StandardCharsets.UTF_8).length;
+                writeString(h.inputQueue, chunk);
+                h.worker.requestAppend();
+                long deadline = System.currentTimeMillis() + 5000;
+                while (h.worker.getMetricsSnapshot().inputBytes < expectedBytes
+                        && System.currentTimeMillis() < deadline) {
+                    Thread.sleep(5);
+                }
+                assertEquals("chunk must be parsed", expectedBytes,
+                    h.worker.getMetricsSnapshot().inputBytes);
+                assertEquals("DEC synchronized output must hide partial visual frames",
+                    0, h.sink.size());
+            }
+
+            h.client.textLatch = new CountDownLatch(1);
+            String commit = "line-four\033[?2026l";
+            expectedBytes += commit.getBytes(StandardCharsets.UTF_8).length;
+            writeString(h.inputQueue, commit);
+            h.worker.requestAppend();
+            waitForText(h.client);
+
+            assertEquals("one synchronized producer frame -> one model frame", 1, h.sink.size());
+            TerminalModelFrame frame = h.sink.last();
+            assertNotNull(frame);
+            String text = frame.screen.getTranscriptText();
+            assertTrue(text.contains("line-one"));
+            assertTrue(text.contains("line-two"));
+            assertTrue(text.contains("line-three"));
+            assertTrue(text.contains("line-four"));
+            assertEquals(expectedBytes, h.worker.getMetricsSnapshot().inputBytes);
+        } finally {
+            h.worker.stop();
+        }
+    }
+
     public void testAppendProducesFrameAndRevisionIncreases() throws Exception {
         WorkerHarness h = new WorkerHarness(MAX_BYTES_PER_BATCH);
         h.worker.start();

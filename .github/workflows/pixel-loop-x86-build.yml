@@ -3,6 +3,11 @@ name: Build pixel-loop prebuilts (arm64 + x86_64)
 on:
   push:
     branches: [ ci/pixel-loop-terminal-stress ]
+  pull_request:
+    branches: [ master ]
+    paths:
+      - 'tools/pixel-loop/**'
+      - '.github/workflows/pixel-loop-x86-build.yml'
   workflow_dispatch:
 
 permissions:
@@ -53,6 +58,10 @@ jobs:
           grep -q -- '--fit fill' tools/pixel-loop/src/main.rs
           grep -q -- '--fps' tools/pixel-loop/src/main.rs
 
+      - name: Test producer frame protocol
+        working-directory: tools/pixel-loop
+        run: cargo test --locked
+
       - name: Build only ${{ matrix.abi_name }} producer
         working-directory: tools/pixel-loop
         run: |
@@ -74,6 +83,7 @@ jobs:
           sha256sum "$GITHUB_WORKSPACE/${{ matrix.asset }}" | tee "$GITHUB_WORKSPACE/${{ matrix.asset }}.sha256"
 
       - name: Upload ${{ matrix.abi_name }} Release asset
+        if: github.event_name == 'push' && github.ref == 'refs/heads/ci/pixel-loop-terminal-stress'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

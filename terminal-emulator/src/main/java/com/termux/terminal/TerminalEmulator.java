@@ -207,6 +207,8 @@ public final class TerminalEmulator {
      * @see TerminalEmulator#mapDecSetBitToInternalBit(int)
      */
     private int mCurrentDecSetFlags, mSavedDecSetFlags;
+    /** DEC private mode 2026: producer is building one atomic visual frame. */
+    private boolean mSynchronizedOutputActive;
 
     /**
      * If insert mode (as opposed to replace mode) is active. In insert mode new characters are inserted, pushing
@@ -1320,6 +1322,11 @@ public final class TerminalEmulator {
             }
             case 2004:
                 // Bracketed paste mode - setting bit is enough.
+                break;
+            case 2026:
+                // Synchronized output: parser continues mutating the model, but
+                // TerminalParserWorker holds publication until this mode resets.
+                mSynchronizedOutputActive = setting;
                 break;
             default:
                 unknownParameter(externalBit);
@@ -2638,6 +2645,7 @@ public final class TerminalEmulator {
         mSavedStateMain.mSavedCursorRow = mSavedStateMain.mSavedCursorCol = mSavedStateMain.mSavedEffect = mSavedStateMain.mSavedDecFlags = 0;
         mSavedStateAlt.mSavedCursorRow = mSavedStateAlt.mSavedCursorCol = mSavedStateAlt.mSavedEffect = mSavedStateAlt.mSavedDecFlags = 0;
         mCurrentDecSetFlags = 0;
+        mSynchronizedOutputActive = false;
         // Initial wrap-around is not accurate but makes terminal more useful, especially on a small screen:
         setDecsetinternalBit(DECSET_BIT_AUTOWRAP, true);
         setDecsetinternalBit(DECSET_BIT_CURSOR_ENABLED, true);
@@ -2685,6 +2693,16 @@ public final class TerminalEmulator {
     /** Returns if bracketed paste mode (DECSET 2004) is enabled. */
     public boolean isBracketedPasteModeEnabled() {
         return isDecsetInternalBitSet(DECSET_BIT_BRACKETED_PASTE_MODE);
+    }
+
+    /** Whether DEC synchronized output mode 2026 currently holds publication. */
+    public boolean isSynchronizedOutputActive() {
+        return mSynchronizedOutputActive;
+    }
+
+    /** Process-exit safety: a crashed producer must not freeze publication forever. */
+    void endSynchronizedOutput() {
+        mSynchronizedOutputActive = false;
     }
 
     /** http://www.vt100.net/docs/vt510-rm/DECSC */

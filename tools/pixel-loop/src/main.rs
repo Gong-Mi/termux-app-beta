@@ -10,7 +10,7 @@ use gif::{ColorOutput, DecodeOptions};
 
 static EMBEDDED_GIF: &[u8] = include_bytes!("../assets/video-pixel-loop.gif");
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 struct Pixel { r: u8, g: u8, b: u8 }
 
 struct Frame {
@@ -130,23 +130,87 @@ fn sample(frame: &Frame, x: usize, y: usize, out_w: usize, out_h: usize) -> Pixe
 
 fn prepare_frame(frame: &Frame, fit: Fit, cols: usize, rows: usize) -> RenderedFrame {
     let (w, h) = dimensions(frame.width, frame.height, cols, rows, fit);
-    let mut text = String::with_capacity(((h + 1) / 2) * (w * 36 + 8));
-    text.push_str("\x1b[H\x1b[2J");
-    for cell_y in 0..((h + 1) / 2) {
+    let cell_rows = (h + 1) / 2;
+    let mut text = String::with_capacity(cell_rows * (w * 36 + 8) + 24);
+    // DEC private mode 2026 makes the many PTY/parser chunks below one atomic
+    // visual frame. TerminalParserWorker holds model-frame publication until
+    // the reset marker arrives.
+    text.push_str("\x1b[?2026h\x1b[H\x1b[2J");
+    let mut current_foreground: Option<Pixel> = None;
+    let mut current_background: Option<Pixel> = None;
+    for cell_y in 0..cell_rows {
         let top_y = cell_y * 2;
         let bottom_y = (top_y + 1).min(h - 1);
         for x in 0..w {
             let top = sample(frame, x, top_y, w, h);
             let bottom = sample(frame, x, bottom_y, w, h);
-            let _ = write!(text, "\x1b[38;2;{};{};{}m\x1b[48;2;{};{};{}m▀", top.r, top.g, top.b, bottom.r, bottom.g, bottom.b);
+            if current_foreground != Some(top) {
+                let _ = write!(text, "\x1b[38;2;{};{};{}m", top.r, top.g, top.b);
+                current_foreground = Some(top);
+            }
+            if current_background != Some(bottom) {
+                let _ = write!(text, "\x1b[48;2;{};{};{}m", bottom.r, bottom.g, bottom.b);
+                current_background = Some(bottom);
+            }
+            text.push('▀');
         }
-        text.push_str("\x1b[0m\r\n");
+        text.push_str("\x1b[0m");
+        // A CRLF after the bottom terminal row scrolls the alternate screen by
+        // one line on every video frame. Only move between rows, never past the
+        // final row.
+        if cell_y + 1 < cell_rows {
+            text.push_str("\r\n");
+        }
     }
+    text.push_str("\x1b[?2026l");
     RenderedFrame { bytes: text.into_bytes(), delay: frame.delay }
 }
 
 fn prepare_frames(frames: &[Frame], fit: Fit, cols: usize, rows: usize) -> Vec<RenderedFrame> {
     frames.iter().map(|frame| prepare_frame(frame, fit, cols, rows)).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn frame() -> Frame {
+        Frame {
+            width: 1,
+            height: 2,
+            pixels: vec![Pixel { r: 1, g: 2, b: 3 }, Pixel { r: 4, g: 5, b: 6 }],
+            delay: Duration::from_millis(16),
+        }
+    }
+
+    #[test]
+    fn rendered_frame_is_wrapped_in_synchronized_output() {
+        let rendered = prepare_frame(&frame(), Fit::Fill, 2, 2);
+        assert!(rendered.bytes.starts_with(b"\x1b[?2026h\x1b[H\x1b[2J"));
+        assert!(rendered.bytes.ends_with(b"\x1b[?2026l"));
+    }
+
+    #[test]
+    fn repeated_cell_colors_reuse_sgr_state() {
+        let rendered = prepare_frame(&Frame {
+            width: 1,
+            height: 2,
+            pixels: vec![Pixel { r: 1, g: 2, b: 3 }, Pixel { r: 1, g: 2, b: 3 }],
+            delay: Duration::from_millis(16),
+        }, Fit::Fill, 4, 1);
+        let text = String::from_utf8(rendered.bytes).unwrap();
+        assert_eq!(text.matches("38;2;1;2;3m").count(), 1);
+        assert_eq!(text.matches("48;2;1;2;3m").count(), 1);
+        assert_eq!(text.matches('▀').count(), 4);
+    }
+
+    #[test]
+    fn rendered_frame_does_not_scroll_after_last_row() {
+        let rendered = prepare_frame(&frame(), Fit::Fill, 2, 2);
+        let commit = b"\x1b[?2026l";
+        let before_commit = rendered.bytes.strip_suffix(commit).unwrap_or(&rendered.bytes);
+        assert!(!before_commit.ends_with(b"\r\n"));
+    }
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {

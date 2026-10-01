@@ -332,6 +332,11 @@ public final class TerminalParserWorker {
 
         if (mSession != null) mSession.cleanupResources(exitCode);
 
+        // A producer may die between DECSET 2026 begin/end markers. Never let
+        // that leave the terminal permanently held: process exit is an implicit
+        // synchronized-output commit boundary.
+        mEmulator.endSynchronizedOutput();
+
         String exitDescription = "\r\n[Process completed";
         if (exitCode > 0) {
             exitDescription += " (code " + exitCode + ")";
@@ -348,6 +353,13 @@ public final class TerminalParserWorker {
     }
 
     private void publishFrame() {
+        // DEC private mode 2026 groups a producer's many PTY/parser chunks into
+        // one atomic visual frame. Continue mutating the emulator while active,
+        // but never expose the intermediate clear + first-N-row snapshots.
+        if (mEmulator.isSynchronizedOutputActive()) {
+            mDirty = true;
+            return;
+        }
         TerminalFrameSink sink = mFrameSink;
         if (sink != null && !sink.shouldCaptureSnapshot()) {
             // The render side already has a frame that has not been consumed.
