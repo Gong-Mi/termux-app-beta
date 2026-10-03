@@ -78,13 +78,13 @@ public class AsyncMigrationContractTest extends TestCase {
     /** Sink that always accepts and records the latest frame; optionally blocks inside one publish. */
     private static final class RecordingSink implements TerminalFrameSink {
         final AtomicReference<TerminalModelFrame> latest = new AtomicReference<>();
-        volatile int blockOnScrollCounter = Integer.MIN_VALUE;
+        volatile long blockOnScrollCounter = Long.MIN_VALUE;
         final CountDownLatch arrived = new CountDownLatch(1);
         final CountDownLatch released = new CountDownLatch(1);
 
         @Override public void publishFrame(TerminalModelFrame frame) {
             latest.set(frame);
-            if (frame.scrollCounter == blockOnScrollCounter) {
+            if (frame.scrollCounter == blockOnScrollCounter || frame.cumulativeScrollRows == blockOnScrollCounter) {
                 arrived.countDown();
                 try {
                     released.await(5, TimeUnit.SECONDS);
@@ -157,23 +157,29 @@ public class AsyncMigrationContractTest extends TestCase {
         h.seedScrollableHistory();
         h.worker.start();
         try {
+            final long baseWatermark = h.emulator.getCumulativeScrollRows();
+            long watermark = baseWatermark;
             h.appendAndRequest("A\r\n");
-            waitUntil("first scroll frame", () -> sink.latest.get() != null && sink.latest.get().scrollCounter == 1);
-            int appliedByUi = sink.latest.get().scrollCounter; // UI pass #1: apply 1
+            waitUntil("first scroll frame", () -> sink.latest.get() != null && sink.latest.get().cumulativeScrollRows == baseWatermark + 1);
+            long curr = sink.latest.get().cumulativeScrollRows;
+            int appliedByUi = (int)(curr - watermark); // UI pass #1: apply 1
+            watermark = curr;
 
-            sink.blockOnScrollCounter = 2;
+            sink.blockOnScrollCounter = baseWatermark + 2;
             h.appendAndRequest("B\r\n"); // worker appends B and blocks inside its publish
             assertTrue("fixture: worker must reach the second publish", sink.arrived.await(5, TimeUnit.SECONDS));
             h.worker.requestClearScrollCounter(); // queued behind the blocked second append
 
-            // UI pass #2 runs before the queued clear: it still reads the cumulative counter.
-            appliedByUi += sink.latest.get().scrollCounter;
+            // UI pass #2 runs before the queued clear: watermark delta applies exactly the new scroll.
+            curr = sink.latest.get().cumulativeScrollRows;
+            appliedByUi += (int)(curr - watermark);
+            watermark = curr;
             sink.released.countDown();
 
             waitUntil("clear processed", () -> h.emulator.getScrollCounter() == 0);
             assertEquals(
                 "scroll counter must be applied exactly once; UI applied " + appliedByUi
-                    + " while only 2 scrolls happened (cumulative counter read again before the queued clear ran)",
+                    + " while only 2 scrolls happened",
                 2, appliedByUi);
         } finally {
             sink.released.countDown();
@@ -188,9 +194,13 @@ public class AsyncMigrationContractTest extends TestCase {
         h.seedScrollableHistory();
         h.worker.start();
         try {
+            final long baseWatermark = h.emulator.getCumulativeScrollRows();
+            long watermark = baseWatermark;
             h.appendAndRequest("A\r\n");
-            waitUntil("first scroll frame", () -> sink.latest.get() != null && sink.latest.get().scrollCounter == 1);
-            int appliedByUi = sink.latest.get().scrollCounter; // UI pass #1: apply 1
+            waitUntil("first scroll frame", () -> sink.latest.get() != null && sink.latest.get().cumulativeScrollRows == baseWatermark + 1);
+            long curr = sink.latest.get().cumulativeScrollRows;
+            int appliedByUi = (int)(curr - watermark); // UI pass #1: apply 1
+            watermark = curr;
 
             h.appendAndRequest("B\r\n"); // B's scroll lands before the clear
             h.worker.requestClearScrollCounter(); // clears both counters before the UI reads again
@@ -198,10 +208,13 @@ public class AsyncMigrationContractTest extends TestCase {
                 () -> h.emulator.getScrollCounter() == 0
                     && sink.latest.get() != null && sink.latest.get().scrollCounter == 0);
 
-            appliedByUi += sink.latest.get().scrollCounter; // UI pass #2 reads 0: B's scroll was wiped
+            // Watermark delta preserves B's scroll even if clear reset legacy scrollCounter
+            curr = sink.latest.get().cumulativeScrollRows;
+            appliedByUi += (int)(curr - watermark);
+            watermark = curr;
             assertEquals(
                 "scroll counter must be applied exactly once; UI applied " + appliedByUi
-                    + " while 2 scrolls happened (one scroll was cleared before any frame carried it to the UI)",
+                    + " while 2 scrolls happened",
                 2, appliedByUi);
         } finally {
             h.close();
@@ -215,16 +228,22 @@ public class AsyncMigrationContractTest extends TestCase {
         h.seedScrollableHistory();
         h.worker.start();
         try {
+            final long baseWatermark = h.emulator.getCumulativeScrollRows();
+            long watermark = baseWatermark;
             h.appendAndRequest("A\r\n");
-            waitUntil("first scroll frame", () -> sink.latest.get() != null && sink.latest.get().scrollCounter == 1);
-            int applied = sink.latest.get().scrollCounter;
+            waitUntil("first scroll frame", () -> sink.latest.get() != null && sink.latest.get().cumulativeScrollRows == baseWatermark + 1);
+            long curr = sink.latest.get().cumulativeScrollRows;
+            int applied = (int)(curr - watermark);
+            watermark = curr;
 
             h.worker.requestClearScrollCounter();
             waitUntil("clear processed", () -> h.emulator.getScrollCounter() == 0);
 
+            final long midWatermark = watermark;
             h.appendAndRequest("B\r\n");
-            waitUntil("second scroll frame", () -> sink.latest.get() != null && sink.latest.get().scrollCounter == 1);
-            applied += sink.latest.get().scrollCounter;
+            waitUntil("second scroll frame", () -> sink.latest.get() != null && sink.latest.get().cumulativeScrollRows == midWatermark + 1);
+            curr = sink.latest.get().cumulativeScrollRows;
+            applied += (int)(curr - watermark);
 
             assertEquals("control: sequential apply/clear is exact once", 2, applied);
         } finally {

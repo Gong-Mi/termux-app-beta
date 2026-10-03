@@ -100,6 +100,8 @@ public final class TerminalView extends View {
 
     /** The top row of text to display. Ranges from -activeTranscriptRows to 0. */
     int mTopRow;
+    /** Cumulative scroll rows consumed by this view; monotonic watermark avoiding clearScrollCounter races. */
+    long mLastAppliedScrollRows;
     int[] mDefaultSelectors = new int[]{-1,-1,-1,-1};
 
     float mScaleFactor = 1.f;
@@ -331,6 +333,7 @@ public final class TerminalView extends View {
         mEmulator = null;
         mCombiningAccent = 0;
         mTopRow = 0;
+        mLastAppliedScrollRows = session != null ? session.getCumulativeScrollRows() : 0;
         mLastRenderFrame = null;
         mLastRenderedFrame = null;
         mLastModelFrame = null;
@@ -542,7 +545,13 @@ public final class TerminalView extends View {
         if (isSelectingText() || mTermSession.isAutoScrollDisabled()) {
 
             // Do not scroll when selecting text.
-            int rowShift = mTermSession.getScrollCounter();
+            long currentCumulative = mTermSession.getCumulativeScrollRows();
+            int rowShift = 0;
+            if (currentCumulative > mLastAppliedScrollRows) {
+                rowShift = (int) Math.min(currentCumulative - mLastAppliedScrollRows, Integer.MAX_VALUE);
+            }
+            mLastAppliedScrollRows = currentCumulative;
+
             if (-mTopRow + rowShift > rowsInHistory) {
                 // .. unless we're hitting the end of history transcript, in which
                 // case we abort text selection and scroll to end.
@@ -558,6 +567,9 @@ public final class TerminalView extends View {
                 mTopRow -= rowShift;
                 decrementYTextSelectionCursors(rowShift);
             }
+        } else {
+            // Keep watermark up to date even when not selecting text.
+            mLastAppliedScrollRows = mTermSession.getCumulativeScrollRows();
         }
 
         if (!skipScrolling && mTopRow != 0) {
@@ -571,7 +583,6 @@ public final class TerminalView extends View {
             mTopRow = 0;
         }
 
-        mTermSession.clearScrollCounter();
         mTermSession.setViewport(mTopRow);
 
         invalidate();
