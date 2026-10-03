@@ -522,6 +522,15 @@ public final class TerminalSession extends TerminalOutput {
         }
     }
 
+    /** @return cumulative scroll rows from the latest frame or live emulator. */
+    public long getCumulativeScrollRows() {
+        TerminalModelFrame frame = mLatestFrame;
+        if (frame != null) return frame.cumulativeScrollRows;
+        synchronized (mEmulator) {
+            return mEmulator != null ? mEmulator.getCumulativeScrollRows() : 0;
+        }
+    }
+
     /** Clear the scroll counter, serialized with parser worker updates. */
     public void clearScrollCounter() {
         if (mParserWorker != null) {
