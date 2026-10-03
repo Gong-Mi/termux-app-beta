@@ -517,8 +517,9 @@ public final class TerminalSession extends TerminalOutput {
     public int getScrollCounter() {
         TerminalModelFrame frame = mLatestFrame;
         if (frame != null) return frame.scrollCounter;
+        if (mEmulator == null) return 0;
         synchronized (mEmulator) {
-            return mEmulator != null ? mEmulator.getScrollCounter() : 0;
+            return mEmulator.getScrollCounter();
         }
     }
 
@@ -526,8 +527,9 @@ public final class TerminalSession extends TerminalOutput {
     public long getCumulativeScrollRows() {
         TerminalModelFrame frame = mLatestFrame;
         if (frame != null) return frame.cumulativeScrollRows;
+        if (mEmulator == null) return 0;
         synchronized (mEmulator) {
-            return mEmulator != null ? mEmulator.getCumulativeScrollRows() : 0;
+            return mEmulator.getCumulativeScrollRows();
         }
     }
 
@@ -573,8 +575,9 @@ public final class TerminalSession extends TerminalOutput {
     public CharSequence getScreenTranscriptText() {
         TerminalModelFrame frame = mLatestFrame;
         if (frame != null) return frame.screen.getTranscriptText();
+        if (mEmulator == null) return "";
         synchronized (mEmulator) {
-            return mEmulator != null ? mEmulator.getScreen().getTranscriptText() : "";
+            return mEmulator.getScreen().getTranscriptText();
         }
     }
 
@@ -584,8 +587,9 @@ public final class TerminalSession extends TerminalOutput {
         if (frame != null) {
             return frame.cursorEnabled;
         }
+        if (mEmulator == null) return false;
         synchronized (mEmulator) {
-            return mEmulator != null && mEmulator.isCursorEnabled();
+            return mEmulator.isCursorEnabled();
         }
     }
 
@@ -617,8 +621,9 @@ public final class TerminalSession extends TerminalOutput {
 
     /** @return the word at the given column/row, or null if unavailable. */
     public String getWordAtLocation(int x, int y) {
+        if (mEmulator == null) return null;
         synchronized (mEmulator) {
-            return mEmulator != null ? mEmulator.getScreen().getWordAtLocation(x, y) : null;
+            return mEmulator.getScreen().getWordAtLocation(x, y);
         }
     }
 
@@ -635,8 +640,9 @@ public final class TerminalSession extends TerminalOutput {
 
     /** Get selected text in the given region from the latest frame or live screen. */
     public String getSelectedText(int x1, int y1, int x2, int y2, boolean rectangular) {
+        if (mEmulator == null) return null;
         synchronized (mEmulator) {
-            return mEmulator != null ? mEmulator.getScreen().getSelectedText(x1, y1, x2, y2, rectangular) : null;
+            return mEmulator.getScreen().getSelectedText(x1, y1, x2, y2, rectangular);
         }
     }
 
