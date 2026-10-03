@@ -28,6 +28,7 @@ public final class TerminalModelFrame implements FrameRevision {
     public final int cursorRow;
     public final int cursorStyle;
     public final boolean cursorVisible;
+    public final boolean cursorEnabled;
 
     /** Reverse-video flag captured at snapshot time. */
     public final boolean reverseVideo;
@@ -86,6 +87,7 @@ public final class TerminalModelFrame implements FrameRevision {
         this.cursorRow = emulator.getCursorRow();
         this.cursorStyle = emulator.getCursorStyle();
         this.cursorVisible = emulator.shouldCursorBeVisible();
+        this.cursorEnabled = emulator.isCursorEnabled();
         this.reverseVideo = emulator.isReverseVideo();
         this.mouseTrackingActive = emulator.isMouseTrackingActive();
         this.alternateBufferActive = emulator.isAlternateBufferActive();

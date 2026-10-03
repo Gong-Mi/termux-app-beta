@@ -573,8 +573,7 @@ public final class TerminalSession extends TerminalOutput {
     public boolean isCursorEnabled() {
         TerminalModelFrame frame = mLatestFrame;
         if (frame != null) {
-            // Cursor visible implies enabled; use cursorStyle as fallback if needed.
-            return frame.cursorVisible || frame.cursorStyle != 0;
+            return frame.cursorEnabled;
         }
         synchronized (mEmulator) {
             return mEmulator != null && mEmulator.isCursorEnabled();
