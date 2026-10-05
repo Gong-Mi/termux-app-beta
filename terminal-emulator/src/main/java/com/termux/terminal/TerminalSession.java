@@ -148,7 +148,12 @@ public final class TerminalSession extends TerminalOutput {
         mFrameSink = new TerminalFrameSink() {
             @Override
             public void publishFrame(TerminalModelFrame frame) {
-                mLatestFrame = frame;
+                synchronized (TerminalSession.this) {
+                    // A worker can retain the previous route across detach/reattach.
+                    // Only the current route may update the snapshot cache.
+                    if (mFrameSink != this) return;
+                    mLatestFrame = frame;
+                }
                 if (delegate != null) delegate.publishFrame(frame);
             }
 
@@ -184,10 +189,14 @@ public final class TerminalSession extends TerminalOutput {
      * the new view sink (its mailbox is empty, so {@code shouldCaptureSnapshot()} is
      * true on the next publish and the pending dirty state produces a fresh frame). */
     public synchronized void detachFrameSink() {
+        // No further snapshots are captured while detached; cached attached state
+        // must not win over the live emulator in background-session getters.
+        mLatestFrame = null;
         mFrameSink = new TerminalFrameSink() {
             @Override
             public void publishFrame(TerminalModelFrame frame) {
-                mLatestFrame = frame;
+                // The forced FINISH snapshot has no view consumer. Leave getters
+                // on the current emulator rather than reviving an attached cache.
             }
 
             @Override
