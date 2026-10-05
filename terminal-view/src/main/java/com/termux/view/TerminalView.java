@@ -332,8 +332,8 @@ public final class TerminalView extends View {
         // buffer; after a switch they would highlight arbitrary cells of the NEW session.
         // The five other stop sites are input events (tap/key/back/send); a session switch
         // is an equally valid end of the selection gesture.
-        if (mTextSelectionCursorController != null && mTextSelectionCursorController.isActive()) {
-            hideTextSelectionCursors();
+        if (mTextSelectionCursorController != null &&
+                mTextSelectionCursorController.hideForSessionChange()) {
             mClient.copyModeChanged(false);
         }
 
