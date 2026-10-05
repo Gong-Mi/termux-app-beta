@@ -10,12 +10,14 @@ physical-device acceptance.
 |---|---|---|
 | `TerminalSelectionCoordinatesTest` | `terminal-view` / JVM | Renderer baseline, floor-based pixel-to-row mapping, transcript viewport offset |
 | `TerminalSelectionRangeTest` | `terminal-view` / JVM | Selection controller protocol `[y1,y2,x1,x2]` is converted to render-frame `[x1,y1,x2,y2]` |
-| `TerminalActionModePolicyTest` | `terminal-view` / JVM | Xiaomi/Redmi/POCO primary action mode; other vendors floating action mode |
 | `ClipboardPasteTargetTest` | `support_ui` / JVM | Explicit session wins; null requested session falls back to current session |
 | `ClipboardAndStorageInstrumentedTest` | `app` / Android emulator instrumentation | API-scoped clipboard write/read boundary, storage capabilities, runtime permission state, MediaStore lifecycle |
+| `VerificationBuildTypeInstrumentedTest` | `app` / verification Android instrumentation | Release-derived `verification` artifact is non-debuggable, R8-disabled for stable test symbols, and retains `com.termux` package identity |
 
 Clipboard evidence is split deliberately:
 
+- Selection Copy/Paste actions are in `TextSelectionCursorController`'s `ActionMode.TYPE_FLOATING`; selection handles are separate views. ClipboardService/SystemUI's clipboard preview is a different overlay created after `setPrimaryClip()`.
+- `verification` is non-debuggable and test-key-signed but deliberately not minified. It verifies non-debuggable runtime behavior, not R8 equivalence to the minified release APK.
 - API 32 instrumentation proves `setPrimaryClip()` plus exact in-process read-back.
 - API 33+ instrumentation proves the write call is accepted; Android clipboard privacy prevents
   a shell/instrumentation UID from using `getPrimaryClip()` as a foreground-app read-back oracle.

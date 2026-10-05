@@ -26,6 +26,7 @@ android {
         buildConfig true
     }
     compileSdkVersion project.properties.compileSdkVersion.toInteger()
+    testBuildType "verification"
     ndkVersion = System.getenv("JITPACK_NDK_VERSION") ?: project.properties.ndkVersion
     def appVersionName = System.getenv("TERMUX_APP_VERSION_NAME") ?: ""
     def apkVersionTag = System.getenv("TERMUX_APK_VERSION_TAG") ?: ""
@@ -113,6 +114,18 @@ android {
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
 
+        verification {
+            // Release-derived, non-debuggable and test-key-signed for runtime verification.
+            // Keep R8 off so instrumentation can retain stable app symbols; this is not a
+            // substitute for the minified release artifact. Keep the production application id:
+            // Termux data/bootstrap paths depend on it.
+            initWith release
+            debuggable false
+            minifyEnabled false
+            signingConfig signingConfigs.debug
+            matchingFallbacks = ['release']
+        }
+
         debug {
             signingConfig signingConfigs.debug
         }
@@ -150,13 +163,9 @@ android {
 
     applicationVariants.all { variant ->
         variant.outputs.all { output ->
-            if (variant.buildType.name == "debug") {
-                def abi = output.getFilter(com.android.build.OutputFile.ABI)
-                outputFileName = new File("termux-app_" + (apkVersionTag ? apkVersionTag : project.ext.packageVariant + "-" + "debug") + "_" + (abi ? abi : "universal") + ".apk")
-            } else if (variant.buildType.name == "release") {
-                def abi = output.getFilter(com.android.build.OutputFile.ABI)
-                outputFileName = new File("termux-app_" + (apkVersionTag ? apkVersionTag : project.ext.packageVariant + "-" + "release") + "_" + (abi ? abi : "universal") + ".apk")
-            }
+            def abi = output.getFilter(com.android.build.OutputFile.ABI)
+            def buildTag = apkVersionTag ? apkVersionTag : project.ext.packageVariant + "-" + variant.buildType.name
+            outputFileName = new File("termux-app_" + buildTag + "_" + (abi ? abi : "universal") + ".apk")
         }
     }
 
