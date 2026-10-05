@@ -262,6 +262,9 @@ public final class TerminalEmulator {
      */
     private int mScrollCounter = 0;
 
+    /** Total cumulative count of rows scrolled into history over the lifetime of this session. */
+    private long mCumulativeScrollRows = 0;
+
     /** If automatic scrolling of terminal is disabled */
     private boolean mAutoScrollDisabled;
 
@@ -2286,6 +2289,7 @@ public final class TerminalEmulator {
     private void scrollDownOneLine() {
         mAppendStepMetrics.recordScrollOperation();
         mScrollCounter++;
+        mCumulativeScrollRows++;
         long currentStyle = getStyle();
         if (mLeftMargin != 0 || mRightMargin != mColumns) {
             // Horizontal margin: Do not put anything into scroll history, just non-margin part of screen up.
@@ -2606,6 +2610,10 @@ public final class TerminalEmulator {
 
     public void clearScrollCounter() {
         mScrollCounter = 0;
+    }
+
+    public long getCumulativeScrollRows() {
+        return mCumulativeScrollRows;
     }
 
     public boolean isAutoScrollDisabled() {

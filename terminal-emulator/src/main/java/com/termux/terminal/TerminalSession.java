@@ -148,7 +148,12 @@ public final class TerminalSession extends TerminalOutput {
         mFrameSink = new TerminalFrameSink() {
             @Override
             public void publishFrame(TerminalModelFrame frame) {
-                mLatestFrame = frame;
+                synchronized (TerminalSession.this) {
+                    // A worker can retain the previous route across detach/reattach.
+                    // Only the current route may update the snapshot cache.
+                    if (mFrameSink != this) return;
+                    mLatestFrame = frame;
+                }
                 if (delegate != null) delegate.publishFrame(frame);
             }
 
@@ -175,17 +180,28 @@ public final class TerminalSession extends TerminalOutput {
         if (worker != null) worker.onFrameConsumed(frame);
     }
 
-    /** Detach the current view route; future worker frames are not delivered to it. */
+    /** Detach the current view route; future worker frames are not delivered to it.
+     *
+     * <p>The detached sink refuses eager snapshot capture: with no consumer, the worker
+     * would otherwise pay a full screen copy per PTY publish batch and drop the frame
+     * into {@code mLatestFrame} where nobody reads it. Snapshot getters fall back to
+     * synchronized emulator reads while detached, and a re-attach resumes capture through
+     * the new view sink (its mailbox is empty, so {@code shouldCaptureSnapshot()} is
+     * true on the next publish and the pending dirty state produces a fresh frame). */
     public synchronized void detachFrameSink() {
+        // No further snapshots are captured while detached; cached attached state
+        // must not win over the live emulator in background-session getters.
+        mLatestFrame = null;
         mFrameSink = new TerminalFrameSink() {
             @Override
             public void publishFrame(TerminalModelFrame frame) {
-                mLatestFrame = frame;
+                // The forced FINISH snapshot has no view consumer. Leave getters
+                // on the current emulator rather than reviving an attached cache.
             }
 
             @Override
             public boolean shouldCaptureSnapshot() {
-                return true;
+                return false;
             }
         };
         if (mParserWorker != null) mParserWorker.setFrameSink(mFrameSink);
@@ -517,8 +533,19 @@ public final class TerminalSession extends TerminalOutput {
     public int getScrollCounter() {
         TerminalModelFrame frame = mLatestFrame;
         if (frame != null) return frame.scrollCounter;
+        if (mEmulator == null) return 0;
         synchronized (mEmulator) {
-            return mEmulator != null ? mEmulator.getScrollCounter() : 0;
+            return mEmulator.getScrollCounter();
+        }
+    }
+
+    /** @return cumulative scroll rows from the latest frame or live emulator. */
+    public long getCumulativeScrollRows() {
+        TerminalModelFrame frame = mLatestFrame;
+        if (frame != null) return frame.cumulativeScrollRows;
+        if (mEmulator == null) return 0;
+        synchronized (mEmulator) {
+            return mEmulator.getCumulativeScrollRows();
         }
     }
 
@@ -564,8 +591,9 @@ public final class TerminalSession extends TerminalOutput {
     public CharSequence getScreenTranscriptText() {
         TerminalModelFrame frame = mLatestFrame;
         if (frame != null) return frame.screen.getTranscriptText();
+        if (mEmulator == null) return "";
         synchronized (mEmulator) {
-            return mEmulator != null ? mEmulator.getScreen().getTranscriptText() : "";
+            return mEmulator.getScreen().getTranscriptText();
         }
     }
 
@@ -573,11 +601,11 @@ public final class TerminalSession extends TerminalOutput {
     public boolean isCursorEnabled() {
         TerminalModelFrame frame = mLatestFrame;
         if (frame != null) {
-            // Cursor visible implies enabled; use cursorStyle as fallback if needed.
-            return frame.cursorVisible || frame.cursorStyle != 0;
+            return frame.cursorEnabled;
         }
+        if (mEmulator == null) return false;
         synchronized (mEmulator) {
-            return mEmulator != null && mEmulator.isCursorEnabled();
+            return mEmulator.isCursorEnabled();
         }
     }
 
@@ -609,8 +637,9 @@ public final class TerminalSession extends TerminalOutput {
 
     /** @return the word at the given column/row, or null if unavailable. */
     public String getWordAtLocation(int x, int y) {
+        if (mEmulator == null) return null;
         synchronized (mEmulator) {
-            return mEmulator != null ? mEmulator.getScreen().getWordAtLocation(x, y) : null;
+            return mEmulator.getScreen().getWordAtLocation(x, y);
         }
     }
 
@@ -627,8 +656,9 @@ public final class TerminalSession extends TerminalOutput {
 
     /** Get selected text in the given region from the latest frame or live screen. */
     public String getSelectedText(int x1, int y1, int x2, int y2, boolean rectangular) {
+        if (mEmulator == null) return null;
         synchronized (mEmulator) {
-            return mEmulator != null ? mEmulator.getScreen().getSelectedText(x1, y1, x2, y2, rectangular) : null;
+            return mEmulator.getScreen().getSelectedText(x1, y1, x2, y2, rectangular);
         }
     }
 

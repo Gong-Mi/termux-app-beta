@@ -59,12 +59,21 @@ public class TextSelectionCursorController implements CursorController {
 
     @Override
     public boolean hide() {
+        return hide(false);
+    }
+
+    /** End selection when its owning session changes, bypassing gesture debounce. */
+    public boolean hideForSessionChange() {
+        return hide(true);
+    }
+
+    private boolean hide(boolean sessionChange) {
         if (!isActive()) return false;
 
         // prevent hide calls right after a show call, like long pressing the down key
         // 300ms seems long enough that it wouldn't cause hide problems if action button
         // is quickly clicked after the show, otherwise decrease it
-        if (System.currentTimeMillis() - mShowStartTime < 300) {
+        if (!sessionChange && System.currentTimeMillis() - mShowStartTime < 300) {
             return false;
         }
 

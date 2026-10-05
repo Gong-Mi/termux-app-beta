@@ -100,6 +100,8 @@ public final class TerminalView extends View {
 
     /** The top row of text to display. Ranges from -activeTranscriptRows to 0. */
     int mTopRow;
+    /** Cumulative scroll rows consumed by this view; monotonic watermark avoiding clearScrollCounter races. */
+    long mLastAppliedScrollRows;
     int[] mDefaultSelectors = new int[]{-1,-1,-1,-1};
 
     float mScaleFactor = 1.f;
@@ -326,14 +328,30 @@ public final class TerminalView extends View {
         TerminalSession previousSession = mTermSession;
         if (previousSession != null) previousSession.detachFrameSink();
 
+        // Selection handles project View-local coordinates onto the attached session's
+        // buffer; after a switch they would highlight arbitrary cells of the NEW session.
+        // The five other stop sites are input events (tap/key/back/send); a session switch
+        // is an equally valid end of the selection gesture.
+        if (mTextSelectionCursorController != null &&
+                mTextSelectionCursorController.hideForSessionChange()) {
+            mClient.copyModeChanged(false);
+        }
+
         final long sessionGeneration = mSessionGate.advance();
         mTermSession = session;
         mEmulator = null;
         mCombiningAccent = 0;
         mTopRow = 0;
+        mLastAppliedScrollRows = session != null ? session.getCumulativeScrollRows() : 0;
         mLastRenderFrame = null;
         mLastRenderedFrame = null;
         mLastModelFrame = null;
+        // Stale last-published selection labels would make the new session's first
+        // no-selection draw compare equal and skip building its first render frame.
+        mLastRenderSelectionX1 = Integer.MIN_VALUE;
+        mLastRenderSelectionY1 = Integer.MIN_VALUE;
+        mLastRenderSelectionX2 = Integer.MIN_VALUE;
+        mLastRenderSelectionY2 = Integer.MIN_VALUE;
 
         final TerminalRenderMailbox<TerminalModelFrame> mailbox = new TerminalRenderMailbox<>(mFrameMetrics);
         mRenderMailbox = mailbox;
@@ -542,7 +560,13 @@ public final class TerminalView extends View {
         if (isSelectingText() || mTermSession.isAutoScrollDisabled()) {
 
             // Do not scroll when selecting text.
-            int rowShift = mTermSession.getScrollCounter();
+            long currentCumulative = mTermSession.getCumulativeScrollRows();
+            int rowShift = 0;
+            if (currentCumulative > mLastAppliedScrollRows) {
+                rowShift = (int) Math.min(currentCumulative - mLastAppliedScrollRows, Integer.MAX_VALUE);
+            }
+            mLastAppliedScrollRows = currentCumulative;
+
             if (-mTopRow + rowShift > rowsInHistory) {
                 // .. unless we're hitting the end of history transcript, in which
                 // case we abort text selection and scroll to end.
@@ -558,6 +582,9 @@ public final class TerminalView extends View {
                 mTopRow -= rowShift;
                 decrementYTextSelectionCursors(rowShift);
             }
+        } else {
+            // Keep watermark up to date even when not selecting text.
+            mLastAppliedScrollRows = mTermSession.getCumulativeScrollRows();
         }
 
         if (!skipScrolling && mTopRow != 0) {
@@ -571,7 +598,6 @@ public final class TerminalView extends View {
             mTopRow = 0;
         }
 
-        mTermSession.clearScrollCounter();
         mTermSession.setViewport(mTopRow);
 
         invalidate();
@@ -1518,31 +1544,34 @@ public final class TerminalView extends View {
 
     private class TerminalCursorBlinkerRunnable implements Runnable {
 
-        private TerminalSession mSession;
         private final int mBlinkRate;
 
         // Initialize with false so that initial blink state is visible after toggling
         boolean mCursorVisible = false;
 
         public TerminalCursorBlinkerRunnable(TerminalSession session, int blinkRate) {
-            mSession = session;
             mBlinkRate = blinkRate;
         }
 
         public void setEmulator(TerminalEmulator emulator) {
-            // Kept for API compatibility; the runnable now resolves all state from the session.
+            // Kept for API compatibility; the runnable resolves all state from the session.
         }
 
         public void run() {
             try {
-                if (mSession != null) {
+                // Resolve the CURRENT attached session at tick time: the blinker outlives
+                // attachSession switches, and holding the session captured at start time
+                // keeps toggling the previous session's cursor after a switch (upstream
+                // fixed the same stale-target bug for the emulator in d3c34ad1).
+                TerminalSession session = mTermSession;
+                if (session != null) {
                     // Toggle the blink state and then invalidate() the view so
                     // that onDraw() is called, which then calls TerminalRenderer.render()
                     // which checks with TerminalEmulator.shouldCursorBeVisible() to decide whether
                     // to draw the cursor or not
                     mCursorVisible = !mCursorVisible;
                     //mClient.logVerbose(LOG_TAG, "Toggling cursor blink state to " + mCursorVisible);
-                    mSession.setCursorBlinkState(mCursorVisible);
+                    session.setCursorBlinkState(mCursorVisible);
                     invalidate();
                 }
             } finally {

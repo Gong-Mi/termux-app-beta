@@ -11,6 +11,13 @@ android {
         targetSdkVersion project(":app").ext.buildTargetSdk
     }
 
+    buildTypes {
+        verification {
+            initWith release
+            matchingFallbacks = ['release']
+        }
+    }
+
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_1_8
         targetCompatibility JavaVersion.VERSION_1_8

@@ -342,14 +342,18 @@ public final class TerminalParserWorker {
 
         byte[] bytesToWrite = exitDescription.getBytes(java.nio.charset.StandardCharsets.UTF_8);
         mEmulator.append(bytesToWrite, bytesToWrite.length);
-        publishFrame();
+        publishFrame(true);
         mClient.onSessionFinished(mSession);
         mStopped = true;
     }
 
     private void publishFrame() {
+        publishFrame(false);
+    }
+
+    private void publishFrame(boolean forceTerminal) {
         TerminalFrameSink sink = mFrameSink;
-        if (sink != null && !sink.shouldCaptureSnapshot()) {
+        if (sink != null && !forceTerminal && !sink.shouldCaptureSnapshot()) {
             // The render side already has a frame that has not been consumed.
             // Skip the expensive snapshot unless the consumer has already drawn
             // the previous frame, in which case we can publish the latest state now.

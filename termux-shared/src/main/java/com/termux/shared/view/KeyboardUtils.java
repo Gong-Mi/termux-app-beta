@@ -100,13 +100,22 @@ public class KeyboardUtils {
         return (activity.getWindow().getAttributes().flags & WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM) != 0;
     }
 
+    /**
+     * Set the window soft input mode to {@link WindowManager.LayoutParams#SOFT_INPUT_STATE_ALWAYS_HIDDEN}
+     * while preserving {@link WindowManager.LayoutParams#SOFT_INPUT_ADJUST_RESIZE} set by
+     * {@link #setSoftInputModeAdjustResize(Activity)}. {@code setSoftInputMode()} replaces the
+     * whole mode, so passing only the state flag would silently drop the adjust mode for the rest
+     * of the session and leave the terminal drawn under the keyboard.
+     */
     public static void setSoftKeyboardAlwaysHiddenFlags(final Activity activity) {
         if (activity != null && activity.getWindow() != null) {
             int oldMode = activity.getWindow().getAttributes().softInputMode;
-            activity.getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN);
+            activity.getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN
+                | WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
             int newMode = activity.getWindow().getAttributes().softInputMode;
             ImeProbeLogger.getInstance().logKeyboard("set_always_hidden", newMode, 0);
-            ImeProbeLogger.getInstance().log("MODE", "old=0x" + Integer.toHexString(oldMode), "new=0x" + Integer.toHexString(newMode));
+            ImeProbeLogger.getInstance().log("MODE", "old=0x" + Integer.toHexString(oldMode),
+                "new=0x" + Integer.toHexString(newMode));
         }
     }
 
@@ -120,7 +129,8 @@ public class KeyboardUtils {
             activity.getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
             int newMode = activity.getWindow().getAttributes().softInputMode;
             ImeProbeLogger.getInstance().logKeyboard("set_adjust_resize", newMode, 0);
-            ImeProbeLogger.getInstance().log("MODE", "old=0x" + Integer.toHexString(oldMode), "new=0x" + Integer.toHexString(newMode));
+            ImeProbeLogger.getInstance().log("MODE", "old=0x" + Integer.toHexString(oldMode),
+                "new=0x" + Integer.toHexString(newMode));
         }
     }
 

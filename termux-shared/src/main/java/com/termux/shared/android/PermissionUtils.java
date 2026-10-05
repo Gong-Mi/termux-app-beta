@@ -283,27 +283,33 @@ public class PermissionUtils {
         Logger.logVerbose(LOG_TAG, "Checking storage permission");
 
         String errmsg;
-        Boolean requestLegacyStoragePermission = null;
 
-        if (prioritizeManageExternalStoragePermission && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R)
-            requestLegacyStoragePermission = false;
-
-        if (requestLegacyStoragePermission == null)
-            requestLegacyStoragePermission = LegacyExternalStoragePermission.isApplicable(Build.VERSION.SDK_INT);
+        // Capability selection is delegated to StoragePermissionCapabilities so
+        // this path and the app-side permission UI coordinator resolve the same
+        // capability for the same (deviceSdk, preference) inputs.
+        StoragePermissionCapabilities.StoragePermissionCapability capability =
+            StoragePermissionCapabilities.resolve(Build.VERSION.SDK_INT, prioritizeManageExternalStoragePermission);
 
         boolean checkIfHasRequestedLegacyExternalStorage = checkIfHasRequestedLegacyExternalStorage(context);
 
         Logger.logVerbose(LOG_TAG, "prioritizeManageExternalStoragePermission=" + prioritizeManageExternalStoragePermission +
-                ", requestLegacyStoragePermission=" + requestLegacyStoragePermission +
+                ", capability=" + capability +
                 ", checkIfHasRequestedLegacyExternalStorage=" + checkIfHasRequestedLegacyExternalStorage);
 
-        if (requestLegacyStoragePermission && checkIfHasRequestedLegacyExternalStorage) {
+        if (capability == StoragePermissionCapabilities.StoragePermissionCapability.PLATFORM_GRANTED)
+            return true;
+
+        if (capability == StoragePermissionCapabilities.StoragePermissionCapability.NONE)
+            return false;
+
+        if (capability == StoragePermissionCapabilities.StoragePermissionCapability.LEGACY &&
+            checkIfHasRequestedLegacyExternalStorage) {
             // Check if requestLegacyExternalStorage is set to true in app manifest
             if (!hasRequestedLegacyExternalStorage(context, showErrorMessage))
                 return false;
         }
 
-        if (checkStoragePermission(context, requestLegacyStoragePermission)) {
+        if (StoragePermissionCapabilities.isGranted(context, capability)) {
             return true;
         }
 
@@ -316,7 +322,7 @@ public class PermissionUtils {
         if (requestCode < 0 || Build.VERSION.SDK_INT < Build.VERSION_CODES.M)
             return false;
 
-        if (requestLegacyStoragePermission || Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+        if (capability == StoragePermissionCapabilities.StoragePermissionCapability.LEGACY) {
             requestLegacyStorageExternalPermission(context, requestCode);
         } else {
             requestManageStorageExternalPermission(context, requestCode);
@@ -338,16 +344,18 @@ public class PermissionUtils {
      * @return Returns {@code true} if permission is granted, otherwise {@code false}.
      */
     public static boolean checkStoragePermission(@NonNull Context context, boolean checkLegacyStoragePermission) {
-        if (checkLegacyStoragePermission && LegacyExternalStoragePermission.isApplicable(Build.VERSION.SDK_INT)) {
-            return LegacyExternalStoragePermission.isGranted(context);
-        } else if (!checkLegacyStoragePermission &&
-            ManageExternalStoragePermission.isApplicable(Build.VERSION.SDK_INT)) {
-            return Environment.isExternalStorageManager();
-        } else if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
-            return true;
-        } else {
-            return LegacyExternalStoragePermission.isGranted(context);
-        }
+        // checkLegacyStoragePermission=false is the caller's way of requesting the
+        // manage capability when available; map it onto the shared resolver's
+        // preferManage input so both public entry points resolve identically.
+        //
+        // Dead-path note: the old implementation fell back to checking the
+        // legacy pair when (checkLegacy=true, sdk>=33), which always reported
+        // false there even if MANAGE was granted. The new resolution reports
+        // MANAGE's actual state. The only internal caller passes
+        // checkLegacy=true when the legacy capability is applicable (sdk<=32),
+        // so no live call path changes behaviour.
+        return StoragePermissionCapabilities.isGranted(context, StoragePermissionCapabilities.resolve(
+            Build.VERSION.SDK_INT, !checkLegacyStoragePermission));
     }
 
     /**

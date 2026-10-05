@@ -13,6 +13,17 @@ on:
       - '*.gradle'
       - 'gradle/**'
       - '.github/workflows/clipboard-storage-emulator.yml'
+  pull_request:
+    branches: [ master ]
+    paths:
+      - 'app/**'
+      - 'support_ui/**'
+      - 'termux-shared/**'
+      - 'terminal-view/**'
+      - 'build.gradle'
+      - '*.gradle'
+      - 'gradle/**'
+      - '.github/workflows/clipboard-storage-emulator.yml'
 
 env:
   JAVA_VERSION: 21
@@ -20,7 +31,7 @@ env:
 
 jobs:
   instrumentation:
-    name: API ${{ matrix.api }} clipboard/storage instrumentation
+    name: API ${{ matrix.api }} verification clipboard/storage instrumentation
     runs-on: ubuntu-latest
     timeout-minutes: 35
     strategy:
@@ -32,7 +43,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Set up JDK
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@v6
         with:
           java-version: ${{ env.JAVA_VERSION }}
           distribution: temurin
@@ -62,21 +73,34 @@ jobs:
         env:
           KS_PASSWORD: xrj45yWGLbsO7W0v
         run: |
-          ./gradlew bundleDebug assembleDebugAndroidTest --no-daemon
+          ./gradlew bundleVerification assembleVerificationAndroidTest --no-daemon
+          test -s app/build/outputs/bundle/verification/app-verification.aab
+          test -s app/build/outputs/apk/androidTest/verification/app-verification-androidTest.apk
           curl --fail --location --retry 3 \
             -o bundletool.jar \
             "https://github.com/google/bundletool/releases/download/${BUNDLETOOL_VERSION}/bundletool-all-${BUNDLETOOL_VERSION}.jar"
           java -jar bundletool.jar build-apks \
-            --bundle=app/build/outputs/bundle/debug/app-debug.aab \
-            --output=termux-debug-universal.apks \
+            --bundle=app/build/outputs/bundle/verification/app-verification.aab \
+            --output=termux-verification-universal.apks \
             --mode=universal \
             --ks=app/testkey_untrusted.jks \
             --ks-key-alias=alias \
             --ks-pass=pass:${KS_PASSWORD} \
             --key-pass=pass:${KS_PASSWORD}
           mkdir -p universal-apk
-          unzip -o termux-debug-universal.apks universal.apk -d universal-apk
-          test -s app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+          unzip -o termux-verification-universal.apks universal.apk -d universal-apk
+          sha256sum universal-apk/universal.apk > universal-apk.sha256
+          printf '%s\n' "$GITHUB_SHA" > build-head.txt
+
+      - name: Upload non-debuggable verification APK
+        uses: actions/upload-artifact@v6
+        with:
+          name: termux-app-verification-universal-api-${{ matrix.api }}
+          if-no-files-found: error
+          path: |
+            universal-apk/universal.apk
+            universal-apk.sha256
+            build-head.txt
 
       - name: Create and boot emulator
         env:
@@ -110,7 +134,7 @@ jobs:
       - name: Install and grant capability under test
         run: |
           adb install -r universal-apk/universal.apk
-          adb install -r app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+          adb install -r app/build/outputs/apk/androidTest/verification/app-verification-androidTest.apk
           adb shell appops set com.termux MANAGE_EXTERNAL_STORAGE allow || true
           adb shell pm grant com.termux android.permission.READ_EXTERNAL_STORAGE || true
           adb shell pm grant com.termux android.permission.WRITE_EXTERNAL_STORAGE || true
@@ -123,14 +147,19 @@ jobs:
           adb shell am instrument -w -r \
             -e class com.termux.app.ClipboardAndStorageInstrumentedTest \
             com.termux.test/androidx.test.runner.AndroidJUnitRunner \
-            | tee instrumentation-api-${{ matrix.api }}.txt
-          grep -q 'OK (4 tests)' instrumentation-api-${{ matrix.api }}.txt
+            | tee instrumentation-verification-api-${{ matrix.api }}.txt
+          grep -q 'OK (4 tests)' instrumentation-verification-api-${{ matrix.api }}.txt
+          adb shell am instrument -w -r \
+            -e class com.termux.app.VerificationBuildTypeInstrumentedTest \
+            com.termux.test/androidx.test.runner.AndroidJUnitRunner \
+            | tee -a instrumentation-verification-api-${{ matrix.api }}.txt
+          grep -q 'OK (1 test)' instrumentation-verification-api-${{ matrix.api }}.txt
 
       - name: Upload instrumentation evidence
         if: always()
         uses: actions/upload-artifact@v6
         with:
-          name: clipboard-storage-api-${{ matrix.api }}
+          name: clipboard-storage-verification-api-${{ matrix.api }}
           path: |
-            instrumentation-api-${{ matrix.api }}.txt
+            instrumentation-verification-api-${{ matrix.api }}.txt
             /tmp/permission-emulator.log

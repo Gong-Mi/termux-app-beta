@@ -28,6 +28,7 @@ public final class TerminalModelFrame implements FrameRevision {
     public final int cursorRow;
     public final int cursorStyle;
     public final boolean cursorVisible;
+    public final boolean cursorEnabled;
 
     /** Reverse-video flag captured at snapshot time. */
     public final boolean reverseVideo;
@@ -52,6 +53,8 @@ public final class TerminalModelFrame implements FrameRevision {
     public final boolean bracketedPasteMode;
     /** Current scroll counter. */
     public final int scrollCounter;
+    /** Cumulative scroll rows since session creation. */
+    public final long cumulativeScrollRows;
 
     /** Active transcript rows captured at snapshot time. */
     public final int activeTranscriptRows;
@@ -86,6 +89,7 @@ public final class TerminalModelFrame implements FrameRevision {
         this.cursorRow = emulator.getCursorRow();
         this.cursorStyle = emulator.getCursorStyle();
         this.cursorVisible = emulator.shouldCursorBeVisible();
+        this.cursorEnabled = emulator.isCursorEnabled();
         this.reverseVideo = emulator.isReverseVideo();
         this.mouseTrackingActive = emulator.isMouseTrackingActive();
         this.alternateBufferActive = emulator.isAlternateBufferActive();
@@ -95,6 +99,7 @@ public final class TerminalModelFrame implements FrameRevision {
         this.keypadApplicationMode = emulator.isKeypadApplicationMode();
         this.bracketedPasteMode = emulator.isBracketedPasteModeEnabled();
         this.scrollCounter = emulator.getScrollCounter();
+        this.cumulativeScrollRows = emulator.getCumulativeScrollRows();
         this.activeTranscriptRows = emulator.getScreen().getActiveTranscriptRows();
         this.palette = Arrays.copyOf(emulator.mColors.mCurrentColors, emulator.mColors.mCurrentColors.length);
         this.screen = TerminalScreenSnapshot.capture(emulator.getScreen(), this.topRow, this.endRow, this.columns,
