@@ -147,6 +147,8 @@ public final class TerminalSession extends TerminalOutput {
     /**
      * Set the sink that receives immutable terminal model frames from the parser worker.
      * The worker caches the latest frame for snapshot methods and forwards it to the view sink.
+     * A non-null sink is immediately sent the current screen so a freshly attached consumer
+     * does not sit on an empty mailbox until the next output (audit L2-1).
      */
     public synchronized void setFrameSink(TerminalFrameSink sink) {
         final TerminalFrameSink delegate = sink;
@@ -172,7 +174,15 @@ public final class TerminalSession extends TerminalOutput {
                 if (delegate != null) delegate.onFrameConsumed(frame);
             }
         };
-        if (mParserWorker != null) mParserWorker.setFrameSink(mFrameSink);
+        if (mParserWorker != null) {
+            mParserWorker.setFrameSink(mFrameSink);
+            if (delegate != null) {
+                // The fresh consumer has an empty frame mailbox; ask the worker to publish
+                // the current screen once (audit L2-1). Idle sessions would otherwise stay
+                // black until their next output because no paint trigger ever fires.
+                mParserWorker.requestFramePublish();
+            }
+        }
     }
 
     /**
