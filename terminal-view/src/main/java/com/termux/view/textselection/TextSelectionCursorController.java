@@ -425,7 +425,9 @@ public class TextSelectionCursorController implements CursorController {
         // always matches the absolute row coordinates that were selected (issue #39).
         TerminalSession session = terminalView.getCurrentSession();
         if (session != null) {
-            String text = session.getSelectedText(mSelX1, mSelY1, mSelX2, mSelY2, false);
+            // joinBackLines=true so a soft-wrapped visual line copies without a spurious '\n',
+            // matching the frame-based branch above (audit L2-3).
+            String text = session.getSelectedText(mSelX1, mSelY1, mSelX2, mSelY2, true);
             if (text != null) return text;
         }
         return "";
