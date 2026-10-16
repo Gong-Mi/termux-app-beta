@@ -645,8 +645,8 @@ public final class TerminalSession extends TerminalOutput {
 
     /** Get transcript text from the terminal session. */
     public String getTranscriptText(boolean linesJoined, boolean trim) {
+        if (mEmulator == null) return null;
         synchronized (mEmulator) {
-            if (mEmulator == null) return null;
             TerminalBuffer buffer = mEmulator.getScreen();
             String text = linesJoined ? buffer.getTranscriptTextWithFullLinesJoined() : buffer.getTranscriptTextWithoutJoinedLines();
             if (text == null) return null;
