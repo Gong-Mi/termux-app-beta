@@ -663,11 +663,18 @@ public final class TerminalSession extends TerminalOutput {
         }
     }
 
-    /** Get selected text in the given region from the latest frame or live screen. */
-    public String getSelectedText(int x1, int y1, int x2, int y2, boolean rectangular) {
+    /**
+     * Get selected text in the given region from the live screen.
+     *
+     * @param joinBackLines Whether soft-wrapped (line-wrapped) rows are joined without inserting
+     *                      '\n' at the wrap point. This value flows into the TerminalBuffer
+     *                      overload of the same name; the parameter was previously misnamed
+     *                      "rectangular", which did not match the behaviour.
+     */
+    public String getSelectedText(int x1, int y1, int x2, int y2, boolean joinBackLines) {
         if (mEmulator == null) return null;
         synchronized (mEmulator) {
-            return mEmulator.getScreen().getSelectedText(x1, y1, x2, y2, rectangular);
+            return mEmulator.getScreen().getSelectedText(x1, y1, x2, y2, joinBackLines);
         }
     }
 
