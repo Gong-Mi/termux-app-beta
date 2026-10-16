@@ -89,6 +89,11 @@ public final class TerminalSession extends TerminalOutput {
     private final Object mPtyStreamLock = new Object();
     private volatile InputStream mTerminalInputStream;
     private volatile FileOutputStream mTerminalOutputStream;
+    // Audit L1-1: the dup'd descriptors themselves. FileInputStream/FileOutputStream
+    // wrap a FileDescriptor with isFdOwner=false (libcore), so stream.close() never
+    // closes the underlying fd — these must be closed explicitly exactly once.
+    private FileDescriptor mPtyInputFd;
+    private FileDescriptor mPtyOutputFd;
     private boolean mPtyStreamsCloseRequested;
 
     /**
@@ -307,6 +312,10 @@ public final class TerminalSession extends TerminalOutput {
         }
         final FileDescriptor inputDescriptor = inputFileDescriptor;
         final FileDescriptor outputDescriptor = outputFileDescriptor;
+        synchronized (mPtyStreamLock) {
+            mPtyInputFd = inputDescriptor;
+            mPtyOutputFd = outputDescriptor;
+        }
 
         new Thread("TermSessionInputReader[pid=" + mShellPid + "]") {
             @Override
@@ -762,6 +771,33 @@ public final class TerminalSession extends TerminalOutput {
                 output.close();
             } catch (IOException ignored) {
                 // The writer is already being stopped.
+            }
+        }
+        // Audit L1-1: stream.close() does not close the underlying dup'd
+        // descriptors (isFdOwner=false in libcore); close them explicitly.
+        // Os.close is idempotent-guarded here by closeRequested + null-out,
+        // and errors are ignored: JNI.close(master) below still releases the
+        // pty pair even if a dup is already gone.
+        final FileDescriptor inFd;
+        final FileDescriptor outFd;
+        synchronized (mPtyStreamLock) {
+            inFd = mPtyInputFd;
+            outFd = mPtyOutputFd;
+            mPtyInputFd = null;
+            mPtyOutputFd = null;
+        }
+        if (inFd != null) {
+            try {
+                Os.close(inFd);
+            } catch (ErrnoException ignored) {
+                // EBADF or already closed: the master JNI.close still follows.
+            }
+        }
+        if (outFd != null) {
+            try {
+                Os.close(outFd);
+            } catch (ErrnoException ignored) {
+                // Same as above.
             }
         }
     }
