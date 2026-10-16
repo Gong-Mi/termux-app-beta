@@ -21,6 +21,12 @@ require("final FileDescriptor inputDescriptor = inputFileDescriptor;", "stable i
 require("final FileDescriptor outputDescriptor = outputFileDescriptor;", "stable output descriptor capture")
 require("Os.close(inputFileDescriptor);", "rollback closes first duplicate")
 require("Os.close(outputFileDescriptor);", "rollback closes second duplicate when present")
+# Audit L1-1: the dup'd descriptors must be closed in closePtyStreams too —
+# stream.close() never closes them (libcore isFdOwner=false).
+require("mPtyInputFd = inputDescriptor;", "dup input fd retained for cleanup")
+require("mPtyOutputFd = outputDescriptor;", "dup output fd retained for cleanup")
+require("Os.close(inFd);", "cleanup closes input duplicate")
+require("Os.close(outFd);", "cleanup closes output duplicate")
 require("if (mPtyStreamsCloseRequested) return;", "late stream registration is rejected")
 require("closePtyStreams();\n        JNI.close(mTerminalFileDescriptor);", "duplicate streams close before raw master")
 require("if (mShellPid <= 0 || mProcessExited) return;", "post-exit PID kill authority is revoked")
