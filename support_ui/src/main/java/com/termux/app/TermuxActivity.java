@@ -911,6 +911,14 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
         return mIsVisible;
     }
 
+    /**
+     * Whether the user allows the terminal margin adjustment. This is the master gate for
+     * every bottom-margin update, including the insets-triggered path (audit L3-1).
+     */
+    public boolean isTerminalMarginAdjustmentEnabled() {
+        return mPreferences != null && mPreferences.isTerminalMarginAdjustmentEnabled();
+    }
+
     public boolean isOnResumeAfterOnCreate() {
         return mIsOnResumeAfterOnCreate;
     }

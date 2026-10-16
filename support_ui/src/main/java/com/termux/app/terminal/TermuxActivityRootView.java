@@ -126,6 +126,9 @@ public class TermuxActivityRootView extends LinearLayout implements ViewTreeObse
      */
     public void updateBottomMargin() {
         if (mActivity == null || !mActivity.isVisible()) return;
+        // Audit L3-1: the global-layout trigger is only registered while the preference is
+        // enabled (upstream gate); the insets trigger must honour the same user gate.
+        if (!mActivity.isTerminalMarginAdjustmentEnabled()) return;
 
         View bottomSpaceView = mActivity.getTermuxActivityBottomSpaceView();
         if (bottomSpaceView == null) return;
