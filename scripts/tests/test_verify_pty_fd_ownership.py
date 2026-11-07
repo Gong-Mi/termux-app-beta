@@ -79,10 +79,23 @@ class PtyOwnershipGuardTest(unittest.TestCase):
                     'if (getPid() > 0 && !mProcessExited && !mProcessOwnershipLost) return;',
                     'failure completion waits for reap or explicit lost ownership')
 
-    def test_raw_descriptor_cannot_be_given_to_input_stream(self):
-        self.reject('new FileInputStream(inputDescriptor)',
-                    'new FileInputStream(terminalFileDescriptorWrapped)',
-                    'input stream still owns the raw PTY descriptor')
+    def test_blocking_output_descriptor_is_rejected(self):
+        self.reject('Os.fcntlInt(outputDescriptor, OsConstants.F_SETFL,\n'
+                    '                Os.fcntlInt(outputDescriptor, OsConstants.F_GETFL, 0) | OsConstants.O_NONBLOCK);',
+                    '/* output descriptor left blocking */', 'nonblocking output descriptor setup')
+
+    def test_writer_close_request_must_be_checked(self):
+        self.reject('if (mPtyStreamsCloseRequested) return false;',
+                    '/* writer ignores close requests */', 'writer stop is rejected after close')
+
+    def test_reader_close_request_must_be_checked(self):
+        self.reject('if (mPtyStreamsCloseRequested) return -1;',
+                    '/* reader ignores close requests */', 'reader stop is rejected after close')
+
+    def test_raw_descriptor_cannot_be_given_to_a_blocking_stream(self):
+        self.reject('int read = readPtyNonblocking(inputDescriptor, buffer);',
+                    'int read = new FileInputStream(inputDescriptor).read(buffer);',
+                    'must not use blocking stream ownership')
 
 
 if __name__ == '__main__':

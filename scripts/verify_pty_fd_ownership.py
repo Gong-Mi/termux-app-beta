@@ -12,6 +12,13 @@ import re
 SOURCE = Path("terminal-emulator/src/main/java/com/termux/terminal/TerminalSession.java")
 text = SOURCE.read_text(encoding="utf-8")
 
+# The raw master is allowed to be closed in the dup-failure rollback and in
+# normal cleanup; worker threads must never reintroduce blocking Java stream
+# ownership on any PTY descriptor (the L1-2 hang shape). Checked first so a
+# regression to blocking streams reports its own reason.
+if "new FileInputStream(" in text or "new FileOutputStream(" in text:
+    raise SystemExit("FAIL: PTY worker threads must not use blocking stream ownership")
+
 def require(fragment: str, description: str, scope: str = text) -> None:
     if fragment not in scope:
         raise SystemExit(f"FAIL: missing PTY ownership contract: {description}\n  {fragment}")
@@ -28,7 +35,19 @@ require("mPtyInputFd = inputDescriptor;", "dup input fd retained for cleanup")
 require("mPtyOutputFd = outputDescriptor;", "dup output fd retained for cleanup")
 require("Os.close(inFd);", "cleanup closes input duplicate")
 require("Os.close(outFd);", "cleanup closes output duplicate")
-require("if (mPtyStreamsCloseRequested) return;", "late stream registration is rejected")
+# Audit L1-2: the worker threads must run nonblocking I/O with a bounded poll
+# loop and must re-check the close flag. A blocking write() on a full PTY master
+# cannot be interrupted by close(), which used to leave the writer stuck after
+# the child exited.
+require("Os.fcntlInt(inputDescriptor, OsConstants.F_SETFL,", "nonblocking input descriptor setup")
+require("Os.fcntlInt(outputDescriptor, OsConstants.F_SETFL,", "nonblocking output descriptor setup")
+require("int read = readPtyNonblocking(inputDescriptor, buffer);", "reader uses the bounded poll loop")
+require("if (!writePtyNonblocking(outputDescriptor, buffer, bytesToWrite)) return;",
+        "writer uses the bounded poll loop")
+require("if (mPtyStreamsCloseRequested) return -1;", "reader stop is rejected after close")
+require("if (mPtyStreamsCloseRequested) return false;", "writer stop is rejected after close")
+require("Os.poll(new StructPollfd[]{pollFd}, 50)", "poll wait is bounded")
+require("if (e.errno == OsConstants.EBADF) return false;", "own close is a quiet writer shutdown")
 # cleanup detaches the integer owner under the session lock, then closes the
 # captured handle in finally. Checking the old live-field spelling rejects this
 # safer transfer and does not protect exactly-once close.
@@ -71,12 +90,5 @@ for name, label in [("waitForExit", "observer retries EINTR"), ("waitFor", "reap
     if body is None:
         raise SystemExit("FAIL: missing PTY ownership contract: native " + name)
     require("while (result < 0 && errno == EINTR);", label, body.group(0))
-
-# The raw master is allowed to be closed in the dup-failure rollback and in
-# normal cleanup, but stream constructors must use only their duplicate vars.
-if "new FileInputStream(terminalFileDescriptorWrapped)" in text:
-    raise SystemExit("FAIL: input stream still owns the raw PTY descriptor")
-if "new FileOutputStream(terminalFileDescriptorWrapped)" in text:
-    raise SystemExit("FAIL: output stream still owns the raw PTY descriptor")
 
 print(f"PASS PTY ownership contract: {SOURCE}")

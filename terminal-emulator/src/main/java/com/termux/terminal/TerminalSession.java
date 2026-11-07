@@ -283,10 +283,10 @@ public final class TerminalSession extends TerminalOutput {
         mClient.setTerminalShellPid(this, mShellPid);
 
         // Keep the subprocess' original master FD owned by this session for
-        // ioctl() and the single final JNI.close().  Each Java stream gets its
-        // own duplicated descriptor: FileInputStream/FileOutputStream both
-        // close their descriptor, so sharing the raw FD would create multiple
-        // close owners and make a late close vulnerable to fd-number reuse.
+        // ioctl() and the single final JNI.close().  Each worker thread gets its
+        // own duplicated descriptor: each dup gets its own close ownership, so
+        // sharing the raw FD would create multiple close owners and make a late
+        // close vulnerable to fd-number reuse.
         final FileDescriptor terminalFileDescriptorWrapped = wrapFileDescriptor(mTerminalFileDescriptor, mClient);
         FileDescriptor inputFileDescriptor = null;
         FileDescriptor outputFileDescriptor = null;
