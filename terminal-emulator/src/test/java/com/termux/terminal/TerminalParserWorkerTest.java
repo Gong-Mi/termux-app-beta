@@ -510,6 +510,38 @@ public class TerminalParserWorkerTest extends TestCase {
         }
     }
 
+    public void testWorkerExceptionIsContainedNotEscaping() throws Exception {
+        // A RuntimeException from the frame pipeline (sink/client/snapshot) must not escape the
+        // worker loop: on Android, an uncaught worker-thread exception reaches RuntimeInit's
+        // KillApplicationHandler and kills the whole app process.
+        CapturingSink badSink = new CapturingSink() {
+            @Override public void publishFrame(TerminalModelFrame frame) {
+                throw new IllegalStateException("simulated frame pipeline failure");
+            }
+        };
+        WorkerHarness h = new WorkerHarness(MAX_BYTES_PER_BATCH, badSink);
+        final java.util.concurrent.atomic.AtomicReference<Throwable> uncaught =
+                new java.util.concurrent.atomic.AtomicReference<>();
+        Thread.UncaughtExceptionHandler previous = Thread.getDefaultUncaughtExceptionHandler();
+        Thread.setDefaultUncaughtExceptionHandler((t, e) -> uncaught.set(e));
+        try {
+            h.worker.start();
+            writeString(h.inputQueue, "x");
+            h.worker.requestAppend();
+            Thread.sleep(800); // let the worker hit the throwing sink
+            assertNull("worker exception must be contained, not escape to the process handler",
+                    uncaught.get());
+            assertTrue("worker must be stopped after containment", h.worker.awaitStopped(3000));
+            // dead worker rejects further control commands without throwing
+            h.worker.requestAppend();
+            h.worker.requestResize(100, 40, 10, 20);
+            h.worker.stop();
+            assertTrue(h.worker.awaitStopped(3000));
+        } finally {
+            Thread.setDefaultUncaughtExceptionHandler(previous);
+        }
+    }
+
     public void testStopRejectsFinishAndDuplicateStop() throws Exception {
         WorkerHarness h = new WorkerHarness(MAX_BYTES_PER_BATCH);
         h.worker.start();

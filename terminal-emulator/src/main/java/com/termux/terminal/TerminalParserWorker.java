@@ -15,6 +15,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
  */
 public final class TerminalParserWorker {
 
+    private static final String LOG_TAG = "TerminalParserWorker";
+
     private static final int MSG_APPEND = 1;
     private static final int MSG_RESIZE = 2;
     private static final int MSG_VIEWPORT = 3;
@@ -186,6 +188,18 @@ public final class TerminalParserWorker {
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 break;
+            } catch (Throwable t) {
+                // An uncaught escape here would hit RuntimeInit's KillApplicationHandler and
+                // SIGKILL the whole app process (uncaught worker-thread exceptions are fatal
+                // process-wide on Android). Contain the failure to this session: log, mark the
+                // worker dead, and notify the client so the UI can retire the session.
+                mStopped = true;
+                Logger.logError(mClient, LOG_TAG, "parser worker died; stopping session: " + t);
+                try {
+                    if (mClient != null && mSession != null) mClient.onSessionFinished(mSession);
+                } catch (Throwable ignored) {
+                    // The client callback itself failed; the worker is already dead.
+                }
             }
         }
     }
