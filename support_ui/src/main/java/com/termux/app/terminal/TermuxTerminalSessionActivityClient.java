@@ -17,6 +17,7 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
 import com.termux.R;
+import com.termux.shared.data.DataUtils;
 import com.termux.shared.interact.ShareUtils;
 import com.termux.shared.termux.shell.command.runner.terminal.TermuxSession;
 import com.termux.shared.termux.interact.TextInputDialogUtils;
@@ -32,10 +33,12 @@ import com.termux.terminal.TerminalColors;
 import com.termux.terminal.TerminalSession;
 import com.termux.terminal.TerminalSessionClient;
 import com.termux.terminal.TextStyle;
+import com.termux.terminal.ClipboardWriteQueue;
 
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.Properties;
 
 /** The {@link TerminalSessionClient} implementation that may require an {@link Activity} for its interface methods. */
@@ -50,6 +53,11 @@ public class TermuxTerminalSessionActivityClient extends TermuxTerminalSessionCl
     private int mBellSoundId;
 
     private static final String LOG_TAG = "TermuxTerminalSessionActivityClient";
+
+    /** Serializes clipboard writes so back-to-back copies keep their order. Process wide: there is
+     * only one clipboard, and a per-activity queue would leave an idle worker thread behind on
+     * every activity recreation. */
+    private static final ClipboardWriteQueue CLIPBOARD_WRITE_QUEUE = new ClipboardWriteQueue("TermuxClipboardWriter");
 
     public TermuxTerminalSessionActivityClient(TermuxActivity activity) {
         this.mActivity = activity;
@@ -192,25 +200,52 @@ public class TermuxTerminalSessionActivityClient extends TermuxTerminalSessionCl
 
     @Override
     public void onCopyTextToClipboard(@NonNull TerminalSession session, String text) {
-        if (!mActivity.isVisible()) return;
+        if (!mActivity.isVisible()) {
+            Logger.logWarn(LOG_TAG, "Ignoring copy to clipboard from session \"" + session.mSessionName
+                + "\": activity is not visible");
+            return;
+        }
 
-        // ClipboardManager.setPrimaryClip is a thread-safe binder call and
-        // Logger.showToast posts to the main looper internally (Logger.java),
-        // so the copy can run off the main thread - large OSC 52 payloads
-        // would otherwise stall UI work inside this callback chain.
-        new Thread(() -> ShareUtils.copyTextToClipboard(mActivity, text),
-                   "TermuxClipboardWriter").start();
+        if (text == null || text.isEmpty()) {
+            Logger.logWarn(LOG_TAG, "Ignoring copy to clipboard from session \"" + session.mSessionName
+                + "\": selection is empty");
+            return;
+        }
+
+        int byteLength = text.getBytes(StandardCharsets.UTF_8).length;
+        if (byteLength > DataUtils.TRANSACTION_SIZE_LIMIT_IN_BYTES) {
+            Logger.logWarn(LOG_TAG, "Clipboard text from session \"" + session.mSessionName + "\" is "
+                + byteLength + " bytes and will be truncated to " + DataUtils.TRANSACTION_SIZE_LIMIT_IN_BYTES + " bytes");
+        }
+
+        // ClipboardManager.setPrimaryClip is a thread-safe binder call, so the write runs off the
+        // main thread - large OSC 52 payloads would otherwise stall UI work inside this callback
+        // chain. The queue is single threaded on purpose: one thread per copy had no ordering
+        // guarantee, so back-to-back copies could land in the clipboard in reverse order.
+        CLIPBOARD_WRITE_QUEUE.submit(() -> ShareUtils.copyTextToClipboard(mActivity, text));
     }
 
     @Override
     public void onPasteTextFromClipboard(@Nullable TerminalSession session) {
-        if (!mActivity.isVisible()) return;
+        if (!mActivity.isVisible()) {
+            Logger.logWarn(LOG_TAG, "Ignoring paste from clipboard: activity is not visible");
+            return;
+        }
 
         mActivity.runOnUiThread(() -> {
             String text = ShareUtils.getTextStringFromClipboardIfSet(mActivity, true);
+            if (text == null) {
+                // Android only hands the primary clip to an app in the foreground, and the clip may
+                // simply hold no text (image, or nothing at all). Both reach this branch as null.
+                Logger.logWarn(LOG_TAG, "Ignoring paste from clipboard: clipboard holds no text");
+                return;
+            }
             TerminalSession targetSession = ClipboardSessionResolver.resolve(session, mActivity.getCurrentSession());
-            if (text != null && targetSession != null)
-                targetSession.paste(text);
+            if (targetSession == null) {
+                Logger.logWarn(LOG_TAG, "Ignoring paste from clipboard: no target session");
+                return;
+            }
+            targetSession.paste(text);
         });
     }
 
