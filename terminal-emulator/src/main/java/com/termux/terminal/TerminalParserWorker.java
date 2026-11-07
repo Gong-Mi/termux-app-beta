@@ -169,6 +169,12 @@ public final class TerminalParserWorker {
         enqueueControl(Command.toggleAutoScrollDisabled());
     }
 
+    /** Request one frame publish to the current route, e.g. for a consumer that just attached
+     * and has an empty mailbox (audit L2-1). Publishes even when no snapshot was skipped. */
+    public void requestFramePublish() {
+        enqueueControl(Command.republish(true));
+    }
+
     public void requestFinish(int exitCode) {
         enqueueControl(Command.finish(exitCode));
     }
@@ -283,10 +289,9 @@ public final class TerminalParserWorker {
                     break;
                 case MSG_REPUBLISH:
                     mRepublishScheduled.set(false);
-                    if (mDirty) {
-                        mDirty = false;
-                        publishFrame();
-                    }
+                    // A forced republish (a consumer just attached) publishes unconditionally;
+                    // the dirty-marked case republishes a state that was skipped earlier.
+                    if (cmd.enabled || mDirty) publishFrame();
                     break;
             }
         }
@@ -456,6 +461,8 @@ public final class TerminalParserWorker {
         static Command setCursorBlinkingEnabled(boolean enabled) { return new Command(MSG_SET_CURSOR_BLINKING_ENABLED, 0, 0, 0, 0, 0, 0, null, 0, 0, 0, false, enabled); }
         static Command resetColors() { return new Command(MSG_RESET_COLORS, 0, 0, 0, 0, 0, 0, null, 0, 0, 0, false, false); }
         static Command toggleAutoScrollDisabled() { return new Command(MSG_TOGGLE_AUTO_SCROLL_DISABLED, 0, 0, 0, 0, 0, 0, null, 0, 0, 0, false, false); }
-        static Command republish() { return new Command(MSG_REPUBLISH, 0, 0, 0, 0, 0, 0, null, 0, 0, 0, false, false); }
+        static Command republish() { return republish(false); }
+        /** {@code force=true} (enabled flag) publishes even when no snapshot was skipped. */
+        static Command republish(boolean force) { return new Command(MSG_REPUBLISH, 0, 0, 0, 0, 0, 0, null, 0, 0, 0, false, force); }
     }
 }
