@@ -40,7 +40,16 @@ public final class ClipboardWriteQueue {
     /** Queues a clipboard write. Writes run in submission order on one worker thread. */
     public void submit(@Nullable Runnable write) {
         if (write == null) return;
-        mExecutor.execute(write);
+        mExecutor.execute(() -> {
+            try {
+                write.run();
+            } catch (Throwable t) {
+                // An uncaught escape from a pool worker would hit RuntimeInit's
+                // KillApplicationHandler and SIGKILL the whole app process on Android.
+                // Contain it: log and keep the queue alive.
+                Logger.logError(null, "ClipboardWriteQueue", "clipboard write failed: " + t);
+            }
+        });
     }
 
     /** Stops accepting writes and releases the worker thread. */
