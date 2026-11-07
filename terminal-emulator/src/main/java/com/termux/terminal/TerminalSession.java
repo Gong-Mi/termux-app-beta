@@ -7,13 +7,12 @@ import android.os.Message;
 import android.system.ErrnoException;
 import android.system.Os;
 import android.system.OsConstants;
+import android.system.StructPollfd;
 
 import java.io.File;
 import java.io.FileDescriptor;
-import java.io.FileInputStream;
-import java.io.FileOutputStream;
 import java.io.IOException;
-import java.io.InputStream;
+import java.io.InterruptedIOException;
 import java.lang.reflect.Field;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
@@ -97,11 +96,8 @@ public final class TerminalSession extends TerminalOutput {
 
     /** Java-side owners for the duplicated PTY descriptors. */
     private final Object mPtyStreamLock = new Object();
-    private volatile InputStream mTerminalInputStream;
-    private volatile FileOutputStream mTerminalOutputStream;
-    // Audit L1-1: the dup'd descriptors themselves. FileInputStream/FileOutputStream
-    // wrap a FileDescriptor with isFdOwner=false (libcore), so stream.close() never
-    // closes the underlying fd — these must be closed explicitly exactly once.
+    // Audit L1-1: the dup'd descriptors must be closed explicitly exactly once;
+    // no Java stream wrapper owns them.
     private FileDescriptor mPtyInputFd;
     private FileDescriptor mPtyOutputFd;
     private boolean mPtyStreamsCloseRequested;
@@ -276,8 +272,6 @@ public final class TerminalSession extends TerminalOutput {
         mProcessExited = false;
         synchronized (mPtyStreamLock) {
             mPtyStreamsCloseRequested = false;
-            mTerminalInputStream = null;
-            mTerminalOutputStream = null;
         }
         mEmulator = new TerminalEmulator(this, columns, rows, cellWidthPixels, cellHeightPixels, mTranscriptRows, mEmulatorClient);
         mParserWorker = new TerminalParserWorker(mEmulator, mProcessToTerminalIOQueue, mFrameSink, mEmulatorClient, this, 64 * 1024, 32 * 1024);
@@ -322,6 +316,33 @@ public final class TerminalSession extends TerminalOutput {
         }
         final FileDescriptor inputDescriptor = inputFileDescriptor;
         final FileDescriptor outputDescriptor = outputFileDescriptor;
+        try {
+            // Both worker loops below use nonblocking I/O with bounded poll() waits
+            // and re-check the close flag: a blocking write()/read() on a full PTY
+            // master cannot be interrupted by close() (the in-flight syscall
+            // survives the fd close), which used to leave TermSessionOutputWriter
+            // stuck in FileOutputStream.write after closePtyStreams().
+            // O_NONBLOCK is a file-status flag shared by the whole open file
+            // description (raw master included); the raw master is only used for
+            // TIOCSWINSZ and the final JNI.close(), which do not block.
+            Os.fcntlInt(inputDescriptor, OsConstants.F_SETFL,
+                Os.fcntlInt(inputDescriptor, OsConstants.F_GETFL, 0) | OsConstants.O_NONBLOCK);
+            Os.fcntlInt(outputDescriptor, OsConstants.F_SETFL,
+                Os.fcntlInt(outputDescriptor, OsConstants.F_GETFL, 0) | OsConstants.O_NONBLOCK);
+        } catch (ErrnoException e) {
+            try {
+                Os.close(inputDescriptor);
+            } catch (ErrnoException ignored) {
+                // Best effort while unwinding initialization.
+            }
+            try {
+                Os.close(outputDescriptor);
+            } catch (ErrnoException ignored) {
+                // Best effort while unwinding initialization.
+            }
+            JNI.close(mTerminalFileDescriptor);
+            throw new IllegalStateException("Failed to configure nonblocking terminal pty descriptors", e);
+        }
         synchronized (mPtyStreamLock) {
             mPtyInputFd = inputDescriptor;
             mPtyOutputFd = outputDescriptor;
@@ -330,35 +351,17 @@ public final class TerminalSession extends TerminalOutput {
         new Thread("TermSessionInputReader[pid=" + mShellPid + "]") {
             @Override
             public void run() {
-                InputStream termIn = null;
+                final byte[] buffer = new byte[4096];
                 try {
-                    termIn = new FileInputStream(inputDescriptor);
-                    synchronized (mPtyStreamLock) {
-                        if (mPtyStreamsCloseRequested) return;
-                        mTerminalInputStream = termIn;
-                    }
-                    final byte[] buffer = new byte[4096];
                     while (true) {
                         if (mProcessReaderStopRequested) return;
-                        int read = termIn.read(buffer);
-                        if (read == -1) return;
+                        int read = readPtyNonblocking(inputDescriptor, buffer);
+                        if (read <= 0) return;
                         if (mProcessReaderStopRequested) return;
                         if (!mProcessToTerminalIOQueue.write(buffer, 0, read)) return;
                         mParserWorker.requestAppend();
                     }
-                } catch (Exception e) {
-                    // Ignore, just shutting down.
                 } finally {
-                    synchronized (mPtyStreamLock) {
-                        if (mTerminalInputStream == termIn) mTerminalInputStream = null;
-                    }
-                    if (termIn != null) {
-                        try {
-                            termIn.close();
-                        } catch (IOException ignored) {
-                            // The reader is already being stopped.
-                        }
-                    }
                     mMainThreadHandler.sendEmptyMessage(MSG_PROCESS_READER_FINISHED);
                 }
             }
@@ -368,44 +371,18 @@ public final class TerminalSession extends TerminalOutput {
             @Override
             public void run() {
                 final byte[] buffer = new byte[4096];
-                FileOutputStream termOut = null;
                 try {
-                    termOut = new FileOutputStream(outputDescriptor);
-                    synchronized (mPtyStreamLock) {
-                        if (mPtyStreamsCloseRequested) return;
-                        mTerminalOutputStream = termOut;
-                    }
                     while (true) {
                         int bytesToWrite = mTerminalToProcessIOQueue.read(buffer, true);
                         if (bytesToWrite == -1) return;
-                        try {
-                            termOut.write(buffer, 0, bytesToWrite);
-                        } catch (IOException writeError) {
-                            // A PTY write failure is a transport failure while the session
-                            // still owns a live child. A close driven by process exit or an
-                            // already-recorded failure must not be misreported as a new one.
-                            if (!mProcessExited && !mFailureRequested.get()) {
-                                onParserWorkerFailure(writeError);
-                            }
-                            return;
-                        }
+                        if (!writePtyNonblocking(outputDescriptor, buffer, bytesToWrite)) return;
                     }
-                } catch (RuntimeException e) {
-                    // Stream setup failed while unwinding shutdown, or another owner
-                    // already closed the duplicated descriptor.
+                } catch (RuntimeException writeError) {
+                    // A PTY write failure is a transport failure while the session
+                    // still owns a live child. A close driven by process exit or an
+                    // already-recorded failure must not be misreported as a new one.
                     if (!mProcessExited && !mFailureRequested.get()) {
-                        onParserWorkerFailure(e);
-                    }
-                } finally {
-                    synchronized (mPtyStreamLock) {
-                        if (mTerminalOutputStream == termOut) mTerminalOutputStream = null;
-                    }
-                    if (termOut != null) {
-                        try {
-                            termOut.close();
-                        } catch (IOException ignored) {
-                            // The writer is already being stopped.
-                        }
+                        onParserWorkerFailure(writeError);
                     }
                 }
             }
@@ -923,44 +900,99 @@ public final class TerminalSession extends TerminalOutput {
         }
     }
 
-    /** Close Java-owned duplicate descriptors; stream close remains idempotent. */
+    /**
+     * Bounded nonblocking PTY read for the reader thread. Returns bytes read, or -1
+     * when the reader must stop (close requested, EOF, hangup, or descriptor error).
+     * The actual Os.read/poll calls run inside mPtyStreamLock so closePtyStreams()
+     * can never close the descriptor while a syscall is in flight on it; with
+     * O_NONBLOCK the lock hold time is bounded by the 50 ms poll timeout.
+     */
+    private int readPtyNonblocking(FileDescriptor fd, byte[] buffer) {
+        while (true) {
+            synchronized (mPtyStreamLock) {
+                if (mPtyStreamsCloseRequested) return -1;
+                try {
+                    int n = Os.read(fd, buffer, 0, buffer.length);
+                    if (n > 0) return n;
+                    return -1; // n == 0: EOF
+                } catch (InterruptedIOException e) {
+                    continue; // interrupted: retry like EINTR
+                } catch (ErrnoException e) {
+                    if (e.errno == OsConstants.EINTR) continue;
+                    if (e.errno != OsConstants.EAGAIN) return -1; // EIO on child exit, EBADF on close
+                }
+                if (mProcessReaderStopRequested) return -1;
+                if (!pollPtyLocked(fd, (short) OsConstants.POLLIN)) return -1;
+            }
+        }
+    }
+
+    /**
+     * Nonblocking PTY write for the writer thread. Returns false when the writer
+     * must stop quietly (close requested or the descriptor is gone); a real
+     * transport error (e.g. EIO after the slave side is gone) is thrown so the
+     * caller can apply the existing failure guards, matching the previous
+     * FileOutputStream.write error reporting.
+     */
+    private boolean writePtyNonblocking(FileDescriptor fd, byte[] buffer, int length) {
+        int offset = 0;
+        while (offset < length) {
+            synchronized (mPtyStreamLock) {
+                if (mPtyStreamsCloseRequested) return false;
+                try {
+                    int n = Os.write(fd, buffer, offset, length - offset);
+                    if (n > 0) {
+                        offset += n;
+                        continue;
+                    }
+                    // n == 0: no progress, wait for writability below.
+                } catch (InterruptedIOException e) {
+                    continue; // interrupted: retry like EINTR
+                } catch (ErrnoException e) {
+                    if (e.errno == OsConstants.EINTR) continue;
+                    if (e.errno == OsConstants.EBADF) return false; // our own close won the race
+                    if (e.errno != OsConstants.EAGAIN) throw new RuntimeException("PTY write failed", e);
+                }
+                if (!pollPtyLocked(fd, (short) OsConstants.POLLOUT)) return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * Bounded poll on a PTY descriptor while holding mPtyStreamLock. Returns false
+     * only when the descriptor is gone (POLLNVAL/EBADF); hangup and error events
+     * return true so the next nonblocking read/write observes EIO through the
+     * syscall itself and keeps the previous error-reporting semantics. The 50 ms
+     * timeout bounds both the lock hold and the worst-case close-notification lag.
+     */
+    private boolean pollPtyLocked(FileDescriptor fd, short events) {
+        StructPollfd pollFd = new StructPollfd();
+        pollFd.fd = fd;
+        pollFd.events = events;
+        final int rc;
+        try {
+            rc = Os.poll(new StructPollfd[]{pollFd}, 50);
+        } catch (ErrnoException e) {
+            return e.errno == OsConstants.EINTR;
+        }
+        if (rc <= 0) return true;
+        return (pollFd.revents & OsConstants.POLLNVAL) == 0;
+    }
+
+    /** Close Java-owned duplicate descriptors; the worker loops notice the flag. */
     private void closePtyStreams() {
-        final InputStream input;
-        final FileOutputStream output;
-        synchronized (mPtyStreamLock) {
-            mPtyStreamsCloseRequested = true;
-            input = mTerminalInputStream;
-            output = mTerminalOutputStream;
-            mTerminalInputStream = null;
-            mTerminalOutputStream = null;
-        }
-        if (input != null) {
-            try {
-                input.close();
-            } catch (IOException ignored) {
-                // The reader is already being stopped.
-            }
-        }
-        if (output != null) {
-            try {
-                output.close();
-            } catch (IOException ignored) {
-                // The writer is already being stopped.
-            }
-        }
-        // Audit L1-1: stream.close() does not close the underlying dup'd
-        // descriptors (isFdOwner=false in libcore); close them explicitly.
-        // Os.close is idempotent-guarded here by closeRequested + null-out,
-        // and errors are ignored: JNI.close(master) below still releases the
-        // pty pair even if a dup is already gone.
         final FileDescriptor inFd;
         final FileDescriptor outFd;
         synchronized (mPtyStreamLock) {
+            mPtyStreamsCloseRequested = true;
             inFd = mPtyInputFd;
             outFd = mPtyOutputFd;
             mPtyInputFd = null;
             mPtyOutputFd = null;
         }
+        // Audit L1-1: close the dup'd descriptors explicitly and exactly once.
+        // Errors are ignored: cleanupResources() still JNI.close()es the master.
         if (inFd != null) {
             try {
                 Os.close(inFd);
