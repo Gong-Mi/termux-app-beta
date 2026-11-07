@@ -13,14 +13,19 @@ import unittest
 SCRIPT = Path(__file__).resolve().parents[1] / 'verify_pty_fd_ownership.py'
 RELATIVE = Path('terminal-emulator/src/main/java/com/termux/terminal/TerminalSession.java')
 SOURCE = (SCRIPT.parent.parent / RELATIVE).read_text(encoding='utf-8')
+NATIVE_RELATIVE = Path('terminal-emulator/src/main/jni/termux.c')
+NATIVE = (SCRIPT.parent.parent / NATIVE_RELATIVE).read_text(encoding='utf-8')
 
 
 class PtyOwnershipGuardTest(unittest.TestCase):
-    def run_guard(self, source):
+    def run_guard(self, source, native=NATIVE):
         with tempfile.TemporaryDirectory(prefix='pty-source-guard-') as tmp:
             target = Path(tmp) / RELATIVE
             target.parent.mkdir(parents=True)
             target.write_text(source, encoding='utf-8')
+            native_target = Path(tmp) / NATIVE_RELATIVE
+            native_target.parent.mkdir(parents=True)
+            native_target.write_text(native, encoding='utf-8')
             return subprocess.run([sys.executable, str(SCRIPT)], cwd=tmp,
                                   env=dict(os.environ, LLVM_PROFILE_FILE='/dev/null'),
                                   capture_output=True, text=True, timeout=15)
@@ -57,6 +62,22 @@ class PtyOwnershipGuardTest(unittest.TestCase):
     def test_unstarted_session_must_not_own_stdin(self):
         self.reject('private int mTerminalFileDescriptor = -1;',
                     'private int mTerminalFileDescriptor = 0;', 'unstarted raw FD sentinel')
+
+    def test_native_observer_must_keep_the_pid_reserved(self):
+        old = 'WEXITED | WNOWAIT'
+        self.assertEqual(1, NATIVE.count(old))
+        result = self.run_guard(SOURCE, NATIVE.replace(old, 'WEXITED', 1))
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn('native PID reservation uses WNOWAIT', result.stdout + result.stderr)
+
+    def test_observer_cannot_use_the_reaping_wait(self):
+        self.reject('int observedExit = JNI.waitForExit(watchedPid);',
+                    'int observedExit = JNI.waitFor(watchedPid);', 'observe child exit without reaping')
+
+    def test_failure_callback_cannot_run_before_reap(self):
+        self.reject('if (getPid() > 0 && !mProcessReaped && !mProcessOwnershipLost) return;',
+                    'if (getPid() > 0 && !mProcessExited && !mProcessOwnershipLost) return;',
+                    'failure completion waits for reap or explicit lost ownership')
 
     def test_raw_descriptor_cannot_be_given_to_input_stream(self):
         self.reject('new FileInputStream(inputDescriptor)',

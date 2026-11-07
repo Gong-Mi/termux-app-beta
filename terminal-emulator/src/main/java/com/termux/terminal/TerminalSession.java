@@ -105,12 +105,12 @@ public final class TerminalSession extends TerminalOutput {
     private FileDescriptor mPtyOutputFd;
     private boolean mPtyStreamsCloseRequested;
 
-    /**
-     * Set as soon as waitFor() reports process exit.  Reader draining and parser
-     * cleanup may continue after that point, but the old pid must no longer be
-     * considered killable.
-     */
+    /** Exit was observed with WNOWAIT, before the PID can be reaped/reused. */
     private volatile boolean mProcessExited;
+    /** The owned waiter completed the real reap; completion must wait for this fact. */
+    private volatile boolean mProcessReaped;
+    /** Unexpected wait failure revokes unsafe numeric-PID signalling without inventing exit. */
+    private volatile boolean mProcessOwnershipLost;
 
     /** Set by the application for user identification of session, not by terminal. */
     public String mSessionName;
@@ -396,16 +396,32 @@ public final class TerminalSession extends TerminalOutput {
             }
         }.start();
 
-        new Thread("TermSessionWaiter[pid=" + mShellPid + "]") {
+        final int watchedPid = mShellPid;
+        new Thread("TermSessionWaiter[pid=" + watchedPid + "]") {
             @Override
             public void run() {
-                int processExitCode = JNI.waitFor(mShellPid);
-                // Revoke kill authority before posting the exit event.  The main
-                // thread may still be draining reader output, but this pid is no
-                // longer a live process and may already be reusable by the OS.
-                mProcessExitStatus = processExitCode;
-                mProcessExited = true;
-                mMainThreadHandler.sendMessage(mMainThreadHandler.obtainMessage(MSG_PROCESS_EXITED, processExitCode));
+                try {
+                    int observedExit = JNI.waitForExit(watchedPid);
+                    synchronized (TerminalSession.this) {
+                        // WNOWAIT still reserves the PID here. This lock also covers
+                        // the signal syscall, so no admitted kill can outlive revocation.
+                        mProcessExitStatus = observedExit;
+                        mProcessExited = true;
+                    }
+                    int processExitCode = JNI.waitFor(watchedPid);
+                    synchronized (TerminalSession.this) {
+                        mProcessExitStatus = processExitCode;
+                        mProcessReaped = true;
+                    }
+                    mMainThreadHandler.sendMessage(mMainThreadHandler.obtainMessage(MSG_PROCESS_EXITED, processExitCode));
+                } catch (Throwable waitError) {
+                    TerminalFailureUtils.rethrowFatal(waitError);
+                    synchronized (TerminalSession.this) { mProcessOwnershipLost = true; }
+                    TerminalFailureUtils.log(mClient, LOG_TAG, "Lost child wait ownership", waitError);
+                    // Do not signal a numeric PID after losing its wait/ownership proof.
+                    onParserWorkerFailure(waitError);
+                    completeFailedSession();
+                }
             }
         }.start();
 
@@ -731,16 +747,17 @@ public final class TerminalSession extends TerminalOutput {
 
     /** Finish this terminal session by sending SIGKILL to the shell. */
     public void finishIfRunning() {
-        final int pid;
+        ErrnoException signalError = null;
         synchronized (this) {
-            if (mShellPid <= 0 || mProcessExited) return;
-            pid = mShellPid;
+            if (mShellPid <= 0 || mProcessExited || mProcessOwnershipLost) return;
+            try {
+                Os.kill(mShellPid, OsConstants.SIGKILL);
+            } catch (ErrnoException error) {
+                signalError = error;
+            }
         }
-        try {
-            Os.kill(pid, OsConstants.SIGKILL);
-        } catch (ErrnoException e) {
-            TerminalFailureUtils.log(mClient, LOG_TAG, "Failed sending SIGKILL", e);
-        }
+        if (signalError != null)
+            TerminalFailureUtils.log(mClient, LOG_TAG, "Failed sending SIGKILL", signalError);
     }
 
     /** Cleanup resources after process exit (or failure before a process was started). */
@@ -790,15 +807,12 @@ public final class TerminalSession extends TerminalOutput {
 
         // A real child is still owned until the waiter revokes kill authority.
         // Its exit message finishes failure independently of the now-dead parser.
-        if (getPid() > 0 && !mProcessExited) {
-            finishIfRunning();
-        } else {
-            completeFailedSession();
-        }
+        if (getPid() > 0 && !mProcessExited && !mProcessOwnershipLost) finishIfRunning();
+        completeFailedSession();
     }
 
     private void completeFailedSession() {
-        if (getPid() > 0 && !mProcessExited) return;
+        if (getPid() > 0 && !mProcessReaped && !mProcessOwnershipLost) return;
         mMainThreadHandler.removeMessages(MSG_PROCESS_READER_TIMEOUT);
         if (!mFailureCompleted.compareAndSet(false, true)) return;
         cleanupResources(mProcessExitStatus);
@@ -992,6 +1006,7 @@ public final class TerminalSession extends TerminalOutput {
                 int exitCode = (Integer) msg.obj;
                 mProcessExitStatus = exitCode;
                 mProcessExited = true;
+                mProcessReaped = true;
                 boolean scheduleReaderTimeout = mExitCoordinator.markProcessExited(exitCode);
                 Logger.logInfo(mClient, LOG_TAG, "event=PROCESS_EXITED session=" + mHandle + " exitStatus=" + exitCode);
                 if (scheduleReaderTimeout) {
@@ -1011,7 +1026,7 @@ public final class TerminalSession extends TerminalOutput {
             if (mFailureRequested.get()) {
                 // The parser is dead: never queue its normal FINISH command. Complete
                 // only after a real exit fact, or when no subprocess was ever started.
-                if (mProcessExited || getPid() <= 0) completeFailedSession();
+                if (mProcessReaped || mProcessOwnershipLost || getPid() <= 0) completeFailedSession();
                 return;
             }
 

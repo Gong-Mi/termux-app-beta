@@ -46,7 +46,31 @@ close_order = re.search(
     r"\s*if \(descriptor >= 0\) JNI\.close\(descriptor\);", cleanup)
 if close_order is None:
     raise SystemExit("FAIL: missing PTY ownership contract: captured raw master closes in finally")
-require("if (mShellPid <= 0 || mProcessExited) return;", "post-exit PID kill authority is revoked")
+require("if (mShellPid <= 0 || mProcessExited || mProcessOwnershipLost) return;",
+        "post-exit PID kill authority is revoked")
+# A post-waitpid flag is too late: reserve the PID with WNOWAIT, revoke under
+# the signal lock, then perform the actual reap. These remain source contracts.
+require("int observedExit = JNI.waitForExit(watchedPid);", "observe child exit without reaping")
+revocation = re.search(
+    r"JNI\.waitForExit\(watchedPid\);\s*synchronized \(TerminalSession\.this\) \{.*?"
+    r"mProcessExited = true;\s*\}\s*int processExitCode = JNI\.waitFor\(watchedPid\);", text, re.S)
+if revocation is None:
+    raise SystemExit("FAIL: missing PTY ownership contract: revoke signal authority before reap")
+signal_lock = re.search(
+    r"synchronized \(this\) \{\s*if \(mShellPid <= 0 \|\| mProcessExited \|\| mProcessOwnershipLost\) return;"
+    r"\s*try \{\s*Os\.kill\(mShellPid, OsConstants\.SIGKILL\);", text)
+if signal_lock is None:
+    raise SystemExit("FAIL: missing PTY ownership contract: signal syscall is covered by revocation lock")
+require("if (getPid() > 0 && !mProcessReaped && !mProcessOwnershipLost) return;",
+        "failure completion waits for reap or explicit lost ownership")
+native = Path("terminal-emulator/src/main/jni/termux.c").read_text(encoding="utf-8")
+require("waitid(P_PID, (id_t) pid, &info, WEXITED | WNOWAIT)", "native PID reservation uses WNOWAIT", native)
+for name, label in [("waitForExit", "observer retries EINTR"), ("waitFor", "reaper retries EINTR")]:
+    body = re.search(r"JNIEXPORT jint JNICALL Java_com_termux_terminal_JNI_" + name +
+                     r"\(.*?\n\}", native, re.S)
+    if body is None:
+        raise SystemExit("FAIL: missing PTY ownership contract: native " + name)
+    require("while (result < 0 && errno == EINTR);", label, body.group(0))
 
 # The raw master is allowed to be closed in the dup-failure rollback and in
 # normal cleanup, but stream constructors must use only their duplicate vars.
