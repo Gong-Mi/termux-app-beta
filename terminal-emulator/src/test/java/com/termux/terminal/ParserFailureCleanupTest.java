@@ -65,7 +65,8 @@ public class ParserFailureCleanupTest extends TestCase {
             assertEquals(1, f.finished.get());
             assertEquals("broken final sink must not suppress terminal-state notification", 1, f.textChanged.get());
             assertFalse(f.session.isRunning());
-            assertTrue("failed session was reported as successful", f.session.getExitStatus() != 0);
+            assertNotNull("logical session failure was not recorded", f.session.getFailureCause());
+            assertNull("unstarted fixture has no child exit status", f.session.getProcessExitStatus());
             assertFalse("inbound remains writable after worker death", f.session.mProcessToTerminalIOQueue.write(new byte[]{1}, 0, 1));
             assertFalse("outbound remains writable after worker death", f.session.mTerminalToProcessIOQueue.write(new byte[]{1}, 0, 1));
             f.worker.requestFinish(0);

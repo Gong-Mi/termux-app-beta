@@ -57,10 +57,10 @@ public final class TerminalSession extends TerminalOutput {
     private final byte[] mUtf8InputBuffer = new byte[5];
 
     /** Callback which gets notified when a session finishes or changes title. */
-    TerminalSessionClient mClient;
+    volatile TerminalSessionClient mClient;
 
     /** Callback passed to the emulator; posts callbacks to {@link #mClient} on the main thread. */
-    private TerminalSessionClient mEmulatorClient;
+    private volatile TerminalSessionClient mEmulatorClient;
 
     /** Sink that will receive immutable model frames once the parser worker is wired in. */
     private TerminalFrameSink mFrameSink;
@@ -84,7 +84,6 @@ public final class TerminalSession extends TerminalOutput {
     private int mTerminalFileDescriptor = -1;
 
     /** Logical session failure is distinct from the actual waitpid status. */
-    public static final int SESSION_FAILURE_EXIT_STATUS = 70;
     private volatile Throwable mFailureCause;
     private volatile Integer mProcessExitStatus;
     private final AtomicBoolean mFailureRequested = new AtomicBoolean();
@@ -745,13 +744,13 @@ public final class TerminalSession extends TerminalOutput {
     }
 
     /** Cleanup resources after process exit (or failure before a process was started). */
-    void cleanupResources(int exitStatus) {
+    void cleanupResources(Integer exitStatus) {
         final int descriptor;
         synchronized (this) {
             if (!mResourcesClosed.compareAndSet(false, true)) return;
-            mProcessExited = true;
             mShellPid = -1;
-            mShellExitStatus = mFailureRequested.get() ? SESSION_FAILURE_EXIT_STATUS : exitStatus;
+            // A missing status means no wait result, not a fabricated child exit.
+            if (exitStatus != null) mShellExitStatus = exitStatus;
             descriptor = mTerminalFileDescriptor;
             mTerminalFileDescriptor = -1;
         }
@@ -800,9 +799,9 @@ public final class TerminalSession extends TerminalOutput {
 
     private void completeFailedSession() {
         if (getPid() > 0 && !mProcessExited) return;
+        mMainThreadHandler.removeMessages(MSG_PROCESS_READER_TIMEOUT);
         if (!mFailureCompleted.compareAndSet(false, true)) return;
-        cleanupResources(mProcessExitStatus == null ? SESSION_FAILURE_EXIT_STATUS : mProcessExitStatus);
-        synchronized (this) { mShellExitStatus = SESSION_FAILURE_EXIT_STATUS; }
+        cleanupResources(mProcessExitStatus);
         // Best effort visual evidence is separate from mandatory resource termination.
         try {
             TerminalEmulator emulator = mEmulator;
@@ -908,9 +907,14 @@ public final class TerminalSession extends TerminalOutput {
         return mShellPid > 0 && !mProcessExited;
     }
 
-    /** Only valid if not {@link #isRunning()}. */
+    /**
+     * Actual shell exit status; valid when {@link #getProcessExitStatus()} is non-null.
+     * A parser/transport failure is reported by {@link #getFailureCause()}, never by
+     * replacing the child's status. Unstarted sessions retain the legacy default.
+     */
     public synchronized int getExitStatus() {
-        return mShellExitStatus;
+        Integer observedStatus = mProcessExitStatus;
+        return observedStatus != null ? observedStatus : mShellExitStatus;
     }
 
     @Override

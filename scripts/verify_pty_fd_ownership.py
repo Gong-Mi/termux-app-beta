@@ -33,7 +33,7 @@ require("if (mPtyStreamsCloseRequested) return;", "late stream registration is r
 # captured handle in finally. Checking the old live-field spelling rejects this
 # safer transfer and does not protect exactly-once close.
 require("private int mTerminalFileDescriptor = -1;", "unstarted raw FD sentinel")
-method = re.search(r"void cleanupResources\(int exitStatus\)\s*\{(.*?)\n    \}", text, re.S)
+method = re.search(r"void cleanupResources\((?:int|Integer) exitStatus\)\s*\{(.*?)\n    \}", text, re.S)
 if method is None:
     raise SystemExit("FAIL: missing PTY ownership contract: cleanupResources body")
 cleanup = method.group(1)
