@@ -18,6 +18,7 @@ public class ParserFailureCleanupTest extends TestCase {
     }
     private static final class Fixture implements AutoCloseable {
         final AtomicInteger finished = new AtomicInteger();
+        final AtomicInteger textChanged = new AtomicInteger();
         final AtomicReference<Throwable> escaped = new AtomicReference<>();
         final TerminalSession session;
         final TerminalParserWorker worker;
@@ -25,6 +26,7 @@ public class ParserFailureCleanupTest extends TestCase {
             TerminalSessionClient client = (TerminalSessionClient) Proxy.newProxyInstance(
                 getClass().getClassLoader(), new Class<?>[]{TerminalSessionClient.class}, (p, m, a) -> {
                     if (m.getName().equals("onSessionFinished")) finished.incrementAndGet();
+                    if (m.getName().equals("onTextChanged")) textChanged.incrementAndGet();
                     if (throwingLogger && m.getName().equals("logError"))
                         throw new IllegalStateException("secondary logger failure");
                     return null;
@@ -32,10 +34,15 @@ public class ParserFailureCleanupTest extends TestCase {
             session = new TerminalSession("/unused", "/", new String[0], new String[0], 100, client);
             TerminalEmulator emulator = new TerminalEmulator(new Output(), 80, 24, 8, 16, 100, client);
             session.mEmulator = emulator;
+            TerminalFrameSink failingSink = frame -> {
+                if (fault instanceof Error) throw (Error) fault;
+                throw (RuntimeException) fault;
+            };
             worker = new TerminalParserWorker(emulator, session.mProcessToTerminalIOQueue,
-                frame -> { if (fault instanceof Error) throw (Error) fault; throw (RuntimeException) fault; },
-                client, session, 65536, 32768);
+                failingSink, client, session, 65536, 32768);
             Field wf = TerminalSession.class.getDeclaredField("mParserWorker"); wf.setAccessible(true); wf.set(session, worker);
+            // Match the production Session route, including the failed-session publication.
+            session.setFrameSink(failingSink);
             Field tf = TerminalParserWorker.class.getDeclaredField("mThread"); tf.setAccessible(true);
             ((Thread) tf.get(worker)).setUncaughtExceptionHandler((t, e) -> escaped.set(e));
         }
@@ -56,6 +63,7 @@ public class ParserFailureCleanupTest extends TestCase {
             f.fail();
             assertNull("ordinary failure escaped", f.escaped.get());
             assertEquals(1, f.finished.get());
+            assertEquals("broken final sink must not suppress terminal-state notification", 1, f.textChanged.get());
             assertFalse(f.session.isRunning());
             assertTrue("failed session was reported as successful", f.session.getExitStatus() != 0);
             assertFalse("inbound remains writable after worker death", f.session.mProcessToTerminalIOQueue.write(new byte[]{1}, 0, 1));

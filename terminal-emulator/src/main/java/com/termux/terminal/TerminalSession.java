@@ -740,7 +740,7 @@ public final class TerminalSession extends TerminalOutput {
         try {
             Os.kill(pid, OsConstants.SIGKILL);
         } catch (ErrnoException e) {
-            Logger.logWarn(mClient, LOG_TAG, "Failed sending SIGKILL: " + e.getMessage());
+            TerminalFailureUtils.log(mClient, LOG_TAG, "Failed sending SIGKILL", e);
         }
     }
 
@@ -774,8 +774,13 @@ public final class TerminalSession extends TerminalOutput {
     /** Called outside the emulator monitor when the parser cannot continue safely. */
     void onParserWorkerFailure(Throwable cause) {
         TerminalFailureUtils.rethrowFatal(cause);
-        if (!mFailureRequested.compareAndSet(false, true)) return;
-        mFailureCause = cause;
+        synchronized (this) {
+            if (mFailureRequested.get()) return;
+            // Publish the cause before the volatile terminal-failure flag: the
+            // main-thread exit/reader handler must never complete a cause-less failure.
+            mFailureCause = cause;
+            mFailureRequested.set(true);
+        }
         mProcessReaderStopRequested = true;
         // Break both blocking queue edges before waiting for any process/reader event.
         mTerminalToProcessIOQueue.close();
@@ -811,11 +816,19 @@ public final class TerminalSession extends TerminalOutput {
                 }
                 TerminalFrameSink sink = mFrameSink;
                 if (sink != null) sink.publishFrame(frame);
-                mEmulatorClient.onTextChanged(this);
             }
         } catch (Throwable visualError) {
             TerminalFailureUtils.rethrowFatal(visualError);
             TerminalFailureUtils.log(mClient, LOG_TAG, "Unable to publish failed-session frame", visualError);
+        }
+        // A broken frame sink must not suppress the independent state notification.
+        if (mEmulator != null) {
+            try {
+                mEmulatorClient.onTextChanged(this);
+            } catch (Throwable notificationError) {
+                TerminalFailureUtils.rethrowFatal(notificationError);
+                TerminalFailureUtils.log(mClient, LOG_TAG, "Failed-session state notification failed", notificationError);
+            }
         }
         notifySessionFinishedOnce();
     }
