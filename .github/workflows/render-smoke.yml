@@ -26,7 +26,7 @@ on:
       - 'gradlew.bat'
       - '.github/workflows/render-smoke.yml'
   pull_request:
-    branches: [ master ]
+    branches: [ master, fix/session-failure-cleanup-r2 ]
     paths:
       - 'app/**'
       - 'support_ui/**'

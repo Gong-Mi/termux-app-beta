@@ -15,7 +15,7 @@ on:
       - 'gradlew.bat'
       - '.github/workflows/perf.yml'
   pull_request:
-    branches: [ master ]
+    branches: [ master, fix/session-failure-cleanup-r2 ]
     paths:
       - 'terminal-emulator/**'
       - 'terminal-view/**'

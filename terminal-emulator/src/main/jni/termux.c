@@ -1,4 +1,5 @@
 #include <dirent.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <jni.h>
 #include <signal.h>
@@ -198,18 +199,42 @@ JNIEXPORT void JNICALL Java_com_termux_terminal_JNI_setPtyUTF8Mode(JNIEnv* TERMU
     }
 }
 
-JNIEXPORT jint JNICALL Java_com_termux_terminal_JNI_waitFor(JNIEnv* TERMUX_UNUSED(env), jclass TERMUX_UNUSED(clazz), jint pid)
+/* Observe exit without releasing the child's PID. Java revokes signal authority
+ * while the kernel still holds this zombie, before waitFor() is allowed to reap. */
+JNIEXPORT jint JNICALL Java_com_termux_terminal_JNI_waitForExit(JNIEnv* env, jclass TERMUX_UNUSED(clazz), jint pid)
+{
+    siginfo_t info;
+    int result;
+    do {
+        memset(&info, 0, sizeof(info));
+        result = waitid(P_PID, (id_t) pid, &info, WEXITED | WNOWAIT);
+    } while (result < 0 && errno == EINTR);
+    if (result < 0) {
+        char message[128];
+        snprintf(message, sizeof(message), "waitid(%d) failed: %s", pid, strerror(errno));
+        return throw_runtime_exception(env, message);
+    }
+    if (info.si_pid != pid) return throw_runtime_exception(env, "waitid returned an unexpected child");
+    if (info.si_code == CLD_EXITED) return info.si_status;
+    if (info.si_code == CLD_KILLED || info.si_code == CLD_DUMPED) return -info.si_status;
+    return throw_runtime_exception(env, "waitid returned a non-terminal child state");
+}
+
+JNIEXPORT jint JNICALL Java_com_termux_terminal_JNI_waitFor(JNIEnv* env, jclass TERMUX_UNUSED(clazz), jint pid)
 {
     int status;
-    waitpid(pid, &status, 0);
-    if (WIFEXITED(status)) {
-        return WEXITSTATUS(status);
-    } else if (WIFSIGNALED(status)) {
-        return -WTERMSIG(status);
-    } else {
-        // Should never happen - waitpid(2) says "One of the first three macros will evaluate to a non-zero (true) value".
-        return 0;
+    pid_t result;
+    do {
+        result = waitpid(pid, &status, 0);
+    } while (result < 0 && errno == EINTR);
+    if (result != pid) {
+        char message[128];
+        snprintf(message, sizeof(message), "waitpid(%d) failed: %s", pid, strerror(errno));
+        return throw_runtime_exception(env, message);
     }
+    if (WIFEXITED(status)) return WEXITSTATUS(status);
+    if (WIFSIGNALED(status)) return -WTERMSIG(status);
+    return throw_runtime_exception(env, "waitpid returned a non-terminal child state");
 }
 
 JNIEXPORT void JNICALL Java_com_termux_terminal_JNI_close(JNIEnv* TERMUX_UNUSED(env), jclass TERMUX_UNUSED(clazz), jint fileDescriptor)

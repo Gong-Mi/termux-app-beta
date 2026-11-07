@@ -87,7 +87,8 @@ public class TermuxSessionsListViewController extends ArrayAdapter<TermuxSession
             sessionTitleView.setPaintFlags(sessionTitleView.getPaintFlags() | Paint.STRIKE_THRU_TEXT_FLAG);
         }
         int defaultColor = shouldEnableDarkTheme ? Color.WHITE : Color.BLACK;
-        int color = sessionRunning || sessionAtRow.getExitStatus() == 0 ? defaultColor : Color.RED;
+        boolean sessionFailed = sessionAtRow.getFailureCause() != null;
+        int color = !sessionFailed && (sessionRunning || sessionAtRow.getExitStatus() == 0) ? defaultColor : Color.RED;
         sessionTitleView.setTextColor(color);
         return sessionRowView;
     }

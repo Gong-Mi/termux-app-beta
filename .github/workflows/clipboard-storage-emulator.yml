@@ -14,7 +14,7 @@ on:
       - 'gradle/**'
       - '.github/workflows/clipboard-storage-emulator.yml'
   pull_request:
-    branches: [ master ]
+    branches: [ master, fix/session-failure-cleanup-r2 ]
     paths:
       - 'app/**'
       - 'support_ui/**'

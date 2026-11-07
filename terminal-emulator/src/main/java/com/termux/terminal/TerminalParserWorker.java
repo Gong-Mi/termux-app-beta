@@ -85,6 +85,16 @@ public final class TerminalParserWorker {
         }
     }
 
+    /** Abort pending work after a terminal session failure, waking a parked worker. */
+    void abort() {
+        mStopRequested.set(true);
+        mCommandQueue.clear();
+        mCommandQueue.add(Command.stop());
+    }
+
+    /** True only on this worker; used to distinguish UI admission from model replies. */
+    boolean isWorkerThread() { return Thread.currentThread() == mThread; }
+
     /** Test/lifecycle hook: wait until the worker has consumed the stop sentinel. */
     public boolean awaitStopped(long timeoutMs) throws InterruptedException {
         mThread.join(timeoutMs);
@@ -110,6 +120,7 @@ public final class TerminalParserWorker {
      * If the worker skipped snapshots while a frame was pending, this schedules a republish.
      */
     public void onFrameConsumed(TerminalModelFrame frame) {
+        if (mStopped || mStopRequested.get()) return;
         mConsumedPending = true;
         if (mDirty && mRepublishScheduled.compareAndSet(false, true)) {
             mCommandQueue.add(Command.republish());
@@ -118,7 +129,7 @@ public final class TerminalParserWorker {
 
     public void requestAppend() {
         // Collapse multiple append notifications into at most one queued command.
-        if (!mStopRequested.get() && mAppendScheduled.compareAndSet(false, true)) {
+        if (!mStopped && !mStopRequested.get() && mAppendScheduled.compareAndSet(false, true)) {
             mCommandQueue.add(Command.append());
         }
     }
@@ -189,17 +200,15 @@ public final class TerminalParserWorker {
                 Thread.currentThread().interrupt();
                 break;
             } catch (Throwable t) {
-                // An uncaught escape here would hit RuntimeInit's KillApplicationHandler and
-                // SIGKILL the whole app process (uncaught worker-thread exceptions are fatal
-                // process-wide on Android). Contain the failure to this session: log, mark the
-                // worker dead, and notify the client so the UI can retire the session.
+                TerminalFailureUtils.rethrowFatal(t);
                 mStopped = true;
-                Logger.logError(mClient, LOG_TAG, "parser worker died; stopping session: " + t);
-                try {
-                    if (mClient != null && mSession != null) mClient.onSessionFinished(mSession);
-                } catch (Throwable ignored) {
-                    // The client callback itself failed; the worker is already dead.
-                }
+                mStopRequested.set(true);
+                mCommandQueue.clear();
+                mInputQueue.close();
+                // Resource/process termination belongs to the session, not a fake
+                // completion callback from a worker whose state may be corrupted.
+                if (mSession != null) mSession.onParserWorkerFailure(t);
+                else TerminalFailureUtils.log(mClient, LOG_TAG, "Parser worker failed", t);
             }
         }
     }
@@ -329,7 +338,7 @@ public final class TerminalParserWorker {
     }
 
     private void scheduleAppendIfNeeded() {
-        if (!mStopRequested.get() && mAppendScheduled.compareAndSet(false, true)) {
+        if (!mStopped && !mStopRequested.get() && mAppendScheduled.compareAndSet(false, true)) {
             mCommandQueue.add(Command.append());
         }
     }
@@ -357,7 +366,8 @@ public final class TerminalParserWorker {
         byte[] bytesToWrite = exitDescription.getBytes(java.nio.charset.StandardCharsets.UTF_8);
         mEmulator.append(bytesToWrite, bytesToWrite.length);
         publishFrame(true);
-        mClient.onSessionFinished(mSession);
+        if (mSession != null) mSession.notifySessionFinishedOnce();
+        else mClient.onSessionFinished(null);
         mStopped = true;
     }
 

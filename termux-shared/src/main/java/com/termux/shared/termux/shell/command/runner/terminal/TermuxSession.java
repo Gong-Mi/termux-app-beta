@@ -177,9 +177,13 @@ public class TermuxSession {
         // If process is still running, then ignore the call
         if (mTerminalSession.isRunning()) return;
 
-        int exitCode = mTerminalSession.getExitStatus();
+        Throwable sessionFailure = mTerminalSession.getFailureCause();
+        Integer exitCode = mTerminalSession.getProcessExitStatus();
+        // Preserve legacy healthy-session callers, but never invent an exit for a
+        // failed session that did not start/reap a child.
+        if (exitCode == null && sessionFailure == null) exitCode = mTerminalSession.getExitStatus();
 
-        if (exitCode == 0)
+        if (sessionFailure == null && Integer.valueOf(0).equals(exitCode))
             Logger.logDebug(LOG_TAG, "The \"" + mExecutionCommand.getCommandIdAndLabelLogString() + "\" TermuxSession exited normally");
         else
             Logger.logDebug(LOG_TAG, "The \"" + mExecutionCommand.getCommandIdAndLabelLogString() + "\" TermuxSession exited with code: " + exitCode);
@@ -192,11 +196,21 @@ public class TermuxSession {
 
         mExecutionCommand.resultData.exitCode = exitCode;
 
-        if (this.mSetStdoutOnExit)
-            mExecutionCommand.resultData.stdout.append(ShellUtils.getTerminalSessionTranscriptText(mTerminalSession, true, false));
+        RuntimeException transcriptFailure = null;
+        if (this.mSetStdoutOnExit) {
+            try {
+                mExecutionCommand.resultData.stdout.append(ShellUtils.getTerminalSessionTranscriptText(mTerminalSession, true, false));
+            } catch (RuntimeException error) {
+                transcriptFailure = error;
+            }
+        }
 
-        if (!mExecutionCommand.setState(ExecutionCommand.ExecutionState.EXECUTED))
-            return;
+        if (sessionFailure != null)
+            mExecutionCommand.setStateFailed(Errno.ERRNO_FAILED.getCode(), "Terminal parser or transport failed", sessionFailure);
+        if (transcriptFailure != null)
+            mExecutionCommand.setStateFailed(Errno.ERRNO_FAILED.getCode(), "Failed to collect terminal output", transcriptFailure);
+        if (sessionFailure == null && transcriptFailure == null &&
+            !mExecutionCommand.setState(ExecutionCommand.ExecutionState.EXECUTED)) return;
 
         TermuxSession.processTermuxSessionResult(this, null);
     }

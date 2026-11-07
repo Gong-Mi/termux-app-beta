@@ -18,6 +18,7 @@ import java.lang.reflect.Field;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * A terminal session, consisting of a process coupled to a terminal interface.
@@ -56,10 +57,10 @@ public final class TerminalSession extends TerminalOutput {
     private final byte[] mUtf8InputBuffer = new byte[5];
 
     /** Callback which gets notified when a session finishes or changes title. */
-    TerminalSessionClient mClient;
+    volatile TerminalSessionClient mClient;
 
     /** Callback passed to the emulator; posts callbacks to {@link #mClient} on the main thread. */
-    private TerminalSessionClient mEmulatorClient;
+    private volatile TerminalSessionClient mEmulatorClient;
 
     /** Sink that will receive immutable model frames once the parser worker is wired in. */
     private TerminalFrameSink mFrameSink;
@@ -80,7 +81,15 @@ public final class TerminalSession extends TerminalOutput {
      * The file descriptor referencing the master half of a pseudo-terminal pair, resulting from calling
      * {@link JNI#createSubprocess(String, String, String[], String[], int[], int, int, int, int)}.
      */
-    private int mTerminalFileDescriptor;
+    private int mTerminalFileDescriptor = -1;
+
+    /** Logical session failure is distinct from the actual waitpid status. */
+    private volatile Throwable mFailureCause;
+    private volatile Integer mProcessExitStatus;
+    private final AtomicBoolean mFailureRequested = new AtomicBoolean();
+    private final AtomicBoolean mResourcesClosed = new AtomicBoolean();
+    private final AtomicBoolean mFailureCompleted = new AtomicBoolean();
+    private final AtomicBoolean mFinishNotified = new AtomicBoolean();
 
     /** Set on the main thread when the post-exit reader grace period expires. */
     private volatile boolean mProcessReaderStopRequested;
@@ -96,12 +105,12 @@ public final class TerminalSession extends TerminalOutput {
     private FileDescriptor mPtyOutputFd;
     private boolean mPtyStreamsCloseRequested;
 
-    /**
-     * Set as soon as waitFor() reports process exit.  Reader draining and parser
-     * cleanup may continue after that point, but the old pid must no longer be
-     * considered killable.
-     */
+    /** Exit was observed with WNOWAIT, before the PID can be reaped/reused. */
     private volatile boolean mProcessExited;
+    /** The owned waiter completed the real reap; completion must wait for this fact. */
+    private volatile boolean mProcessReaped;
+    /** Unexpected wait failure revokes unsafe numeric-PID signalling without inventing exit. */
+    private volatile boolean mProcessOwnershipLost;
 
     /** Set by the application for user identification of session, not by terminal. */
     public String mSessionName;
@@ -387,15 +396,32 @@ public final class TerminalSession extends TerminalOutput {
             }
         }.start();
 
-        new Thread("TermSessionWaiter[pid=" + mShellPid + "]") {
+        final int watchedPid = mShellPid;
+        new Thread("TermSessionWaiter[pid=" + watchedPid + "]") {
             @Override
             public void run() {
-                int processExitCode = JNI.waitFor(mShellPid);
-                // Revoke kill authority before posting the exit event.  The main
-                // thread may still be draining reader output, but this pid is no
-                // longer a live process and may already be reusable by the OS.
-                mProcessExited = true;
-                mMainThreadHandler.sendMessage(mMainThreadHandler.obtainMessage(MSG_PROCESS_EXITED, processExitCode));
+                try {
+                    int observedExit = JNI.waitForExit(watchedPid);
+                    synchronized (TerminalSession.this) {
+                        // WNOWAIT still reserves the PID here. This lock also covers
+                        // the signal syscall, so no admitted kill can outlive revocation.
+                        mProcessExitStatus = observedExit;
+                        mProcessExited = true;
+                    }
+                    int processExitCode = JNI.waitFor(watchedPid);
+                    synchronized (TerminalSession.this) {
+                        mProcessExitStatus = processExitCode;
+                        mProcessReaped = true;
+                    }
+                    mMainThreadHandler.sendMessage(mMainThreadHandler.obtainMessage(MSG_PROCESS_EXITED, processExitCode));
+                } catch (Throwable waitError) {
+                    TerminalFailureUtils.rethrowFatal(waitError);
+                    synchronized (TerminalSession.this) { mProcessOwnershipLost = true; }
+                    TerminalFailureUtils.log(mClient, LOG_TAG, "Lost child wait ownership", waitError);
+                    // Do not signal a numeric PID after losing its wait/ownership proof.
+                    onParserWorkerFailure(waitError);
+                    completeFailedSession();
+                }
             }
         }.start();
 
@@ -721,31 +747,114 @@ public final class TerminalSession extends TerminalOutput {
 
     /** Finish this terminal session by sending SIGKILL to the shell. */
     public void finishIfRunning() {
-        final int pid;
+        ErrnoException signalError = null;
         synchronized (this) {
-            if (mShellPid <= 0 || mProcessExited) return;
-            pid = mShellPid;
+            if (mShellPid <= 0 || mProcessExited || mProcessOwnershipLost) return;
+            try {
+                Os.kill(mShellPid, OsConstants.SIGKILL);
+            } catch (ErrnoException error) {
+                signalError = error;
+            }
         }
+        if (signalError != null)
+            TerminalFailureUtils.log(mClient, LOG_TAG, "Failed sending SIGKILL", signalError);
+    }
+
+    /** Cleanup resources after process exit (or failure before a process was started). */
+    void cleanupResources(Integer exitStatus) {
+        final int descriptor;
+        synchronized (this) {
+            if (!mResourcesClosed.compareAndSet(false, true)) return;
+            mShellPid = -1;
+            // A missing status means no wait result, not a fabricated child exit.
+            if (exitStatus != null) mShellExitStatus = exitStatus;
+            descriptor = mTerminalFileDescriptor;
+            mTerminalFileDescriptor = -1;
+        }
+        mTerminalToProcessIOQueue.close();
+        mProcessToTerminalIOQueue.close();
         try {
-            Os.kill(pid, OsConstants.SIGKILL);
-        } catch (ErrnoException e) {
-            Logger.logWarn(mClient, LOG_TAG, "Failed sending SIGKILL: " + e.getMessage());
+            closePtyStreams();
+        } finally {
+            // An unstarted session owns no raw FD; never close stdin (fd 0).
+            if (descriptor >= 0) JNI.close(descriptor);
         }
     }
 
-    /** Cleanup resources when the process exits. */
-    void cleanupResources(int exitStatus) {
-        synchronized (this) {
-            mProcessExited = true;
-            mShellPid = -1;
-            mShellExitStatus = exitStatus;
-        }
+    /** The cause of a logical parser/transport failure, not a fabricated child exit code. */
+    public Throwable getFailureCause() { return mFailureCause; }
 
-        // Stop the reader and writer threads, and close the I/O streams
+    /** Actual waitpid result, or null if no subprocess exit has been observed. */
+    public Integer getProcessExitStatus() { return mProcessExitStatus; }
+
+    /** Called outside the emulator monitor when the parser cannot continue safely. */
+    void onParserWorkerFailure(Throwable cause) {
+        TerminalFailureUtils.rethrowFatal(cause);
+        synchronized (this) {
+            if (mFailureRequested.get()) return;
+            // Publish the cause before the volatile terminal-failure flag: the
+            // main-thread exit/reader handler must never complete a cause-less failure.
+            mFailureCause = cause;
+            mFailureRequested.set(true);
+        }
+        mProcessReaderStopRequested = true;
+        // Break both blocking queue edges before waiting for any process/reader event.
         mTerminalToProcessIOQueue.close();
         mProcessToTerminalIOQueue.close();
-        closePtyStreams();
-        JNI.close(mTerminalFileDescriptor);
+        TerminalParserWorker worker = mParserWorker;
+        if (worker != null) worker.abort();
+        TerminalFailureUtils.log(mClient, LOG_TAG, "Terminal session failed", cause);
+
+        // A real child is still owned until the waiter revokes kill authority.
+        // Its exit message finishes failure independently of the now-dead parser.
+        if (getPid() > 0 && !mProcessExited && !mProcessOwnershipLost) finishIfRunning();
+        completeFailedSession();
+    }
+
+    private void completeFailedSession() {
+        if (getPid() > 0 && !mProcessReaped && !mProcessOwnershipLost) return;
+        mMainThreadHandler.removeMessages(MSG_PROCESS_READER_TIMEOUT);
+        if (!mFailureCompleted.compareAndSet(false, true)) return;
+        cleanupResources(mProcessExitStatus);
+        // Best effort visual evidence is separate from mandatory resource termination.
+        try {
+            TerminalEmulator emulator = mEmulator;
+            if (emulator != null) {
+                TerminalModelFrame frame;
+                synchronized (emulator) {
+                    byte[] banner = "\u0018\r\n[Session failed - press Enter]".getBytes(StandardCharsets.UTF_8);
+                    emulator.append(banner, banner.length);
+                    frame = new TerminalModelFrame(emulator, 0, null, 0);
+                    mLatestFrame = frame;
+                }
+                TerminalFrameSink sink = mFrameSink;
+                if (sink != null) sink.publishFrame(frame);
+            }
+        } catch (Throwable visualError) {
+            TerminalFailureUtils.rethrowFatal(visualError);
+            TerminalFailureUtils.log(mClient, LOG_TAG, "Unable to publish failed-session frame", visualError);
+        }
+        // A broken frame sink must not suppress the independent state notification.
+        if (mEmulator != null) {
+            try {
+                mEmulatorClient.onTextChanged(this);
+            } catch (Throwable notificationError) {
+                TerminalFailureUtils.rethrowFatal(notificationError);
+                TerminalFailureUtils.log(mClient, LOG_TAG, "Failed-session state notification failed", notificationError);
+            }
+        }
+        notifySessionFinishedOnce();
+    }
+
+    /** At-most-once completion attempt, after state/resources have reached terminal state. */
+    void notifySessionFinishedOnce() {
+        if (!mFinishNotified.compareAndSet(false, true)) return;
+        try {
+            mEmulatorClient.onSessionFinished(this);
+        } catch (Throwable callbackError) {
+            TerminalFailureUtils.rethrowFatal(callbackError);
+            TerminalFailureUtils.log(mClient, LOG_TAG, "Session completion callback failed", callbackError);
+        }
     }
 
     /** Close Java-owned duplicate descriptors; stream close remains idempotent. */
@@ -812,9 +921,14 @@ public final class TerminalSession extends TerminalOutput {
         return mShellPid > 0 && !mProcessExited;
     }
 
-    /** Only valid if not {@link #isRunning()}. */
+    /**
+     * Actual shell exit status; valid when {@link #getProcessExitStatus()} is non-null.
+     * A parser/transport failure is reported by {@link #getFailureCause()}, never by
+     * replacing the child's status. Unstarted sessions retain the legacy default.
+     */
     public synchronized int getExitStatus() {
-        return mShellExitStatus;
+        Integer observedStatus = mProcessExitStatus;
+        return observedStatus != null ? observedStatus : mShellExitStatus;
     }
 
     @Override
@@ -890,6 +1004,9 @@ public final class TerminalSession extends TerminalOutput {
         public void handleMessage(Message msg) {
             if (msg.what == MSG_PROCESS_EXITED) {
                 int exitCode = (Integer) msg.obj;
+                mProcessExitStatus = exitCode;
+                mProcessExited = true;
+                mProcessReaped = true;
                 boolean scheduleReaderTimeout = mExitCoordinator.markProcessExited(exitCode);
                 Logger.logInfo(mClient, LOG_TAG, "event=PROCESS_EXITED session=" + mHandle + " exitStatus=" + exitCode);
                 if (scheduleReaderTimeout) {
@@ -904,6 +1021,13 @@ public final class TerminalSession extends TerminalOutput {
                 closePtyStreams();
                 mExitCoordinator.markReaderTimeout();
                 Logger.logWarn(mClient, LOG_TAG, "event=PTY_READER_TIMEOUT session=" + mHandle);
+            }
+
+            if (mFailureRequested.get()) {
+                // The parser is dead: never queue its normal FINISH command. Complete
+                // only after a real exit fact, or when no subprocess was ever started.
+                if (mProcessReaped || mProcessOwnershipLost || getPid() <= 0) completeFailedSession();
+                return;
             }
 
             if (mExitCoordinator.shouldFinish(false)) {
