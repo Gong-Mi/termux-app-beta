@@ -7,12 +7,13 @@ independent dup ownership, rollback after partial dup failure, stream
 registration after cleanup, and raw-FD close ordering.
 """
 from pathlib import Path
+import re
 
 SOURCE = Path("terminal-emulator/src/main/java/com/termux/terminal/TerminalSession.java")
 text = SOURCE.read_text(encoding="utf-8")
 
-def require(fragment: str, description: str) -> None:
-    if fragment not in text:
+def require(fragment: str, description: str, scope: str = text) -> None:
+    if fragment not in scope:
         raise SystemExit(f"FAIL: missing PTY ownership contract: {description}\n  {fragment}")
 
 require("inputFileDescriptor = Os.dup(terminalFileDescriptorWrapped);", "input duplicate")
@@ -28,7 +29,23 @@ require("mPtyOutputFd = outputDescriptor;", "dup output fd retained for cleanup"
 require("Os.close(inFd);", "cleanup closes input duplicate")
 require("Os.close(outFd);", "cleanup closes output duplicate")
 require("if (mPtyStreamsCloseRequested) return;", "late stream registration is rejected")
-require("closePtyStreams();\n        JNI.close(mTerminalFileDescriptor);", "duplicate streams close before raw master")
+# cleanup detaches the integer owner under the session lock, then closes the
+# captured handle in finally. Checking the old live-field spelling rejects this
+# safer transfer and does not protect exactly-once close.
+require("private int mTerminalFileDescriptor = -1;", "unstarted raw FD sentinel")
+method = re.search(r"void cleanupResources\(int exitStatus\)\s*\{(.*?)\n    \}", text, re.S)
+if method is None:
+    raise SystemExit("FAIL: missing PTY ownership contract: cleanupResources body")
+cleanup = method.group(1)
+require("if (!mResourcesClosed.compareAndSet(false, true)) return;",
+        "exactly one cleanup owner", cleanup)
+require("descriptor = mTerminalFileDescriptor;\n            mTerminalFileDescriptor = -1;",
+        "raw master is captured then invalidated", cleanup)
+close_order = re.search(
+    r"closePtyStreams\(\);\s*\}\s*finally\s*\{(?:\s*//[^\n]*\n)*"
+    r"\s*if \(descriptor >= 0\) JNI\.close\(descriptor\);", cleanup)
+if close_order is None:
+    raise SystemExit("FAIL: missing PTY ownership contract: captured raw master closes in finally")
 require("if (mShellPid <= 0 || mProcessExited) return;", "post-exit PID kill authority is revoked")
 
 # The raw master is allowed to be closed in the dup-failure rollback and in
