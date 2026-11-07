@@ -49,10 +49,11 @@ public final class TerminalSession extends TerminalOutput {
      */
     final ByteQueue mProcessToTerminalIOQueue = new ByteQueue(64 * 1024);
     /**
-     * A queue written to from the main thread due to user interaction, and read by another thread which forwards by
-     * writing to the {@link #mTerminalFileDescriptor}.
+     * A queue written to from the parser worker thread due to user interaction, and read by another thread which
+     * forwards by writing to the {@link #mTerminalFileDescriptor}. Admission never waits for the PTY writer:
+     * an over-capacity chunk is reported so the session can fail explicitly instead of truncating input.
      */
-    final ByteQueue mTerminalToProcessIOQueue = new ByteQueue(4096);
+    final TerminalOutboundQueue mTerminalToProcessIOQueue = new TerminalOutboundQueue();
     /** Buffer to write translate code points into utf8 before writing to mTerminalToProcessIOQueue */
     private final byte[] mUtf8InputBuffer = new byte[5];
 
@@ -377,10 +378,24 @@ public final class TerminalSession extends TerminalOutput {
                     while (true) {
                         int bytesToWrite = mTerminalToProcessIOQueue.read(buffer, true);
                         if (bytesToWrite == -1) return;
-                        termOut.write(buffer, 0, bytesToWrite);
+                        try {
+                            termOut.write(buffer, 0, bytesToWrite);
+                        } catch (IOException writeError) {
+                            // A PTY write failure is a transport failure while the session
+                            // still owns a live child. A close driven by process exit or an
+                            // already-recorded failure must not be misreported as a new one.
+                            if (!mProcessExited && !mFailureRequested.get()) {
+                                onParserWorkerFailure(writeError);
+                            }
+                            return;
+                        }
                     }
-                } catch (IOException e) {
-                    // Ignore.
+                } catch (RuntimeException e) {
+                    // Stream setup failed while unwinding shutdown, or another owner
+                    // already closed the duplicated descriptor.
+                    if (!mProcessExited && !mFailureRequested.get()) {
+                        onParserWorkerFailure(e);
+                    }
                 } finally {
                     synchronized (mPtyStreamLock) {
                         if (mTerminalOutputStream == termOut) mTerminalOutputStream = null;
@@ -427,10 +442,50 @@ public final class TerminalSession extends TerminalOutput {
 
     }
 
-    /** Write data to the shell process. */
+    /**
+     * Write data to the shell process.
+     *
+     * <p>Caller-originated input (UI keys, pastes submitted from another thread)
+     * is copied and queued as a command on the parser worker, so it is ordered
+     * with paste/mouse commands and parsed on the worker thread. The parser
+     * worker's own writes (paste chunks, protocol replies) are admitted straight
+     * to the bounded outbound queue at that exact command position. Neither path
+     * waits for the PTY writer; overload becomes an explicit session failure.</p>
+     */
     @Override
     public void write(byte[] data, int offset, int count) {
-        if (mShellPid > 0) mTerminalToProcessIOQueue.write(data, offset, count);
+        if (count == 0) return;
+        if (offset < 0 || count < 0 || count > data.length - offset) {
+            throw new IllegalArgumentException("offset/count outside buffer");
+        }
+
+        TerminalParserWorker worker = mParserWorker;
+        if (worker != null && worker.isWorkerThread()) {
+            if (mFailureRequested.get() || mProcessExited) return;
+            // offer() copies synchronously before returning, so the parser-owned
+            // buffer is safe to hand over without an extra copy here.
+            TerminalOutboundQueue.OfferResult offered = mTerminalToProcessIOQueue.offer(data, offset, count);
+            if (offered != TerminalOutboundQueue.OfferResult.ACCEPTED)
+                failInputOverflow("parser output queue (" + offered + ")", count);
+            return;
+        }
+
+        if (!isRunning() || mFailureRequested.get() || mProcessExited) return;
+        if (worker == null) return;
+        TerminalParserWorker.InputAdmission admission = worker.requestWrite(data, offset, count);
+        if (admission != TerminalParserWorker.InputAdmission.ACCEPTED)
+            failInputOverflow("pending input admission (" + admission + ")", count);
+    }
+
+    /** Input that cannot be admitted within finite memory fails the transport, never truncates silently. */
+    private void failInputOverflow(String edge, int bytes) {
+        if (mFailureRequested.get() || mProcessExited) return;
+        IOException error = new IOException("Terminal " + edge + " rejected " + bytes + " input bytes");
+        TerminalParserWorker worker = mParserWorker;
+        // Worker output happens inside the model monitor. Unwind to run() before
+        // teardown, signalling or callbacks; only non-worker admission fails here.
+        if (worker != null && worker.isWorkerThread()) throw new IllegalStateException(error);
+        onParserWorkerFailure(error);
     }
 
     /** Write the Unicode code point to the terminal encoded in UTF-8. */
@@ -699,8 +754,14 @@ public final class TerminalSession extends TerminalOutput {
 
     /** Paste text into the terminal, serialized with parser worker updates. */
     public void paste(String text) {
-        if (mParserWorker != null) {
-            mParserWorker.requestPaste(text);
+        if (!isRunning() || mFailureRequested.get() || mProcessExited) return;
+        TerminalParserWorker worker = mParserWorker;
+        if (worker != null) {
+            TerminalParserWorker.InputAdmission admission = worker.requestPaste(text);
+            if (admission != TerminalParserWorker.InputAdmission.ACCEPTED) {
+                failInputOverflow("paste admission (" + admission + ")",
+                    text == null ? 0 : (int) Math.min((long) text.length() * 3 + 16, Integer.MAX_VALUE));
+            }
         } else if (mEmulator != null) {
             synchronized (mEmulator) {
                 mEmulator.paste(text);
@@ -710,8 +771,13 @@ public final class TerminalSession extends TerminalOutput {
 
     /** Send a mouse event, serialized with parser worker updates. */
     public void sendMouseEvent(int button, int x, int y, boolean pressed) {
-        if (mParserWorker != null) {
-            mParserWorker.requestSendMouseEvent(button, x, y, pressed);
+        if (!isRunning() || mFailureRequested.get() || mProcessExited) return;
+        TerminalParserWorker worker = mParserWorker;
+        if (worker != null) {
+            TerminalParserWorker.InputAdmission admission = worker.requestSendMouseEvent(button, x, y, pressed);
+            if (admission != TerminalParserWorker.InputAdmission.ACCEPTED) {
+                failInputOverflow("mouse admission (" + admission + ")", 32);
+            }
         } else if (mEmulator != null) {
             synchronized (mEmulator) {
                 mEmulator.sendMouseEvent(button, x, y, pressed);

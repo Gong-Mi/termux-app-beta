@@ -397,6 +397,16 @@ public final class TerminalEmulator {
         }
     }
 
+    /**
+     * Forward raw downstream bytes to the configured {@link TerminalOutput} at
+     * this exact parser point. Used by the parser worker to execute queued
+     * caller input; the output implementation decides whether that write is a
+     * blocking transport write or a non-blocking queue admission.
+     */
+    void writeRawBytes(byte[] data, int offset, int count) {
+        mSession.write(data, offset, count);
+    }
+
     public void resize(int columns, int rows, int cellWidthPixels, int cellHeightPixels) {
         this.mCellWidthPixels = cellWidthPixels;
         this.mCellHeightPixels = cellHeightPixels;
@@ -2683,11 +2693,19 @@ public final class TerminalEmulator {
         // Second: Replace all newlines (\n) or CRLF (\r\n) with carriage returns (\r).
         text = text.replaceAll("\r?\n", "\r");
 
-        // Then: Implement bracketed paste mode if enabled:
+        // Then: Implement bracketed paste mode if enabled. The prefix, normalized
+        // body and suffix leave as one transport write so no later input can be
+        // inserted inside the paste.
         boolean bracketed = isDecsetInternalBitSet(DECSET_BIT_BRACKETED_PASTE_MODE);
-        if (bracketed) mSession.write("\033[200~");
-        mSession.write(text);
-        if (bracketed) mSession.write("\033[201~");
+        StringBuilder paste = new StringBuilder(text.length() + (bracketed ? 16 : 0));
+        if (bracketed) paste.append("\033[200~");
+        paste.append(text);
+        if (bracketed) paste.append("\033[201~");
+
+        byte[] bytes = paste.toString().getBytes(StandardCharsets.UTF_8);
+        // An empty paste with bracketed mode off is a true no-op: no write call,
+        // no queue entry. With bracketed mode on the two markers still ship.
+        if (bytes.length > 0) mSession.write(bytes, 0, bytes.length);
     }
 
     /** Returns if bracketed paste mode (DECSET 2004) is enabled. */
