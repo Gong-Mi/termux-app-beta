@@ -14,7 +14,10 @@ final class ByteQueue {
 
     public synchronized void close() {
         mOpen = false;
-        notify();
+        // close() is the terminal wakeup: every thread blocked in read() or write() must observe
+        // the closed queue. A single notify() leaves extra waiters parked forever; terminal
+        // reverse input can have both UI and parser producers waiting on the same queue.
+        notifyAll();
     }
 
     public synchronized boolean hasData() {
@@ -58,7 +61,9 @@ final class ByteQueue {
             offset += bytesToCopy;
             totalRead += bytesToCopy;
         }
-        if (wasFull) notify();
+        // Wake every producer blocked on a full queue: a single producer may consume only part of
+        // the freed space, so notifying just one can leave the others asleep with capacity free.
+        if (wasFull) notifyAll();
         return totalRead;
     }
 
@@ -111,7 +116,9 @@ final class ByteQueue {
                     bytesToWriteBeforeWaiting -= bytesToCopy;
                     mStoredBytes += bytesToCopy;
                 }
-                if (wasEmpty) notify();
+                // Wake every consumer blocked on an empty queue; more than one reader may wait on
+                // the same queue, and each must re-check the now non-empty condition.
+                if (wasEmpty) notifyAll();
             }
         }
         return true;
