@@ -14,10 +14,18 @@ import androidx.annotation.Nullable;
  * directly, and the wrapper ensures that the real client receives them on the UI
  * thread. Logging methods are delegated synchronously to avoid flooding the handler
  * queue.</p>
+ *
+ * <p>The wrapped client can be replaced with {@link #updateClient(TerminalSessionClient)}
+ * without discarding callbacks that are already queued: each queued callback is routed
+ * to the client that is current when it actually runs.</p>
  */
 public final class TerminalSessionClientMainThreadWrapper implements TerminalSessionClient {
 
-    private final TerminalSessionClient mClient;
+    /**
+     * The current client. Volatile because {@link #updateClient} is called on the UI thread
+     * while callbacks may be posted from the parser worker and logging may run on either.
+     */
+    private volatile TerminalSessionClient mClient;
     private final Dispatcher mDispatcher;
     private final TerminalTextChangeCoalescer mTextChangeCoalescer;
 
@@ -30,6 +38,18 @@ public final class TerminalSessionClientMainThreadWrapper implements TerminalSes
         mClient = client;
         mDispatcher = dispatcher;
         mTextChangeCoalescer = new TerminalTextChangeCoalescer(dispatcher::post);
+    }
+
+    /**
+     * Replaces the client that receives this wrapper's callbacks.
+     *
+     * <p>Callbacks that are already queued are not re-posted; they are delivered to the
+     * client that is current at execution time. This keeps the handler queue intact while
+     * allowing a session to hand its callback route over to a different client (for example
+     * when a session is reattached to a new view).</p>
+     */
+    public void updateClient(@NonNull TerminalSessionClient client) {
+        mClient = client;
     }
 
     private void post(Runnable r) {

@@ -60,7 +60,7 @@ public final class TerminalSession extends TerminalOutput {
     volatile TerminalSessionClient mClient;
 
     /** Callback passed to the emulator; posts callbacks to {@link #mClient} on the main thread. */
-    private volatile TerminalSessionClient mEmulatorClient;
+    private final TerminalSessionClientMainThreadWrapper mEmulatorClient;
 
     /** Sink that will receive immutable model frames once the parser worker is wired in. */
     private TerminalFrameSink mFrameSink;
@@ -133,7 +133,7 @@ public final class TerminalSession extends TerminalOutput {
         this.mEmulatorClient = wrapClient(client);
     }
 
-    private TerminalSessionClient wrapClient(TerminalSessionClient client) {
+    private TerminalSessionClientMainThreadWrapper wrapClient(TerminalSessionClient client) {
         return new TerminalSessionClientMainThreadWrapper(client, new Handler(Looper.getMainLooper()));
     }
 
@@ -143,7 +143,9 @@ public final class TerminalSession extends TerminalOutput {
      */
     public void updateTerminalSessionClient(TerminalSessionClient client) {
         mClient = client;
-        mEmulatorClient = wrapClient(client);
+        // Keep the endpoint retained by the emulator/worker/queued callbacks. Only
+        // its receiver changes; already-posted events resolve that receiver at delivery.
+        mEmulatorClient.updateClient(client);
 
         if (mParserWorker != null) mParserWorker.setClient(mEmulatorClient);
         if (mEmulator != null)
