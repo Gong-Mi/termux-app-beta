@@ -18,7 +18,7 @@ on:
       - 'gradlew.bat'
       - '.github/workflows/ci.yml'
   pull_request:
-    branches: [ master, fix/session-failure-cleanup-r2 ]
+    branches: [ master, fix/session-failure-cleanup-r2, fix/ordered-nonblocking-input-r2 ]
     paths:
       - 'app/**'
       - 'support_ui/**'
