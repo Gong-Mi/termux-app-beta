@@ -593,8 +593,10 @@ public final class TerminalSession extends TerminalOutput {
     public int getScreenActiveRows() {
         TerminalModelFrame frame = mLatestFrame;
         if (frame != null) return frame.activeTranscriptRows + frame.rows;
-        synchronized (mEmulator) {
-            return mEmulator != null ? mEmulator.getScreen().getActiveRows() : 0;
+        TerminalEmulator emulator = mEmulator;
+        if (emulator == null) return 0;
+        synchronized (emulator) {
+            return emulator.getScreen().getActiveRows();
         }
     }
 
