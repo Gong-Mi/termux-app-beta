@@ -1,0 +1,350 @@
+# Termux beta certification (verification variant) -- work line: ci
+#
+# Independent, exact-head certification environment for the *verification*
+# build type (release-derived, debuggable=false, R8 off, signed with the repo's
+# test key). It is deliberately NOT the minified release variant and it never
+# deploys the debug AAB anywhere.
+#
+# Shape:
+#   job 1 builds ONCE: `bundleVerification` + `assembleVerificationAndroidTest`,
+#         fuses the `support_ui` dynamic feature into a universal APK with
+#         bundletool, records the exact head + APK hash + expected signing
+#         certificate, runs the frozen artifact gate, and publishes ONE
+#         beta-certification artifact.
+#   job 2 (API 32 / API 36 matrix) downloads that artifact and runs the frozen
+#         emulator driver, which refuses any non-emulator target, requests
+#         `cmd package compile -m speed -f`, requires the ART read-only gate
+#         to confirm the real state, and only then runs the instrumentation
+#         suites (clipboard/storage 4 tests + VerificationBuildType 1 test).
+#
+# Only `contents: read` is granted: no extra scope is requested for caches,
+# packages or OIDC. The signing material is the repo's own test key, never a
+# production identity.
+name: Beta certification (verification variant)
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [ master ]
+    paths:
+      - 'app/**'
+      - 'support_ui/**'
+      - 'terminal-emulator/**'
+      - 'terminal-view/**'
+      - 'termux-shared/**'
+      - 'scripts/**'
+      - '*.gradle'
+      - '*.properties'
+      - 'gradle/**'
+      - 'gradlew'
+      - 'gradlew.bat'
+      - '.github/workflows/beta-certification.yml'
+
+permissions:
+  contents: read
+
+env:
+  JAVA_VERSION: 21
+  BUNDLETOOL_VERSION: 1.18.2
+
+jobs:
+  build-verification-artifact:
+    name: Build verification APK + instrumentation APK (once)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout exact source head (never the synthetic merge commit)
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Assert the tested source head
+        run: |
+          HEAD="$(git rev-parse HEAD)"
+          EXPECTED="${{ github.event.pull_request.head.sha || github.sha }}"
+          if [ "$HEAD" != "$EXPECTED" ]; then
+            echo "checked out $HEAD but this workflow must certify $EXPECTED"
+            exit 40
+          fi
+          printf '%s\n' "$HEAD" > build-head.txt
+          echo "SOURCE_HEAD=$HEAD" >> "$GITHUB_ENV"
+          echo "SOURCE_HEAD=$HEAD"
+
+      - name: Set up JDK
+        uses: actions/setup-java@v6
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: temurin
+          cache: gradle
+
+      - name: Locate aapt/apksigner tooling for the artifact gate
+        run: |
+          SDK="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
+          if [ -z "$SDK" ] || [ ! -d "$SDK" ]; then
+            echo "ANDROID_HOME/ANDROID_SDK_ROOT not set on this runner"
+            exit 41
+          fi
+          yes | "$SDK/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null 2>&1 || true
+          "$SDK/cmdline-tools/latest/bin/sdkmanager" \
+            "build-tools;34.0.0" "platforms;android-36" >/dev/null
+          BT="$SDK/build-tools/34.0.0"
+          AAPT="$BT/aapt2"
+          [ -x "$AAPT" ] || AAPT="$BT/aapt"
+          APKSIGNER="$BT/apksigner"
+          test -x "$AAPT"
+          test -f "$APKSIGNER"
+          {
+            echo "AAPT=$AAPT"
+            echo "APKSIGNER=$APKSIGNER"
+          } >> "$GITHUB_ENV"
+          echo "aapt=$AAPT apksigner=$APKSIGNER"
+
+      - name: Run beta certification driver unit tests (negative controls included)
+        run: PYTHONPATH=scripts python3 -m unittest discover -s scripts -p 'test_beta_*.py' -v
+
+      - name: Build verification AAB and verification instrumentation APK
+        env:
+          # Repo-local test signing key only; the same untrusted key the
+          # existing emulator workflows and app/build.gradle already use.
+          KS_PASSWORD: xrj45yWGLbsO7W0v
+        run: |
+          ./gradlew bundleVerification assembleVerificationAndroidTest --no-daemon
+          test -s app/build/outputs/bundle/verification/app-verification.aab
+          test -s app/build/outputs/apk/androidTest/verification/app-verification-androidTest.apk
+
+      - name: Fuse support_ui into a universal verification APK
+        env:
+          KS_PASSWORD: xrj45yWGLbsO7W0v
+        run: |
+          curl --fail --location --retry 3 \
+            -o bundletool.jar \
+            "https://github.com/google/bundletool/releases/download/${BUNDLETOOL_VERSION}/bundletool-all-${BUNDLETOOL_VERSION}.jar"
+          java -jar bundletool.jar build-apks \
+            --bundle=app/build/outputs/bundle/verification/app-verification.aab \
+            --output=termux-verification-universal.apks \
+            --mode=universal \
+            --ks=app/testkey_untrusted.jks \
+            --ks-key-alias=alias \
+            --ks-pass=pass:${KS_PASSWORD} \
+            --key-pass=pass:${KS_PASSWORD}
+          mkdir -p universal-apk
+          unzip -o termux-verification-universal.apks universal.apk -d universal-apk
+          sha256sum universal-apk/universal.apk > universal-apk.sha256
+          cat universal-apk.sha256
+          # The artifact gate below parses the actual DEX class definitions.
+          # Do not grep -q a streamed DEX: pipefail can turn unzip SIGPIPE into
+          # a false failure even when the expected class string was found.
+
+      - name: Export the expected signing certificate
+        env:
+          KS_PASSWORD: xrj45yWGLbsO7W0v
+        run: |
+          keytool -exportcert \
+            -keystore app/testkey_untrusted.jks \
+            -alias alias \
+            -storepass "$KS_PASSWORD" \
+            -file expected-cert.der
+          keytool -printcert -file expected-cert.der | tee expected-cert.txt
+          # apksigner reports SHA-256 cert digests in upper case; match that.
+          sha256sum expected-cert.der | awk '{print toupper($1)}' > expected-cert.sha256
+          cat expected-cert.sha256
+
+      - name: Gate the built artifact (frozen cross-line interface)
+        run: |
+          if [ ! -f scripts/beta_artifact_gate.py ]; then
+            echo "MISSING scripts/beta_artifact_gate.py: the frozen artifact gate is not"
+            echo "present in this tree, so the beta certification artifact cannot be gated."
+            exit 43
+          fi
+          python3 scripts/beta_artifact_gate.py \
+            --apk universal-apk/universal.apk \
+            --expected-head "$SOURCE_HEAD" \
+            --build-head build-head.txt \
+            --sha256-file universal-apk.sha256 \
+            --expected-cert-sha256 "$(cat expected-cert.sha256)" \
+            --aapt "$AAPT" \
+            --apksigner "$APKSIGNER" \
+            --output artifact-gate.json
+          cat artifact-gate.json
+
+      - name: Stage the beta certification artifact
+        run: |
+          mkdir -p dist
+          cp universal-apk/universal.apk dist/universal.apk
+          # Re-hash inside dist so the checksum file's recorded path matches the
+          # artifact layout the matrix legs will actually unpack.
+          ( cd dist && sha256sum universal.apk > universal.apk.sha256 )
+          cp build-head.txt expected-cert.der expected-cert.sha256 artifact-gate.json dist/
+          cp app/build/outputs/apk/androidTest/verification/app-verification-androidTest.apk \
+            dist/app-verification-androidTest.apk
+          # The staged hash must still equal the hash the artifact gate verified.
+          test "$(cut -d' ' -f1 dist/universal.apk.sha256)" = "$(cut -d' ' -f1 universal-apk.sha256)"
+          ( cd dist && sha256sum -c universal.apk.sha256 )
+          ls -l dist
+
+      - name: Upload beta certification artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: beta-cert-verification-artifact
+          if-no-files-found: error
+          # The single source of truth both matrix legs install: one fused
+          # universal APK, not one 121MB-class build per API level.
+          path: dist/
+
+      - name: Upload build logs
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: beta-cert-build-logs
+          if-no-files-found: warn
+          path: |
+            build-head.txt
+            artifact-gate.json
+            expected-cert.txt
+            expected-cert.sha256
+
+  emulator-certification:
+    name: API ${{ matrix.api }} beta certification
+    needs: build-verification-artifact
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        api: [32, 36]
+    steps:
+      - name: Checkout exact source head
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Assert the tested source head
+        run: |
+          HEAD="$(git rev-parse HEAD)"
+          EXPECTED="${{ github.event.pull_request.head.sha || github.sha }}"
+          if [ "$HEAD" != "$EXPECTED" ]; then
+            echo "checked out $HEAD but this workflow must certify $EXPECTED"
+            exit 40
+          fi
+          echo "SOURCE_HEAD=$HEAD" >> "$GITHUB_ENV"
+
+      - name: Install SDK, platform-tools and emulator
+        run: |
+          SDK="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
+          yes | "$SDK/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null 2>&1 || true
+          "$SDK/cmdline-tools/latest/bin/sdkmanager" \
+            "platform-tools" "emulator" \
+            "system-images;android-${{ matrix.api }};google_apis;x86_64" >/dev/null
+          echo "$SDK/platform-tools" >> "$GITHUB_PATH"
+          echo "$SDK/emulator" >> "$GITHUB_PATH"
+
+      - name: Enable KVM acceleration
+        run: |
+          test -e /dev/kvm
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          ls -l /dev/kvm
+
+      - name: Download the beta certification artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: beta-cert-verification-artifact
+          path: beta-cert-artifact
+
+      - name: Verify the downloaded artifact matches the recorded head and hash
+        run: |
+          test -s beta-cert-artifact/universal.apk
+          test -s beta-cert-artifact/app-verification-androidTest.apk
+          cat beta-cert-artifact/build-head.txt
+          if [ "$(cat beta-cert-artifact/build-head.txt)" != "$SOURCE_HEAD" ]; then
+            echo "artifact was built from a different source head than the checked out one"
+            exit 44
+          fi
+          ( cd beta-cert-artifact && sha256sum -c universal.apk.sha256 )
+
+      - name: Boot emulator with KVM + SwiftShader (hard deadline, process death detection)
+        env:
+          ANDROID_AVD_HOME: /home/runner/.android/avd
+        run: |
+          set -x
+          AVD="beta-cert-api-${{ matrix.api }}"
+          mkdir -p "$ANDROID_AVD_HOME"
+          echo no | "$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager" create avd \
+            -n "$AVD" --force -k "system-images;android-${{ matrix.api }};google_apis;x86_64" \
+            --device pixel_5
+          if [ ! -f "$ANDROID_AVD_HOME/$AVD.ini" ]; then
+            echo "AVD_MISSING: avdmanager returned 0 but $AVD.ini is absent - failing fast"
+            exit 45
+          fi
+          SERIAL="emulator-5554"
+          echo "EMULATOR_SERIAL=$SERIAL" >> "$GITHUB_ENV"
+          t0=$(date +%s)
+          nohup "$ANDROID_HOME/emulator/emulator" -avd "$AVD" -port 5554 \
+            -gpu swiftshader_indirect -no-window -no-audio -no-boot-anim \
+            -no-snapshot -wipe-data -memory 3072 -cores 3 -accel on \
+            > "emulator-${{ matrix.api }}.log" 2>&1 &
+          EMU_PID=$!
+          BOOT=""
+          deadline=$((t0 + 900))
+          while [ "$(date +%s)" -lt "$deadline" ]; do
+            BOOT=$(timeout 15 adb -s "$SERIAL" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' || true)
+            if [ "$BOOT" = "1" ]; then break; fi
+            if ! kill -0 "$EMU_PID" 2>/dev/null; then
+              echo "EMULATOR_PROCESS_DIED pid=$EMU_PID"
+              exit 46
+            fi
+            sleep 5
+          done
+          if [ "$BOOT" != "1" ]; then
+            echo "BOOT_TIMEOUT_15MIN serial=$SERIAL"
+            timeout 15 adb devices -l || true
+            exit 47
+          fi
+          t1=$(date +%s)
+          echo "EMU_BOOT_SECONDS=$((t1-t0))" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "using explicit serial $SERIAL"
+
+      - name: Run beta certification driver
+        run: |
+          python3 scripts/beta_emulator_certify.py \
+            --serial "$EMULATOR_SERIAL" \
+            --apk beta-cert-artifact/universal.apk \
+            --test-apk beta-cert-artifact/app-verification-androidTest.apk \
+            --out-dir "certify-out/api-${{ matrix.api }}" \
+            --source-head "$SOURCE_HEAD"
+
+      - name: Collect device logs
+        if: always()
+        run: |
+          if [ -n "$EMULATOR_SERIAL" ]; then
+            timeout 30 adb -s "$EMULATOR_SERIAL" logcat -d > "logcat-${{ matrix.api }}.txt" || true
+            timeout 15 adb -s "$EMULATOR_SERIAL" shell getprop > "getprop-${{ matrix.api }}.txt" || true
+          fi
+
+      - name: Upload certification evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: beta-cert-evidence-api-${{ matrix.api }}
+          if-no-files-found: warn
+          path: certify-out/api-${{ matrix.api }}
+
+      - name: Upload emulator logs
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: beta-cert-logs-api-${{ matrix.api }}
+          if-no-files-found: warn
+          path: |
+            emulator-${{ matrix.api }}.log
+            logcat-${{ matrix.api }}.txt
+            getprop-${{ matrix.api }}.txt
+
+      - name: Stop emulator
+        if: always()
+        run: |
+          if [ -n "${EMULATOR_SERIAL:-}" ]; then
+            timeout 15 adb -s "$EMULATOR_SERIAL" emu kill || true
+          fi
